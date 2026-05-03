@@ -242,3 +242,8 @@ pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
         panic!("dtact::wake_fiber() invoked before Runtime Initialization");
     }
 }
+
+#[cfg_attr(miri, ignore)]
+mod readme {
+    #![doc = include_str!("../README.md")]
+}

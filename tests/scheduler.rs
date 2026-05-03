@@ -3,6 +3,7 @@ use proptest::prelude::*;
 use std::sync::atomic::Ordering;
 
 proptest! {
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn test_deflection_consistency(
         source_core in 0usize..64usize,
@@ -19,7 +20,7 @@ proptest! {
             worker.deflection_threshold.store(threshold, Ordering::SeqCst);
         }
 
-        scheduler.enqueue_task(source_core, flow_id, 0);
+        let _ = scheduler.enqueue_task(source_core, flow_id, 0);
 
         // Verify task is successfully enqueued somewhere
         let mut total_tasks = 0;
@@ -42,6 +43,7 @@ proptest! {
         assert_eq!(total_tasks, 1, "Task must be enqueued exactly once");
     }
 
+    #[cfg_attr(miri, ignore)]
     #[test]
     fn test_global_topology_distribution(
         source_core in 0usize..64usize,
@@ -55,7 +57,7 @@ proptest! {
             worker.deflection_threshold.store(10, Ordering::SeqCst);
         }
 
-        scheduler.enqueue_task(source_core, flow_id, 1);
+        let _ = scheduler.enqueue_task(source_core, flow_id, 1);
 
         let mut total_tasks = 0;
         unsafe {

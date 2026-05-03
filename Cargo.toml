@@ -35,6 +35,9 @@ proptest = "1.6"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1.52", features = ["full"] }
 
+[build-dependencies]
+cbindgen = "0.29"
+
 [profile.bench]
 lto = true
 codegen-units = 1

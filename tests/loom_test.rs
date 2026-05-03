@@ -7,6 +7,7 @@ struct MockFiberContext {
     state: AtomicU8,
 }
 
+#[cfg_attr(miri, ignore)]
 #[test]
 fn test_fiber_state_transitions() {
     loom::model(|| {

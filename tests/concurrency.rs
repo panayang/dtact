@@ -2,6 +2,7 @@ use dtact::{ContextPool, SafetyLevel};
 use std::sync::Arc;
 use std::thread;
 
+#[cfg_attr(miri, ignore)]
 #[test]
 fn test_concurrent_context_allocation() {
     let pool = Arc::new(ContextPool::new(1024, 65536, SafetyLevel::Safety1, 0).unwrap());
@@ -27,6 +28,7 @@ fn test_concurrent_context_allocation() {
     }
 }
 
+#[cfg_attr(miri, ignore)]
 #[test]
 fn test_guard_page_isolation() {
     // This test verifies that Safety2 (per-context guard pages) correctly
