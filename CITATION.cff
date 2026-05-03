@@ -1,0 +1,41 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  Dtact: An Experimental Stackful Coroutine Runtime for
+  Heterogeneous Orchestration and Hardware-Level Control
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Xinyu
+    family-names: Yang
+    email: Xinyu.Yang@apich.org
+    orcid: 'https://orcid.org/0009-0007-2600-0948'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20002105
+repository-code: 'https://github.com/Apich-Organization/dtact'
+url: 'https://dtact.apich.org'
+repository-artifact: 'https://github.com/Apich-Organization/dtact/releases'
+abstract: >-
+  Dtact is a non-preemptive, stackful coroutine (fiber)
+  runtime implemented in Rust. It is designed to explore
+  alternative approaches to asynchronous execution, focusing
+  on hardware-level control and low-contention scheduling in
+  heterogeneous environments. Unlike standard stackless
+  state-machine runtimes, Dtact leverages independent stacks
+  to facilitate seamless cross-language FFI and
+  architecture-specific optimization.
+keywords:
+  - Software
+  - Software development
+  - Informatics
+  - Concurrency
+  - Async
+license: Apache-2.0
+commit: ac020e29fcab30b235a95cfb205818636f1bcfed
+version: v0.1.0
+date-released: '2026-05-03'
