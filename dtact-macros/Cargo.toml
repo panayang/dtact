@@ -3,6 +3,18 @@ name = "dtact-macros"
 version = "0.1.0"
 edition = "2024"
 
+authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
+exclude = ['bench_results.md']
+publish = true
+repository = "https://github.com/Apich-Organization/dtact"
+documentation = "https://docs.rs/dtact-macros"
+readme = "./README.md"
+categories = ["asynchronous", "concurrency", "multi-threading", "runtime"]
+keywords = ["async", "futures", "non-blocking", "runtime", "concurrency"]
+license = "MIT or Apache-2.0"
+description = "Macro utilities for Dtact: A non-preemptive, stackful coroutine runtime featuring a lock-free context arena, P2P mesh scheduling, and architecture-specific assembly switchers. Designed for hardware-level control and non-blocking heterogeneous orchestration."
+rust-version = "1.90.0"
+
 [lib]
 proc-macro = true
 
