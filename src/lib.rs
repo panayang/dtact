@@ -88,6 +88,8 @@ pub use crate::api::spawn;
 pub use crate::api::yield_now;
 /// Yield execution to another fiber.
 pub use crate::api::yield_to;
+/// Wait for a fiber to complete.
+pub use crate::c_ffi::dtact_await;
 /// Handle for C-compatible FFI.
 pub use crate::c_ffi::dtact_handle_t;
 /// Runtime error types.
@@ -244,6 +246,7 @@ pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
 }
 
 #[cfg_attr(miri, ignore)]
+#[doc(hidden)]
 mod readme {
     #![doc = include_str!("../README.md")]
 }

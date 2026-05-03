@@ -135,7 +135,7 @@ extern "C" {
  return without properly terminating via the runtime.
  */
 
-void dtact_abort() NO_RETURN
+void dtact_abort()
 ;
 
 /*

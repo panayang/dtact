@@ -32,21 +32,38 @@ Dtact's design makes trade-offs that influence its performance profile:
 ### Rust
 
 ```rust
-use dtact::api::{SpawnBuilder, CrossThreadNoFloat};
+use dtact::{dtact_await, dtact_init, spawn, task, yield_now};
 
+#[task(priority = "Normal", kind = "Compute", stack = "2M")]
+async fn worker(id: u32) {
+    println!("[Fiber {}] Starting async work...", id);
+
+    for i in 0..3 {
+        println!("[Fiber {}] Progress step {}", id, i);
+        yield_now().await;
+    }
+
+    println!("[Fiber {}] Task Finished.", id);
+}
+
+#[dtact_init(workers = 4)]
 fn main() {
-    // Initialize the runtime
-    let rt = dtact::Runtime::new(dtact::Config::default());
-    rt.start(|| {
-        let handle = SpawnBuilder::<CrossThreadNoFloat>::new()
-            .spawn(async {
-                println!("Hello from Dtact fiber!");
-                42
-            });
-            
-        let result = handle.join();
-        println!("Result: {}", result);
-    });
+    println!("--- Dtact Rust Macro Example ---");
+
+    let mut handles = vec![];
+    for i in 0..5 {
+        println!("[Master] Launching Fiber {}", i);
+        // spawn takes a future and returns a handle
+        handles.push(spawn(worker(i)));
+    }
+
+    for (i, handle) in handles.into_iter().enumerate() {
+        println!("[Master] Waiting for Fiber {} to complete...", i);
+        dtact_await(handle);
+        println!("[Master] Fiber {} has been joined.", i);
+    }
+
+    println!("[Master] All sub-tasks completed. Exiting cleanly.");
 }
 ```
 
@@ -57,35 +74,7 @@ fn main() {
 #include <stdlib.h>
 #include <stdint.h>
 #include <unistd.h>
-
-// dtact FFI types
-typedef struct {
-    uint64_t handle;
-} dtact_handle_t;
-
-typedef struct {
-    uint32_t workers;
-    uint8_t safety_level;
-    uint8_t topology_mode;
-} dtact_config_t;
-
-typedef struct {
-    uint8_t priority;
-    uint8_t affinity;
-    uint8_t kind;
-    uint8_t switcher;
-} dtact_spawn_options_t;
-
-// Dtact FFI Prototypes
-extern dtact_config_t dtact_default_config();
-extern dtact_spawn_options_t dtact_default_spawn_options();
-extern void* dtact_init(const dtact_config_t* cfg);
-extern dtact_handle_t dtact_fiber_launch(void (*func)(void*), void* arg);
-extern dtact_handle_t dtact_fiber_launch_ext(void (*func)(void*), void* arg, const dtact_spawn_options_t* options);
-extern void dtact_await(dtact_handle_t handle);
-extern void dtact_run(void* rt);
-extern void dtact_shutdown();
-extern void dtact_free_arg(void* arg);
+#include "../dtact.h"
 
 // Worker fiber that simulates asynchronous work
 void worker_fiber(void* arg) {
@@ -114,11 +103,11 @@ void master_fiber(void* arg) {
         
         dtact_spawn_options_t opts = dtact_default_spawn_options();
         if (i % 2 == 0) {
-            opts.kind = 1; // IO
-            opts.switcher = 3; // SameThreadNoFloat
+            opts.mKind = 1; // IO
+            opts.mSwitcher = 3; // SameThreadNoFloat
         } else {
-            opts.kind = 3; // System
-            opts.switcher = 0; // CrossThreadFloat
+            opts.mKind = 3; // System
+            opts.mSwitcher = 0; // CrossThreadFloat
         }
         
         handles[i] = dtact_fiber_launch_ext(worker_fiber, val, &opts);
@@ -140,7 +129,7 @@ int main() {
     
     // 1. Initialize Runtime
     dtact_config_t cfg = dtact_default_config();
-    cfg.workers = 4;
+    cfg.mWorkers = 4;
     void* rt = dtact_init(&cfg);
     
     // 2. Launch Initial Root Fiber

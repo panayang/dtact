@@ -39,10 +39,6 @@ item_types = [
 
 [fn]
 rename_args = "GeckoCase"
-must_use = "MUST_USE_FUNC"
-deprecated = "DEPRECATED"
-deprecated_with_note = "DEPRECATED_WITH_NOTE"
-no_return = "NO_RETURN"
 prefix = ""
 postfix = ""
 args = "Auto"
@@ -50,9 +46,6 @@ sort_by = "Name"
 
 [struct]
 rename_fields = "GeckoCase"
-must_use = "MUST_USE_STRUCT"
-deprecated = "DEPRECATED"
-deprecated_with_note = "DEPRECATED_WITH_NOTE"
 derive_constructor = true
 derive_eq = true
 derive_neq = true
@@ -63,9 +56,6 @@ derive_gte = true
 
 [enum]
 rename_variants = "GeckoCase"
-must_use = "MUST_USE_ENUM"
-deprecated = "DEPRECATED"
-deprecated_with_note = "DEPRECATED_WITH_NOTE"
 prefix_with_name = true
 derive_helper_methods = true
 derive_const_casts = true
