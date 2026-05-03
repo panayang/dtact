@@ -14,10 +14,19 @@ typedef struct {
     uint8_t topology_mode;
 } dtact_config_t;
 
+typedef struct {
+    uint8_t priority;
+    uint8_t affinity;
+    uint8_t kind;
+    uint8_t switcher;
+} dtact_spawn_options_t;
+
 // Dtact FFI Prototypes
 extern dtact_config_t dtact_default_config();
+extern dtact_spawn_options_t dtact_default_spawn_options();
 extern void* dtact_init(const dtact_config_t* cfg);
 extern dtact_handle_t dtact_fiber_launch(void (*func)(void*), void* arg);
+extern dtact_handle_t dtact_fiber_launch_ext(void (*func)(void*), void* arg, const dtact_spawn_options_t* options);
 extern void dtact_await(dtact_handle_t handle);
 extern void dtact_run(void* rt);
 extern void dtact_shutdown();
@@ -47,7 +56,17 @@ void master_fiber(void* arg) {
         int* val = malloc(sizeof(int));
         *val = i;
         printf("[Master] Launching Fiber %d\n", i);
-        handles[i] = dtact_fiber_launch(worker_fiber, val);
+        
+        dtact_spawn_options_t opts = dtact_default_spawn_options();
+        if (i % 2 == 0) {
+            opts.kind = 1; // IO
+            opts.switcher = 3; // SameThreadNoFloat
+        } else {
+            opts.kind = 3; // System
+            opts.switcher = 0; // CrossThreadFloat
+        }
+        
+        handles[i] = dtact_fiber_launch_ext(worker_fiber, val, &opts);
     }
     
     for(int i = 0; i < 5; i++) {

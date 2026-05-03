@@ -19,6 +19,31 @@ pub struct dtact_config_t {
     pub topology_mode: u8,
 }
 
+/// Advanced options for spawning a fiber from C FFI.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct dtact_spawn_options_t {
+    /// 0: Low, 1: Normal, 2: High, 3: Critical
+    pub priority: u8,
+    /// 0: `SameCore`, 1: `SameCCX`, 2: `SameNUMA`, 3: Any
+    pub affinity: u8,
+    /// 0: Compute, 1: IO, 2: Memory, 3: System
+    pub kind: u8,
+    /// 0: `CrossThreadFloat`, 1: `CrossThreadNoFloat`, 2: `SameThreadFloat`, 3: `SameThreadNoFloat`
+    pub switcher: u8,
+}
+
+/// Returns the recommended default options for the Dtact runtime.
+#[unsafe(no_mangle)]
+pub const extern "C" fn dtact_default_spawn_options() -> dtact_spawn_options_t {
+    dtact_spawn_options_t {
+        priority: 1, // Normal
+        affinity: 0, // SameCore
+        kind: 0,     // Compute
+        switcher: 0, // CrossThreadFloat
+    }
+}
+
 /// Returns the recommended default configuration for the Dtact runtime.
 #[unsafe(no_mangle)]
 pub const extern "C" fn dtact_default_config() -> dtact_config_t {
@@ -187,6 +212,105 @@ pub unsafe extern "C" fn dtact_fiber_launch(
     dtact_handle_t(handle_val)
 }
 
+/// Launches a C-function as a DTA-V3 stackful Fiber with advanced options.
+#[unsafe(no_mangle)]
+#[allow(clippy::cast_possible_truncation)]
+pub unsafe extern "C" fn dtact_fiber_launch_ext(
+    func: extern "C" fn(*mut c_void),
+    arg: *mut c_void,
+    options: *const dtact_spawn_options_t,
+) -> dtact_handle_t {
+    let runtime = crate::GLOBAL_RUNTIME
+        .get()
+        .expect("Dtact Runtime not initialized");
+    let pool = &runtime.pool;
+    let ctx_id = pool.alloc_context().expect("Context pool exhausted - OOM");
+
+    let ctx_ptr = pool.get_context_ptr(ctx_id);
+    let current_core = crate::api::topology::current().core_id as usize;
+
+    let opts = if options.is_null() {
+        dtact_default_spawn_options()
+    } else {
+        unsafe { *options }
+    };
+
+    unsafe {
+        (*ctx_ptr).state.store(
+            crate::memory_management::FiberStatus::Running as u8,
+            core::sync::atomic::Ordering::Release,
+        );
+        (*ctx_ptr).origin_core = current_core as u16;
+        (*ctx_ptr).fiber_index = ctx_id;
+
+        (*ctx_ptr).switch_fn = match opts.switcher {
+            1 => crate::context_switch::switch_context_cross_thread_no_float,
+            2 => crate::context_switch::switch_context_same_thread_float,
+            3 => crate::context_switch::switch_context_same_thread_no_float,
+            _ => crate::context_switch::switch_context_cross_thread_float,
+        };
+
+        (*ctx_ptr).kind = match opts.kind {
+            1 => crate::common_types::WorkloadKind::IO,
+            2 => crate::common_types::WorkloadKind::Memory,
+            3 => crate::common_types::WorkloadKind::System,
+            _ => crate::common_types::WorkloadKind::Compute,
+        };
+
+        (*ctx_ptr).adaptive_spin_count = match (*ctx_ptr).kind {
+            crate::common_types::WorkloadKind::Compute => 1000,
+            crate::common_types::WorkloadKind::IO => 100,
+            crate::common_types::WorkloadKind::Memory => 500,
+            crate::common_types::WorkloadKind::System => 200,
+        };
+
+        (*ctx_ptr).closure_ptr = arg.cast::<()>();
+        (*ctx_ptr).trampoline =
+            core::mem::transmute::<extern "C" fn(*mut c_void), unsafe extern "C" fn()>(func);
+
+        (*ctx_ptr).invoke_closure = |ptr| {
+            let ctx_ptr = crate::future_bridge::CURRENT_FIBER.with(std::cell::Cell::get);
+            if let Some(ctx) = unsafe { ctx_ptr.as_ref() } {
+                let f: extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(ctx.trampoline) };
+                f(ptr.cast::<c_void>());
+            }
+        };
+
+        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        let stack_top_ptr = stack_top as *mut u64;
+        core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
+        let stack_top = stack_top as *mut u8;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            (*ctx_ptr).regs.gprs[0] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            (*ctx_ptr).regs.gprs[12] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            (*ctx_ptr).regs.gprs[0] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64;
+        }
+        (*ctx_ptr).cleanup_fn = None;
+    }
+
+    let r#gen = u64::from(unsafe {
+        (*ctx_ptr)
+            .generation
+            .load(core::sync::atomic::Ordering::Acquire)
+    });
+    crate::wake_fiber(current_core, ctx_id);
+
+    let handle_val =
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63);
+    dtact_handle_t(handle_val)
+}
+
 /// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback.
 ///
 /// # Safety
@@ -277,6 +401,113 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
     dtact_handle_t(
         u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63),
     )
+}
+
+/// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback and options.
+#[unsafe(no_mangle)]
+#[allow(clippy::cast_possible_truncation)]
+pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
+    func: extern "C" fn(*mut c_void),
+    arg: *mut c_void,
+    cleanup: unsafe extern "C" fn(*mut c_void),
+    options: *const dtact_spawn_options_t,
+) -> dtact_handle_t {
+    let runtime = crate::GLOBAL_RUNTIME
+        .get()
+        .expect("Dtact Runtime not initialized");
+    let pool = &runtime.pool;
+    let ctx_id = pool.alloc_context().expect("Context pool exhausted - OOM");
+
+    let ctx_ptr = pool.get_context_ptr(ctx_id);
+    let current_core = crate::api::topology::current().core_id as usize;
+
+    let opts = if options.is_null() {
+        dtact_default_spawn_options()
+    } else {
+        unsafe { *options }
+    };
+
+    unsafe {
+        (*ctx_ptr).state.store(
+            crate::memory_management::FiberStatus::Running as u8,
+            core::sync::atomic::Ordering::Release,
+        );
+        (*ctx_ptr).origin_core = current_core as u16;
+        (*ctx_ptr).fiber_index = ctx_id;
+
+        (*ctx_ptr).switch_fn = match opts.switcher {
+            1 => crate::context_switch::switch_context_cross_thread_no_float,
+            2 => crate::context_switch::switch_context_same_thread_float,
+            3 => crate::context_switch::switch_context_same_thread_no_float,
+            _ => crate::context_switch::switch_context_cross_thread_float,
+        };
+
+        (*ctx_ptr).kind = match opts.kind {
+            1 => crate::common_types::WorkloadKind::IO,
+            2 => crate::common_types::WorkloadKind::Memory,
+            3 => crate::common_types::WorkloadKind::System,
+            _ => crate::common_types::WorkloadKind::Compute,
+        };
+
+        (*ctx_ptr).adaptive_spin_count = match (*ctx_ptr).kind {
+            crate::common_types::WorkloadKind::Compute => 1000,
+            crate::common_types::WorkloadKind::IO => 100,
+            crate::common_types::WorkloadKind::Memory => 500,
+            crate::common_types::WorkloadKind::System => 200,
+        };
+
+        (*ctx_ptr).closure_ptr = arg.cast::<()>();
+        (*ctx_ptr).trampoline =
+            core::mem::transmute::<extern "C" fn(*mut c_void), unsafe extern "C" fn()>(func);
+        (*ctx_ptr).cleanup_fn = Some(core::mem::transmute::<
+            unsafe extern "C" fn(*mut c_void),
+            unsafe extern "C" fn(*mut ()),
+        >(cleanup));
+
+        (*ctx_ptr).invoke_closure = |ptr| {
+            let ctx_ptr = crate::future_bridge::CURRENT_FIBER.with(std::cell::Cell::get);
+            if let Some(ctx) = unsafe { ctx_ptr.as_ref() } {
+                let f: extern "C" fn(*mut c_void) = unsafe {
+                    core::mem::transmute::<unsafe extern "C" fn(), extern "C" fn(*mut c_void)>(
+                        ctx.trampoline,
+                    )
+                };
+                f(ptr.cast::<c_void>());
+            }
+        };
+
+        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        let stack_top_ptr = stack_top as *mut u64;
+        core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
+        let stack_top = stack_top as *mut u8;
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            (*ctx_ptr).regs.gprs[0] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            (*ctx_ptr).regs.gprs[12] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+        }
+        #[cfg(target_arch = "riscv64")]
+        {
+            (*ctx_ptr).regs.gprs[0] = stack_top as u64;
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64;
+        }
+    }
+
+    let r#gen = u64::from(unsafe {
+        (*ctx_ptr)
+            .generation
+            .load(core::sync::atomic::Ordering::Acquire)
+    });
+    crate::wake_fiber(current_core, ctx_id);
+
+    let handle_val =
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63);
+    dtact_handle_t(handle_val)
 }
 
 /// Blocks the current thread until the specified fiber terminates.
