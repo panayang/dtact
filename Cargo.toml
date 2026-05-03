@@ -68,7 +68,7 @@ debug = true
 default = ["windows"]
 hw-acceleration = []
 hypervisor = []
-windows-root = []
+windows-root = ["windows"]
 windows = ["dep:windows-sys"]
 
 [lib]
