@@ -27,6 +27,8 @@ Product Name: Latitude 5400
 | **Work Deflection** (Hot Core) | **Dtact** | 2.5126 s | **3.1545 s** | 3.8315 s | 1 (1.00%) | 1 mild |
 | | **Tokio** | 6.8170 s | **7.2690 s** | 7.8028 s | 13 (13.00%) | 5 mild, 8 severe |
 
+For a more detailed analysis and comprehensive metrics, please refer to the full report at [https://dtact.apich.org/report/index.html](https://dtact.apich.org/report/index.html).
+
 ---
 
 ### Key Data Insights
