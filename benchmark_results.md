@@ -21,10 +21,10 @@ Product Name: Latitude 5400
 | Benchmark Category | Implementation | Lower Bound | **Estimate (Mean)** | Upper Bound | Outliers (Total) | Notable Observations |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Spawn Efficiency** (1M tasks) | **Dtact** | 389.39 ms | **393.88 ms** | 399.13 ms | 5 (5.00%) | 3 mild, 2 severe |
-| | **Tokio** | 837.70 ms | **956.79 ms** | 1.0870 s | 19 (19.00%) | Improved performance cited; 16 severe outliers |
-| **Yield Efficiency** (10 tasks x 100 yields) | **Dtact** | 448.53 µs | **450.90 µs** | 453.47 µs | 2 (2.00%) | 2 mild |
+| | **Tokio** | 837.70 ms | **956.79 ms** | 1.0870 s | 19 (19.00%) | 16 severe outliers |
+| **Yield Efficiency** (10 tasks x 100 yields) | **Dtact** | 448.53 µs | **450.90 µs** | 453.47 µs | 2 (2.00%) | 2 mild outliers |
 | | **Tokio** | 174.25 µs | **175.28 µs** | 176.39 µs | 13 (13.00%) | 4 mild, 9 severe |
-| **Work Deflection** (Hot Core) | **Dtact** | 2.5126 s | **3.1545 s** | 3.8315 s | 1 (1.00%) | 1 mild |
+| **Work Deflection** (Hot Core) | **Dtact** | 2.5126 s | **3.1545 s** | 3.8315 s | 1 (1.00%) | 1 mild outliers |
 | | **Tokio** | 6.8170 s | **7.2690 s** | 7.8028 s | 13 (13.00%) | 5 mild, 8 severe |
 
 For a more detailed analysis and comprehensive metrics, please refer to the full report at [https://dtact.apich.org/report/index.html](https://dtact.apich.org/report/index.html).
