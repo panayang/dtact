@@ -213,6 +213,7 @@ pub struct SpinLock {
 impl SpinLock {
     /// Creates a new, unlocked `SpinLock`.
     #[must_use]
+    #[inline(always)]
     pub const fn new() -> Self {
         Self {
             locked: core::sync::atomic::AtomicBool::new(false),
@@ -241,6 +242,7 @@ impl SpinLock {
 }
 
 impl Default for SpinLock {
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }

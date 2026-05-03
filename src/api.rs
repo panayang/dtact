@@ -779,6 +779,7 @@ pub mod hw {
 }
 
 /// Yields execution to the scheduler.
+#[inline(always)]
 pub async fn yield_now() {
     struct YieldNow(bool);
     impl Future for YieldNow {
@@ -834,7 +835,6 @@ pub trait DtactWaitExt {
     /// The type of value produced by the future.
     type Output;
     /// Blocks the current fiber until the future resolves.
-
     fn wait(self) -> Self::Output;
 }
 

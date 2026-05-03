@@ -110,6 +110,7 @@ pub mod api;
 #[doc(hidden)]
 pub mod c_ffi;
 /// Common types used across the Dtact runtime.
+#[doc(hidden)]
 pub mod common_types;
 /// Low-level assembly-based context switching primitives.
 #[doc(hidden)]
