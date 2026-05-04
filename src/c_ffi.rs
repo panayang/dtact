@@ -708,7 +708,7 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
                 .state
                 .compare_exchange(
                     crate::memory_management::FiberStatus::Running as u8,
-                    crate::memory_management::FiberStatus::Yielded as u8,
+                    crate::memory_management::FiberStatus::Suspending as u8,
                     core::sync::atomic::Ordering::Release,
                     core::sync::atomic::Ordering::Acquire,
                 )

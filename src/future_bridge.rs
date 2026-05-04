@@ -35,9 +35,12 @@ unsafe fn wake_by_ref_impl(data: *const ()) {
         .swap(FiberStatus::Notified as u8, Ordering::AcqRel);
 
     if prev == FiberStatus::Yielded as u8 {
-        // The fiber was fully suspended. We can safely enqueue it.
+        // The fiber was fully suspended and yielded. We can safely enqueue it
+        // for migration to any worker.
         crate::wake_fiber(ctx.origin_core as usize, ctx.fiber_index);
     }
+    // If prev was Suspending or Running, the local worker will handle the
+    // re-enqueue when it resumes from the context switch.
 }
 
 #[inline(always)]
@@ -162,7 +165,7 @@ pub fn wait_pinned<F: Future>(mut fut_pinned: Pin<&mut F>) -> F::Output {
                     .state
                     .compare_exchange(
                         FiberStatus::Running as u8,
-                        FiberStatus::Yielded as u8,
+                        FiberStatus::Suspending as u8,
                         Ordering::Release,
                         Ordering::Acquire,
                     )

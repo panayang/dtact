@@ -496,8 +496,17 @@ impl Worker {
                     .state
                     .load(core::sync::atomic::Ordering::Acquire)
             };
-            if state == crate::memory_management::FiberStatus::Finished as u8 {
-                pool.free_context(task);
+
+            if state == crate::memory_management::FiberStatus::Suspending as u8 {
+                // Fiber is suspending. Transition to Yielded to allow cross-core migration.
+                let _ = unsafe {
+                    (*target_ptr).state.compare_exchange(
+                        crate::memory_management::FiberStatus::Suspending as u8,
+                        crate::memory_management::FiberStatus::Yielded as u8,
+                        core::sync::atomic::Ordering::Release,
+                        core::sync::atomic::Ordering::Acquire,
+                    )
+                };
             } else if state == crate::memory_management::FiberStatus::Notified as u8 {
                 // Cooperative yield or backpressure-induced suspension: re-enqueue.
                 // We MUST do this here (on the scheduler stack) to ensure the fiber's
@@ -506,6 +515,8 @@ impl Worker {
                 self.push_local(task);
                 // Return to allow mailbox polling and prevent live-locks on high contention.
                 return;
+            } else if state == crate::memory_management::FiberStatus::Finished as u8 {
+                pool.free_context(task);
             }
         }
     }
@@ -730,6 +741,7 @@ impl DtaScheduler {
     /// Periodically polls local queues, mailboxes, and external queues for work.
     /// Supports cooperative shutdown via the provided atomic flag.
     #[inline]
+    #[allow(clippy::too_many_lines)]
     pub fn run_worker_static(
         scheduler: &Self,
         current_core: usize,

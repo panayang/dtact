@@ -65,6 +65,8 @@ pub enum FiberStatus {
     Panicked = 4,
     /// The fiber was woken up by a waker.
     Notified = 5,
+    /// The fiber is currently transitioning to a suspended state.
+    Suspending = 6,
 }
 
 /// The hardware-level execution context for a stackful fiber.

@@ -754,7 +754,7 @@ pub mod fiber {
         unsafe {
             let ctx = &mut *ctx_ptr;
             ctx.state.store(
-                crate::memory_management::FiberStatus::Yielded as u8,
+                crate::memory_management::FiberStatus::Suspending as u8,
                 core::sync::atomic::Ordering::Release,
             );
             (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);
