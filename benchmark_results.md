@@ -1,6 +1,6 @@
 ## Benchmark Environment
 
-These benchmarks were conducted on a consumer-grade laptop using `dtact-v0.1.1`. Since dtact is architected for high-core-count server CPUs, this environment naturally limits its performance overhead advantages, shifting the comparison toward Tokio's optimal operating range.
+These benchmarks were conducted on a consumer-grade laptop using `dtact-v0.1.2`. Since dtact is architected for high-core-count server CPUs, this environment naturally limits its performance overhead advantages, shifting the comparison toward Tokio's optimal operating range.
 
 ```text
 Operating System: Fedora Linux 44
