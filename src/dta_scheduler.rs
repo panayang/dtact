@@ -783,7 +783,7 @@ impl DtaScheduler {
 
             // Tier 2: Light Hardware Pause (Power Efficiency)
             if idle_count < 2048 {
-                #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
+                #[cfg(target_arch = "aarch64")]
                 unsafe {
                     core::arch::asm!("yield", options(nostack, preserves_flags));
                 }
@@ -791,10 +791,16 @@ impl DtaScheduler {
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 core::hint::spin_loop(); // On x86, this is PAUSE
 
+                #[cfg(all(feature = "hw-acceleration", target_arch = "riscv64"))]
+                unsafe {
+                    core::arch::asm!("pause", options(nostack, preserves_flags));
+                }
+
                 #[cfg(not(any(
                     target_arch = "aarch64",
                     target_arch = "x86",
-                    target_arch = "x86_64"
+                    target_arch = "x86_64",
+                    all(feature = "hw-acceleration", target_arch = "riscv64")
                 )))]
                 for _ in 0..8 {
                     core::hint::spin_loop();
