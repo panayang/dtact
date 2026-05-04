@@ -2,11 +2,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dtact::yield_now;
 use std::hint::black_box;
 
-/// Initializes the Dtact runtime with 4 workers.
+/// Initializes the Dtact runtime with 8 workers.
 /// Called once before starting benchmarks.
 fn init_dtact() {
     let _ = dtact::GLOBAL_RUNTIME.get_or_init(|| {
-        let workers_count = 4;
+        let workers_count = 8;
         let scheduler = dtact::dta_scheduler::DtaScheduler::new(
             workers_count,
             dtact::dta_scheduler::TopologyMode::P2PMesh,
@@ -36,7 +36,7 @@ fn init_dtact() {
 fn bench_spawn_efficiency(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
+        .worker_threads(8)
         .build()
         .unwrap();
 
@@ -87,7 +87,7 @@ fn bench_spawn_efficiency(c: &mut Criterion) {
 fn bench_yield_efficiency(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
+        .worker_threads(8)
         .build()
         .unwrap();
 
@@ -143,7 +143,7 @@ fn bench_yield_efficiency(c: &mut Criterion) {
 fn bench_deflection_efficiency(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
+        .worker_threads(8)
         .build()
         .unwrap();
 
