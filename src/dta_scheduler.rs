@@ -48,6 +48,7 @@ impl Default for TaskChunk {
 ///
 /// Manages page-aligned memory regions that utilize 2MB or 1GB huge pages
 /// (where supported by the OS) to maximize memory throughput.
+#[allow(dead_code)]
 pub struct HugeBuffer<T> {
     /// Pointer to the allocated memory.
     ptr: *mut T,
@@ -130,7 +131,7 @@ impl<T> HugeBuffer<T> {
                     assert!(!ptr.is_null(), "HugeBuffer VirtualAlloc failed");
                 }
                 Self {
-                    ptr: ptr as *mut T,
+                    ptr: ptr.cast::<T>(),
                     size_bytes,
                     is_mmap: false,
                 }
@@ -169,7 +170,7 @@ impl<T> Drop for HugeBuffer<T> {
         #[cfg(windows)]
         unsafe {
             windows_sys::Win32::System::Memory::VirtualFree(
-                self.ptr as *mut core::ffi::c_void,
+                self.ptr.cast::<core::ffi::c_void>(),
                 0,
                 windows_sys::Win32::System::Memory::MEM_RELEASE,
             );

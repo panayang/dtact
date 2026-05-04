@@ -66,7 +66,8 @@
     clippy::restriction,
     clippy::inline_always,
     unused_doc_comments,
-    clippy::empty_line_after_doc_comments
+    clippy::empty_line_after_doc_comments,
+    clippy::missing_const_for_thread_local
 )]
 #![crate_name = "dtact"]
 
@@ -245,6 +246,7 @@ pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
     }
 }
 
+#[allow(clippy::mixed_attributes_style)]
 #[cfg_attr(miri, ignore)]
 #[doc(hidden)]
 mod readme {

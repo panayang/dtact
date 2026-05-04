@@ -177,6 +177,7 @@ const fn dummy_invoke(_: *mut ()) {}
 ///
 /// The `ContextPool` ensures O(1) allocation and hardware-level isolation
 /// through tiered safety levels and OS memory protection primitives.
+#[allow(dead_code)]
 pub struct ContextPool {
     base_ptr: *mut u8,
     total_size: usize,
@@ -213,7 +214,7 @@ impl ContextPool {
         #[cfg(windows)]
         let page_size = unsafe {
             let mut info = core::mem::zeroed();
-            windows_sys::Win32::System::SystemInformation::GetSystemInfo(&mut info);
+            windows_sys::Win32::System::SystemInformation::GetSystemInfo(&raw mut info);
             info.dwPageSize as usize
         };
 
@@ -291,7 +292,7 @@ impl ContextPool {
                 }
 
                 let meta_base = base_ptr.add(total_size);
-                let unwind_info_ptr = meta_base as *mut UnwindInfo;
+                let unwind_info_ptr = meta_base.cast::<UnwindInfo>();
                 core::ptr::write(
                     unwind_info_ptr,
                     UnwindInfo {
@@ -302,8 +303,10 @@ impl ContextPool {
                     },
                 );
 
-                let function_table_ptr =
-                    unwind_info_ptr.add(1) as *mut IMAGE_RUNTIME_FUNCTION_ENTRY;
+                #[allow(clippy::cast_ptr_alignment)]
+                let function_table_ptr = meta_base
+                    .add(core::mem::size_of::<UnwindInfo>())
+                    .cast::<IMAGE_RUNTIME_FUNCTION_ENTRY>();
                 core::ptr::write(
                     function_table_ptr,
                     IMAGE_RUNTIME_FUNCTION_ENTRY {
@@ -316,7 +319,7 @@ impl ContextPool {
                 );
 
                 let base = base_ptr as usize;
-                RtlAddFunctionTable(function_table_ptr as *const _, 1, base as u64);
+                RtlAddFunctionTable(function_table_ptr.cast_const(), 1, base as u64);
             }
 
             Ok(pool)
@@ -335,7 +338,7 @@ impl ContextPool {
         unsafe {
             use windows_sys::Win32::System::Memory::{PAGE_NOACCESS, VirtualProtect};
             let mut old = 0;
-            if VirtualProtect(ptr as *mut _, size, PAGE_NOACCESS, &mut old) == 0 {
+            if VirtualProtect(ptr.cast(), size, PAGE_NOACCESS, &raw mut old) == 0 {
                 return Err("VirtualProtect failed");
             }
         }
@@ -344,6 +347,7 @@ impl ContextPool {
 
     #[inline(always)]
     #[allow(clippy::useless_let_if_seq)]
+    #[allow(clippy::cast_possible_truncation)]
     unsafe fn allocate_arena(
         size: usize,
         safety: SafetyLevel,
@@ -402,10 +406,10 @@ impl ContextPool {
                 };
                 let mut flags = MEM_COMMIT | MEM_RESERVE;
                 if safety == SafetyLevel::Safety0 {
-                    flags |= 0x20000000;
+                    flags |= 0x2000_0000;
                 } // MEM_LARGE_PAGES
 
-                let ptr = if numa > 0 {
+                let mut ptr = if numa > 0 {
                     windows_sys::Win32::System::Memory::VirtualAllocExNuma(
                         windows_sys::Win32::System::Threading::GetCurrentProcess(),
                         core::ptr::null_mut(),
@@ -418,10 +422,26 @@ impl ContextPool {
                     VirtualAlloc(core::ptr::null_mut(), size, flags, PAGE_READWRITE)
                 };
 
+                if ptr.is_null() && (flags & 0x2000_0000) != 0 {
+                    let fallback_flags = flags & !0x2000_0000;
+                    ptr = if numa > 0 {
+                        windows_sys::Win32::System::Memory::VirtualAllocExNuma(
+                            windows_sys::Win32::System::Threading::GetCurrentProcess(),
+                            core::ptr::null_mut(),
+                            size,
+                            fallback_flags,
+                            PAGE_READWRITE,
+                            numa as u32,
+                        )
+                    } else {
+                        VirtualAlloc(core::ptr::null_mut(), size, fallback_flags, PAGE_READWRITE)
+                    };
+                }
+
                 if ptr.is_null() {
                     return Err("VirtualAlloc failed");
                 }
-                Ok(ptr as *mut u8)
+                Ok(ptr.cast::<u8>())
             }
         }
     }
@@ -522,7 +542,7 @@ impl ContextPool {
         #[cfg(windows)]
         let page_size = unsafe {
             let mut info = core::mem::zeroed();
-            windows_sys::Win32::System::SystemInformation::GetSystemInfo(&mut info);
+            windows_sys::Win32::System::SystemInformation::GetSystemInfo(&raw mut info);
             info.dwPageSize as usize
         };
         let align = 64;
@@ -548,7 +568,7 @@ impl Drop for ContextPool {
         #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::Memory::{MEM_RELEASE, VirtualFree};
-            VirtualFree(self.base_ptr as *mut _, 0, MEM_RELEASE);
+            VirtualFree(self.base_ptr.cast(), 0, MEM_RELEASE);
         }
     }
 }

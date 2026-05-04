@@ -33,10 +33,14 @@ proptest! {
                     let mailbox = &scheduler.mailboxes[i][j];
                     let head = mailbox.head.load(Ordering::SeqCst);
                     let tail = mailbox.tail.load(Ordering::SeqCst);
-                    // DTACT_MAILBOX_MASK is not public, but we can just check if tail != head
                     if tail != head {
                         total_tasks += 1; // 1 TaskChunk
                     }
+                }
+
+                let ext_mailbox = &scheduler.external_mailboxes[i];
+                if ext_mailbox.tail.load(Ordering::SeqCst) != ext_mailbox.head.load(Ordering::SeqCst) {
+                    total_tasks += 1;
                 }
             }
         }
@@ -70,6 +74,11 @@ proptest! {
                     if mailbox.tail.load(Ordering::SeqCst) != mailbox.head.load(Ordering::SeqCst) {
                         total_tasks += 1;
                     }
+                }
+
+                let ext_mailbox = &scheduler.external_mailboxes[i];
+                if ext_mailbox.tail.load(Ordering::SeqCst) != ext_mailbox.head.load(Ordering::SeqCst) {
+                    total_tasks += 1;
                 }
             }
         }

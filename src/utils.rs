@@ -171,7 +171,7 @@ pub fn futex_wait(_addr: *const core::sync::atomic::AtomicU8, _val: u8) {
 /// Cross-platform fallback for `futex_wake`.
 #[cfg(not(target_os = "linux"))]
 #[inline(always)]
-pub fn futex_wake(_addr: *const core::sync::atomic::AtomicU8) {}
+pub const fn futex_wake(_addr: *const core::sync::atomic::AtomicU8) {}
 
 std::thread_local! {
     static CACHED_TID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
@@ -193,7 +193,7 @@ pub fn get_thread_id() -> u64 {
             }
             #[cfg(target_os = "windows")]
             unsafe {
-                tid = windows_sys::Win32::System::Threading::GetCurrentThreadId() as u64;
+                tid = u64::from(windows_sys::Win32::System::Threading::GetCurrentThreadId());
             }
             c.set(tid);
         }

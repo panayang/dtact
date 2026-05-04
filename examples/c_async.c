@@ -32,7 +32,7 @@ void master_fiber(void* arg) {
         dtact_spawn_options_t opts = dtact_default_spawn_options();
         if (i % 2 == 0) {
             opts.mKind = 1; // IO
-            opts.mSwitcher = 3; // SameThreadNoFloat
+            opts.mSwitcher = 1; // CrossThreadNoFloat
         } else {
             opts.mKind = 3; // System
             opts.mSwitcher = 0; // CrossThreadFloat

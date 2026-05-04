@@ -171,8 +171,9 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         };
 
         // 3. ABI-Compliant Stack Alignment & Poisoning
-        // We leave 64 bytes for Shadow Space (Windows) and Future safety.
-        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        // We leave 72 bytes for Shadow Space (Windows) and Future safety.
+        // -72 ensures that RSP is 16-byte aligned + 8, which is required by the Windows x64 ABI.
+        let stack_top = (ctx_ptr as usize & !0xF) - 72;
         let stack_top_ptr = stack_top as *mut u64;
 
         // Place a "poison" return address on the stack.
@@ -185,11 +186,26 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64; // RSP
             (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64; // RIP
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[10] = ctx_ptr as u64; // Stack Base
+                (*ctx_ptr).regs.gprs[11] = limit as u64; // Stack Limit
+                (*ctx_ptr).regs.gprs[12] = limit as u64; // DeallocationStack
+                (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
             (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64; // x30 (LR)
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[13] = ctx_ptr as u64; // Stack Base
+                (*ctx_ptr).regs.gprs[14] = limit as u64; // Stack Limit
+                (*ctx_ptr).regs.gprs[15] = limit as u64; // DeallocationStack
+            }
         }
         #[cfg(target_arch = "riscv64")]
         {
@@ -276,7 +292,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
             }
         };
 
-        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        let stack_top = (ctx_ptr as usize & !0xF) - 72;
         let stack_top_ptr = stack_top as *mut u64;
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
         let stack_top = stack_top as *mut u8;
@@ -285,11 +301,26 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64;
             (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64;
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[10] = ctx_ptr as u64;
+                (*ctx_ptr).regs.gprs[11] = limit as u64;
+                (*ctx_ptr).regs.gprs[12] = limit as u64;
+                (*ctx_ptr).regs.gprs[13] = !0;
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64;
             (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[13] = ctx_ptr as u64;
+                (*ctx_ptr).regs.gprs[14] = limit as u64;
+                (*ctx_ptr).regs.gprs[15] = limit as u64;
+            }
         }
         #[cfg(target_arch = "riscv64")]
         {
@@ -368,7 +399,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         };
 
         // ABI-Compliant Stack Alignment & Poisoning
-        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        let stack_top = (ctx_ptr as usize & !0xF) - 72;
         let stack_top_ptr = stack_top as *mut u64;
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
 
@@ -378,11 +409,26 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64; // RSP
             (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64; // RIP
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[10] = ctx_ptr as u64; // Stack Base
+                (*ctx_ptr).regs.gprs[11] = limit as u64; // Stack Limit
+                (*ctx_ptr).regs.gprs[12] = limit as u64; // DeallocationStack
+                (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
             (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64; // x30 (LR)
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[13] = ctx_ptr as u64; // Stack Base
+                (*ctx_ptr).regs.gprs[14] = limit as u64; // Stack Limit
+                (*ctx_ptr).regs.gprs[15] = limit as u64; // DeallocationStack
+            }
         }
         #[cfg(target_arch = "riscv64")]
         {
@@ -476,7 +522,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
             }
         };
 
-        let stack_top = (ctx_ptr as usize & !0xF) - 64;
+        let stack_top = (ctx_ptr as usize & !0xF) - 72;
         let stack_top_ptr = stack_top as *mut u64;
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
         let stack_top = stack_top as *mut u8;
@@ -485,11 +531,26 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64;
             (*ctx_ptr).regs.gprs[7] = crate::api::fiber_entry_point as *const () as u64;
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[10] = ctx_ptr as u64;
+                (*ctx_ptr).regs.gprs[11] = limit as u64;
+                (*ctx_ptr).regs.gprs[12] = limit as u64;
+                (*ctx_ptr).regs.gprs[13] = !0;
+            }
         }
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64;
             (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+            #[cfg(windows)]
+            {
+                let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
+                (*ctx_ptr).regs.gprs[13] = ctx_ptr as u64;
+                (*ctx_ptr).regs.gprs[14] = limit as u64;
+                (*ctx_ptr).regs.gprs[15] = limit as u64;
+            }
         }
         #[cfg(target_arch = "riscv64")]
         {

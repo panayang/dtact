@@ -350,11 +350,24 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             {
                 (*ctx_ptr).regs.gprs[0] = stack_top as u64; // RSP
                 (*ctx_ptr).regs.gprs[7] = fiber_entry_point as *const () as u64; // RIP
+                #[cfg(windows)]
+                {
+                    (*ctx_ptr).regs.gprs[10] = stack_limit as u64; // Stack Base
+                    (*ctx_ptr).regs.gprs[11] = buffer_start as u64; // Stack Limit
+                    (*ctx_ptr).regs.gprs[12] = buffer_start as u64; // DeallocationStack
+                    (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+                }
             }
             #[cfg(target_arch = "aarch64")]
             {
                 (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
                 (*ctx_ptr).regs.gprs[11] = fiber_entry_point as u64; // x30 (LR)
+                #[cfg(windows)]
+                {
+                    (*ctx_ptr).regs.gprs[13] = stack_limit as u64; // Stack Base
+                    (*ctx_ptr).regs.gprs[14] = buffer_start as u64; // Stack Limit
+                    (*ctx_ptr).regs.gprs[15] = buffer_start as u64; // DeallocationStack
+                }
             }
             #[cfg(target_arch = "riscv64")]
             {
@@ -680,7 +693,7 @@ pub mod fiber {
 
             // Point 1: Shadow Space Separation (Stack MUST start BELOW the 8KB Future buffer)
             let buffer_start = (*ctx_ptr).read_buffer_ptr as usize;
-            let stack_top = (buffer_start & !0xF) - 64;
+            let stack_top = (buffer_start & !0xF) - 72;
             let stack_top_ptr = stack_top as *mut u64;
 
             // Point 4: "Return-to-Nowhere" Protection
@@ -692,11 +705,26 @@ pub mod fiber {
             {
                 (*ctx_ptr).regs.gprs[0] = stack_top as u64; // RSP
                 (*ctx_ptr).regs.gprs[7] = super::fiber_entry_point as *const () as u64; // RIP
+                #[cfg(windows)]
+                {
+                    let limit = buffer_start.saturating_sub(pool.slot_size);
+                    (*ctx_ptr).regs.gprs[10] = buffer_start as u64; // Stack Base
+                    (*ctx_ptr).regs.gprs[11] = limit as u64; // Stack Limit
+                    (*ctx_ptr).regs.gprs[12] = limit as u64; // DeallocationStack
+                    (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+                }
             }
             #[cfg(target_arch = "aarch64")]
             {
                 (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
                 (*ctx_ptr).regs.gprs[11] = super::fiber_entry_point as u64; // x30 (LR)
+                #[cfg(windows)]
+                {
+                    let limit = buffer_start.saturating_sub(pool.slot_size);
+                    (*ctx_ptr).regs.gprs[13] = buffer_start as u64; // Stack Base
+                    (*ctx_ptr).regs.gprs[14] = limit as u64; // Stack Limit
+                    (*ctx_ptr).regs.gprs[15] = limit as u64; // DeallocationStack
+                }
             }
             #[cfg(target_arch = "riscv64")]
             {
