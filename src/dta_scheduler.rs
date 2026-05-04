@@ -305,6 +305,8 @@ pub struct Worker {
     pub load_level: AtomicU8,
     /// Load threshold above which tasks are deflected to peers.
     pub deflection_threshold: AtomicU8,
+    /// Counter for incoming work signals, used for hardware-assisted wakeups.
+    pub event_signal: AtomicUsize,
 
     /// Local SPSC execution queue.
     pub local_queue: HugeBuffer<[TaskIndex; LOCAL_QUEUE_CAPACITY]>,
@@ -351,6 +353,7 @@ impl Worker {
             local_head: 0,
             local_tail: 0,
             ticks: 0,
+            event_signal: AtomicUsize::new(0),
             polling_order,
         }
     }
@@ -571,6 +574,15 @@ impl DtaScheduler {
         }
     }
 
+    /// Signals a worker that new work is available in its mailboxes.
+    #[inline(always)]
+    fn signal_worker(&self, target_core: usize) {
+        unsafe {
+            let worker = &*self.workers[target_core].get();
+            worker.event_signal.fetch_add(1, Ordering::Release);
+        }
+    }
+
     #[inline(always)]
     fn do_push_local(&self, source_core: usize, target_core: usize, task: TaskIndex) -> bool {
         let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
@@ -589,6 +601,9 @@ impl DtaScheduler {
         chunk.tasks[0] = task;
         chunk.count = 1;
         let res = self.external_mailboxes[target_core].push(chunk);
+        if res.is_ok() {
+            self.signal_worker(target_core);
+        }
         self.external_locks[target_core].unlock();
         res.is_ok()
     }
@@ -611,9 +626,16 @@ impl DtaScheduler {
             chunk.tasks[0] = task;
             chunk.count = 1;
             let success = self.external_mailboxes[target_core].push(chunk).is_ok();
+            if success {
+                self.signal_worker(target_core);
+            }
             self.external_locks[target_core].unlock();
             success
         };
+
+        if res {
+            self.signal_worker(target_core);
+        }
 
         #[cfg(all(
             feature = "hw-acceleration",
@@ -715,60 +737,128 @@ impl DtaScheduler {
         shutdown: &core::sync::atomic::AtomicBool,
     ) {
         crate::future_bridge::CURRENT_WORKER_ID.with(|c| c.set(current_core));
+        let mut idle_count: u32 = 0;
+
         loop {
             if shutdown.load(core::sync::atomic::Ordering::Relaxed) {
                 return;
             }
 
+            let mut activity = false;
+
+            // 1. Dispatch local tasks
             unsafe {
                 let worker = &mut *scheduler.workers[current_core].get();
+                let head_before = worker.local_head;
                 worker.dispatch_loop(pool);
+                if worker.local_head != head_before {
+                    activity = true;
+                }
             }
 
+            // 2. Poll incoming mailboxes
+            let q_len_before =
+                unsafe { (&*scheduler.workers[current_core].get()).local_queue_len() };
             scheduler.poll_mailboxes(current_core);
+            let q_len_after =
+                unsafe { (&*scheduler.workers[current_core].get()).local_queue_len() };
 
+            if q_len_after > q_len_before {
+                activity = true;
+            }
+
+            if activity {
+                idle_count = 0;
+                continue;
+            }
+
+            // 3. Adaptive Backoff Strategy
+            idle_count = idle_count.saturating_add(1);
+
+            // Tier 1: Fast Spinning (Low Latency)
+            if idle_count < 256 {
+                core::hint::spin_loop();
+                continue;
+            }
+
+            // Tier 2: Light Hardware Pause (Power Efficiency)
+            if idle_count < 2048 {
+                #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
+                unsafe {
+                    core::arch::asm!("yield", options(nostack, preserves_flags));
+                }
+
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                core::hint::spin_loop(); // On x86, this is PAUSE
+
+                #[cfg(not(any(
+                    target_arch = "aarch64",
+                    target_arch = "x86",
+                    target_arch = "x86_64"
+                )))]
+                for _ in 0..8 {
+                    core::hint::spin_loop();
+                }
+                continue;
+            }
+
+            // Tier 3: Deep Sleep (Lowest Power / Maximum Adaptiveness)
             unsafe {
+                #[allow(unused_variables)]
                 let worker = &*scheduler.workers[current_core].get();
-                if worker.local_queue_len() == 0 {
-                    #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
-                    {
-                        core::arch::asm!("wfe", options(nostack, preserves_flags));
-                    }
-                    #[cfg(all(feature = "hw-acceleration", target_arch = "riscv64"))]
-                    {
-                        core::arch::asm!("pause", options(nostack, preserves_flags));
-                    }
-                    #[cfg(all(
-                        feature = "hw-acceleration",
-                        any(target_arch = "x86_64", target_arch = "x86")
-                    ))]
-                    {
-                        unsafe {
-                            let tail_ptr = &raw const worker.local_tail as *mut core::ffi::c_void;
-                            let control = 1u32; // C0.1 (Fast wakeup)
-                            // 1ms timeout @ 2GHz (approx 2,000,000 ticks)
-                            let timeout_low = 2_000_000u32;
-                            let timeout_high = 0u32;
-                            core::arch::asm!(
-                                "umonitor {0}",
-                                "test {1}, {1}",
-                                "jnz 2f",
-                                "umwait {2:e}",
-                                "2:",
-                                in(reg) tail_ptr,
-                                in(reg) worker.local_queue_len(),
-                                in(reg) control,
-                                inout("eax") timeout_low => _,
-                                inout("edx") timeout_high => _,
-                                options(nostack, preserves_flags)
-                            );
-                        }
-                    }
-                    #[cfg(not(feature = "hw-acceleration"))]
-                    {
+
+                #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
+                {
+                    core::arch::asm!("wfe", options(nostack, preserves_flags));
+                }
+
+                #[cfg(all(feature = "hw-acceleration", target_arch = "riscv64"))]
+                {
+                    core::arch::asm!("pause", options(nostack, preserves_flags));
+                }
+
+                #[cfg(all(
+                    feature = "hw-acceleration",
+                    any(target_arch = "x86_64", target_arch = "x86")
+                ))]
+                {
+                    let sig_ptr = &raw const worker.event_signal as *mut core::ffi::c_void;
+                    let current_sig = worker.event_signal.load(Ordering::Acquire);
+                    let control = 1u32; // C0.1 (Fast wakeup)
+                    // 1ms timeout @ 2GHz (approx 2,000,000 ticks)
+                    let timeout_low = 2_000_000u32;
+                    let timeout_high = 0u32;
+                    core::arch::asm!(
+                        "umonitor {0}",
+                        "cmp {1}, {2}",
+                        "jne 2f",
+                        "umwait {3:e}",
+                        "2:",
+                        in(reg) sig_ptr,
+                        in(reg) current_sig,
+                        in(reg) worker.event_signal.load(Ordering::Relaxed),
+                        in(reg) control,
+                        inout("eax") timeout_low => _,
+                        inout("edx") timeout_high => _,
+                        options(nostack, preserves_flags)
+                    );
+                }
+
+                #[cfg(not(feature = "hw-acceleration"))]
+                {
+                    // Yield to OS to avoid burning cycles in deep idle
+                    if idle_count > 10000 {
+                        std::thread::yield_now();
+                        idle_count = 2048; // Stay in Tier 3
+                    } else {
                         core::hint::spin_loop();
                     }
                 }
+            }
+
+            // Cap idle_count to prevent overflow and stay in Tier 3
+            if idle_count > 20000 {
+                idle_count = 10000;
             }
         }
     }
