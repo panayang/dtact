@@ -3,11 +3,11 @@ members = ["dtact-macros", "fuzz"]
 
 [package]
 name = "dtact"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
-exclude = ['bench_results.md']
+exclude = ['benchmark_results.md']
 publish = true
 repository = "https://github.com/Apich-Organization/dtact"
 documentation = "https://docs.rs/dtact"
