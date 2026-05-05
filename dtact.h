@@ -63,6 +63,14 @@ typedef struct dtact_config_t {
      Topology mode (0: `P2PMesh`, 1: Global).
      */
     uint8_t mTopologyMode;
+    /*
+     Maximum number of concurrent fibers. Set to 0 for default (4096).
+     */
+    uint32_t mFiberCapacity;
+    /*
+     Stack size per fiber in bytes. Set to 0 for default (512KB).
+     */
+    uint32_t mStackSize;
 } dtact_config_t;
 
 /*

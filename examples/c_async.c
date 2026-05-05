@@ -58,6 +58,8 @@ int main() {
     // 1. Initialize Runtime
     dtact_config_t cfg = dtact_default_config();
     cfg.mWorkers = 4;
+    cfg.mFiberCapacity = 1024; // Limit to 1024 fibers for this example
+    cfg.mStackSize = 256 * 1024; // 256KB stacks are sufficient
     void* rt = dtact_init(&cfg);
     
     // 2. Launch Initial Root Fiber

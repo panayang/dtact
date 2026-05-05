@@ -62,24 +62,40 @@ struct dtact_config_t {
      Topology mode (0: `P2PMesh`, 1: Global).
      */
     uint8_t mTopologyMode;
+    /*
+     Maximum number of concurrent fibers. Set to 0 for default (4096).
+     */
+    uint32_t mFiberCapacity;
+    /*
+     Stack size per fiber in bytes. Set to 0 for default (512KB).
+     */
+    uint32_t mStackSize;
 
     dtact_config_t(uint32_t const& aMWorkers,
                    uint8_t const& aMSafetyLevel,
-                   uint8_t const& aMTopologyMode)
+                   uint8_t const& aMTopologyMode,
+                   uint32_t const& aMFiberCapacity,
+                   uint32_t const& aMStackSize)
       : mWorkers(aMWorkers),
         mSafetyLevel(aMSafetyLevel),
-        mTopologyMode(aMTopologyMode)
+        mTopologyMode(aMTopologyMode),
+        mFiberCapacity(aMFiberCapacity),
+        mStackSize(aMStackSize)
     {}
 
     bool operator==(const dtact_config_t& aOther) const {
         return mWorkers == aOther.mWorkers &&
                mSafetyLevel == aOther.mSafetyLevel &&
-               mTopologyMode == aOther.mTopologyMode;
+               mTopologyMode == aOther.mTopologyMode &&
+               mFiberCapacity == aOther.mFiberCapacity &&
+               mStackSize == aOther.mStackSize;
     }
     bool operator!=(const dtact_config_t& aOther) const {
         return mWorkers != aOther.mWorkers ||
                mSafetyLevel != aOther.mSafetyLevel ||
-               mTopologyMode != aOther.mTopologyMode;
+               mTopologyMode != aOther.mTopologyMode ||
+               mFiberCapacity != aOther.mFiberCapacity ||
+               mStackSize != aOther.mStackSize;
     }
 };
 
