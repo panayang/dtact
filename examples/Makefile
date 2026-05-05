@@ -3,10 +3,13 @@ CFLAGS = -Wall -Wextra -O2
 # CFLAGS = -Wall -Wextra -g -O0
 LDFLAGS = -L../target/release -ldtact -Wl,-rpath,../target/release
 
-all: c_async
+all: c_async run_rust
 
 c_async: c_async.c
 	$(CC) $(CFLAGS) -o c_async c_async.c $(LDFLAGS)
+
+run_rust:
+	cargo run --example rust_async
 
 run: c_async
 	./c_async
