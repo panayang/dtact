@@ -36,6 +36,6 @@ keywords:
   - Concurrency
   - Async
 license: Apache-2.0
-commit: e9870cda96dfb8c5bde2e01ccc3de4f82f0ab26c
+commit: 920263391899e371dac473b540e26455d2d105f2
 version: v0.1.3
 date-released: '2026-05-05'
