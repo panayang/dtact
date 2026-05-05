@@ -195,6 +195,7 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let stack_top = (ctx_ptr as usize & !0xF) - 80;
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top_ptr = stack_top as *mut u64;
 
         // Place a "poison" return address on the stack.
@@ -319,6 +320,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let stack_top = (ctx_ptr as usize & !0xF) - 80;
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top_ptr = stack_top as *mut u64;
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
@@ -431,6 +433,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let stack_top = (ctx_ptr as usize & !0xF) - 80;
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top_ptr = stack_top as *mut u64;
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
@@ -559,6 +562,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
         #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
         let stack_top = (ctx_ptr as usize & !0xF) - 80;
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top_ptr = stack_top as *mut u64;
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);

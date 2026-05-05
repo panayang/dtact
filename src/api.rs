@@ -340,11 +340,12 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
             let stack_top = stack_limit & !0xF;
 
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             let stack_top_ptr = stack_top as *mut u64;
 
             // Poison return address (dtact_abort) — if fiber_entry_point ever returns,
             // this triggers a controlled abort instead of undefined behavior.
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             core::ptr::write(stack_top_ptr, crate::c_ffi::dtact_abort as *const () as u64);
 
             let stack_top = stack_top as *mut u8;
