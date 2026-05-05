@@ -36,7 +36,12 @@ Dtact's design makes trade-offs that influence its performance profile:
 ```rust
 use dtact::{dtact_await, dtact_init, spawn, task, yield_now};
 
-#[task(priority = "Normal", kind = "Compute", stack = "2M")]
+#[task(
+    priority = "Normal",
+    kind = "Compute",
+    stack = "256K",
+    capacity = "1024"
+)]
 async fn worker(id: u32) {
     println!("[Fiber {}] Starting async work...", id);
 
@@ -48,7 +53,7 @@ async fn worker(id: u32) {
     println!("[Fiber {}] Task Finished.", id);
 }
 
-#[dtact_init(workers = 4)]
+#[dtact_init(workers = 4, stack = "256K", capacity = "1024")]
 fn main() {
     println!("--- Dtact Rust Macro Example ---");
 
