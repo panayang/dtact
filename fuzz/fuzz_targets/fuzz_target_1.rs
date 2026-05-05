@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(unused)]
 
 use arbitrary::Arbitrary;
 use dtact::dta_scheduler::{DtaScheduler, TopologyMode};

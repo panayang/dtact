@@ -487,6 +487,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
 /// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback and options.
 #[unsafe(no_mangle)]
 #[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::too_many_lines)]
 pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
     func: extern "C" fn(*mut c_void),
     arg: *mut c_void,
