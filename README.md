@@ -106,7 +106,7 @@ void master_fiber(void* arg) {
         dtact_spawn_options_t opts = dtact_default_spawn_options();
         if (i % 2 == 0) {
             opts.mKind = 1; // IO
-            opts.mSwitcher = 3; // SameThreadNoFloat
+            opts.mSwitcher = 1; // CrossThreadNoFloat
         } else {
             opts.mKind = 3; // System
             opts.mSwitcher = 0; // CrossThreadFloat
@@ -132,6 +132,8 @@ int main() {
     // 1. Initialize Runtime
     dtact_config_t cfg = dtact_default_config();
     cfg.mWorkers = 4;
+    cfg.mFiberCapacity = 1024; // Limit to 1024 fibers for this example
+    cfg.mStackSize = 256 * 1024; // 256KB stacks are sufficient
     void* rt = dtact_init(&cfg);
     
     // 2. Launch Initial Root Fiber
