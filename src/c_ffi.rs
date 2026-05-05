@@ -190,11 +190,16 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         // 3. ABI-Compliant Stack Alignment & Poisoning
         // We leave 72 bytes for Shadow Space (Windows) and Future safety.
         // -72 ensures that RSP is 16-byte aligned + 8, which is required by the Windows x64 ABI.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top = (ctx_ptr as usize & !0xF) - 72;
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let stack_top = (ctx_ptr as usize & !0xF) - 80;
+
         let stack_top_ptr = stack_top as *mut u64;
 
         // Place a "poison" return address on the stack.
         // If the fiber function ever attempts to 'ret', it will jump here and abort.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
 
         let stack_top = stack_top as *mut u8;
@@ -309,8 +314,13 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
             }
         };
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top = (ctx_ptr as usize & !0xF) - 72;
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let stack_top = (ctx_ptr as usize & !0xF) - 80;
+
         let stack_top_ptr = stack_top as *mut u64;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
         let stack_top = stack_top as *mut u8;
 
@@ -416,8 +426,13 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         };
 
         // ABI-Compliant Stack Alignment & Poisoning
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top = (ctx_ptr as usize & !0xF) - 72;
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let stack_top = (ctx_ptr as usize & !0xF) - 80;
+
         let stack_top_ptr = stack_top as *mut u64;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
 
         let stack_top = stack_top as *mut u8;
@@ -539,8 +554,13 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
             }
         };
 
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let stack_top = (ctx_ptr as usize & !0xF) - 72;
+        #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+        let stack_top = (ctx_ptr as usize & !0xF) - 80;
+
         let stack_top_ptr = stack_top as *mut u64;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         core::ptr::write(stack_top_ptr, dtact_abort as *const () as u64);
         let stack_top = stack_top as *mut u8;
 

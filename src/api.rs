@@ -334,14 +334,17 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                 stack_limit = aligned_fut_addr;
             }
 
-            // Stack setup: RSP starts at the top of the available stack region.
-            // 16-byte aligned, minus 8 for the poison return address (to satisfy
-            // x86_64 ABI requirement that RSP is 16n+8 at function entry after call).
+            // ABI-compliant stack alignment
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             let stack_top = (stack_limit & !0xF) - 8;
+            #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+            let stack_top = stack_limit & !0xF;
+
             let stack_top_ptr = stack_top as *mut u64;
 
             // Poison return address (dtact_abort) — if fiber_entry_point ever returns,
             // this triggers a controlled abort instead of undefined behavior.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             core::ptr::write(stack_top_ptr, crate::c_ffi::dtact_abort as *const () as u64);
 
             let stack_top = stack_top as *mut u8;
