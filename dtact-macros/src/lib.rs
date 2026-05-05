@@ -186,8 +186,8 @@ impl Parse for InitArgs {
         let mut topology = "P2PMesh".to_string();
         let mut safety = "Safety1".to_string();
         let mut workers = 0;
-        let mut capacity = 16384;
-        let mut stack = 2 * 1024 * 1024;
+        let mut capacity = 4096;
+        let mut stack = 512 * 1024;
         let mut numa = 0;
 
         for var in vars {
