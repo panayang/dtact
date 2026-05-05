@@ -3,7 +3,7 @@
 pub enum TopologyMode {
     /// Peer-to-Peer Mesh: Tasks are deflected to neighbors based on load.
     P2PMesh,
-    /// Global: Tasks are shared across all cores via a common pool (unsupported in V3).
+    /// Global: Tasks are shared across all cores via a common pool.
     Global,
 }
 
