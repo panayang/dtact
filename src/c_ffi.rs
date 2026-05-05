@@ -198,7 +198,7 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64; // x30 (LR)
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as *const () as u64; // x30 (LR)
             #[cfg(windows)]
             {
                 let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
@@ -210,7 +210,7 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         #[cfg(target_arch = "riscv64")]
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64; // SP
-            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64; // RA
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as *const () as u64; // RA
         }
         (*ctx_ptr).cleanup_fn = None;
     }
@@ -313,7 +313,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64;
-            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as *const () as u64;
             #[cfg(windows)]
             {
                 let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
@@ -325,7 +325,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
         #[cfg(target_arch = "riscv64")]
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64;
-            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64;
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as *const () as u64;
         }
         (*ctx_ptr).cleanup_fn = None;
     }
@@ -421,7 +421,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64; // x30 (LR)
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as *const () as u64; // x30 (LR)
             #[cfg(windows)]
             {
                 let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         #[cfg(target_arch = "riscv64")]
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64; // SP
-            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64; // RA
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as *const () as u64; // RA
         }
     }
 
@@ -543,7 +543,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
         #[cfg(target_arch = "aarch64")]
         {
             (*ctx_ptr).regs.gprs[12] = stack_top as u64;
-            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as u64;
+            (*ctx_ptr).regs.gprs[11] = crate::api::fiber_entry_point as *const () as u64;
             #[cfg(windows)]
             {
                 let limit = (ctx_ptr as usize).saturating_sub(pool.slot_size);
@@ -555,7 +555,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
         #[cfg(target_arch = "riscv64")]
         {
             (*ctx_ptr).regs.gprs[0] = stack_top as u64;
-            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as u64;
+            (*ctx_ptr).regs.gprs[13] = crate::api::fiber_entry_point as *const () as u64;
         }
     }
 
