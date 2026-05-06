@@ -266,8 +266,13 @@ impl Mailbox {
     pub fn pop(&self) -> Option<TaskChunk> {
         let current_head = self.head.load(Ordering::Relaxed);
 
-        if current_head == self.tail.load(Ordering::Acquire) {
-            return None; // Empty
+        // Optimization: Relaxed check first to avoid Acquire load on empty mailboxes
+        if current_head == self.tail.load(core::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+
+        if current_head == self.tail.load(core::sync::atomic::Ordering::Acquire) {
+            return None; // Double-check with Acquire
         }
 
         let chunk = unsafe {
@@ -446,11 +451,7 @@ impl Worker {
         }
         self.local_tail.store(
             end_idx & LOCAL_QUEUE_MASK,
-            if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                core::sync::atomic::Ordering::SeqCst
-            } else {
-                core::sync::atomic::Ordering::Release
-            },
+            core::sync::atomic::Ordering::Release,
         );
     }
 
@@ -472,14 +473,8 @@ impl Worker {
             };
 
             head = (head + 1) & LOCAL_QUEUE_MASK;
-            self.local_head.store(
-                head,
-                if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                    core::sync::atomic::Ordering::SeqCst
-                } else {
-                    core::sync::atomic::Ordering::Release
-                },
-            );
+            self.local_head
+                .store(head, core::sync::atomic::Ordering::Release);
 
             let target_ptr = pool.get_context_ptr(task);
 
@@ -624,11 +619,7 @@ impl DtaScheduler {
             let worker = &*self.workers[target_core].get();
             // On AArch64 and RISC-V, SeqCst is necessary for signaling across cores to ensure
             // that all preceding mailbox/queue stores are globally visible.
-            let order = if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                core::sync::atomic::Ordering::SeqCst
-            } else {
-                core::sync::atomic::Ordering::Release
-            };
+            let order = core::sync::atomic::Ordering::Release;
             worker.event_signal.fetch_add(1, order);
             // Must call futex_wake to awaken workers in Tier 3 (deep sleep).
             crate::utils::futex_wake(
@@ -888,13 +879,9 @@ impl DtaScheduler {
                 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                 core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-                let signal_before = worker.event_signal.load(
-                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                        core::sync::atomic::Ordering::SeqCst
-                    } else {
-                        core::sync::atomic::Ordering::Acquire
-                    },
-                );
+                let signal_before = worker
+                    .event_signal
+                    .load(core::sync::atomic::Ordering::Acquire);
 
                 // Architecture-specific Hardware Standby hints
                 #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
