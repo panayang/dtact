@@ -418,7 +418,7 @@ impl Worker {
     pub fn push_batch(&mut self, chunk: &TaskChunk) {
         let count = chunk.count;
         let tail = self.local_tail.load(core::sync::atomic::Ordering::Relaxed);
-        let end_idx = tail + count;
+        let end_idx = tail.wrapping_add(count);
 
         if end_idx <= LOCAL_QUEUE_CAPACITY {
             unsafe {
@@ -605,7 +605,14 @@ impl DtaScheduler {
     fn signal_worker(&self, target_core: usize) {
         unsafe {
             let worker = &*self.workers[target_core].get();
-            worker.event_signal.fetch_add(1, Ordering::Release);
+            // On AArch64 and RISC-V, SeqCst is necessary for signaling across cores to ensure
+            // that all preceding mailbox/queue stores are globally visible.
+            let order = if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                core::sync::atomic::Ordering::SeqCst
+            } else {
+                core::sync::atomic::Ordering::Release
+            };
+            worker.event_signal.fetch_add(1, order);
             // Must call futex_wake to awaken workers in Tier 3 (deep sleep).
             crate::utils::futex_wake(
                 (&raw const worker.event_signal).cast::<core::sync::atomic::AtomicU32>(),
