@@ -619,7 +619,11 @@ impl DtaScheduler {
             let worker = &*self.workers[target_core].get();
             // On AArch64 and RISC-V, SeqCst is necessary for signaling across cores to ensure
             // that all preceding mailbox/queue stores are globally visible.
-            let order = core::sync::atomic::Ordering::Release;
+            let order = if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                core::sync::atomic::Ordering::SeqCst
+            } else {
+                core::sync::atomic::Ordering::Release
+            };
             worker.event_signal.fetch_add(1, order);
             // Must call futex_wake to awaken workers in Tier 3 (deep sleep).
             crate::utils::futex_wake(
@@ -882,6 +886,11 @@ impl DtaScheduler {
                 let signal_before = worker
                     .event_signal
                     .load(core::sync::atomic::Ordering::Acquire);
+
+                // Barrier: Ensure signal_before load happens BEFORE the following queue/mailbox checks.
+                // This prevents the CPU from reordering a stale 'empty' check before a fresh signal load.
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
                 // Architecture-specific Hardware Standby hints
                 #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
