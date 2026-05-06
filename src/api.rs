@@ -425,21 +425,21 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
         crate::memory_management::FiberStatus::Finished as u32,
         core::sync::atomic::Ordering::Release,
     );
-    // Full memory barrier: ensure state=Finished is visible before we check for waiters.
-    // This prevents a race where a waiter registers itself but we don't see it,
-    // while the waiter sees our state as 'Running' and goes to sleep.
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
     // Notify any waiting host threads immediately.
     unsafe { crate::utils::futex_wake(&raw const ctx.state) };
 
     // Wake up any fiber waiting for this one (FFI join).
     // MUST happen BEFORE free_context, otherwise the context could be reallocated
-    // and the waiter_handle overwritten before we read
+    // and the waiter_handle overwritten before we read.
+    // On AArch64/RISC-V, we need a full barrier to ensure state=Finished is visible before waiter check.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let waiter = ctx
         .waiter_handle
         .swap(0, core::sync::atomic::Ordering::AcqRel);
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    let waiter = ctx
+        .waiter_handle
+        .swap(0, core::sync::atomic::Ordering::SeqCst);
     if waiter != 0 {
         let waiter = waiter & !(1 << 63); // Strip sentinel bit
         let waiter_ctx_id = (waiter & 0xFFFF_FFFF) as u32;

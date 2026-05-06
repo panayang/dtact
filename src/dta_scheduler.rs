@@ -316,9 +316,9 @@ pub struct Worker {
 
     /// Local SPSC execution queue.
     pub local_queue: HugeBuffer<[TaskIndex; LOCAL_QUEUE_CAPACITY]>,
-    /// Head of the local queue (Atomic for AArch64 visibility).
+    /// Head of the local queue (Atomic for `AArch64` visibility).
     pub local_head: AtomicUsize,
-    /// Tail of the local queue (Atomic for AArch64 visibility).
+    /// Tail of the local queue (Atomic for `AArch64` visibility).
     pub local_tail: AtomicUsize,
 
     /// Total scheduler ticks executed.
@@ -802,7 +802,7 @@ impl DtaScheduler {
         let mut idle_count: u32 = 0;
 
         loop {
-            if shutdown.load(core::sync::atomic::Ordering::Relaxed) {
+            if shutdown.load(core::sync::atomic::Ordering::Acquire) {
                 return;
             }
 
@@ -924,8 +924,13 @@ impl DtaScheduler {
                     );
                 }
 
+                // Barrier: Ensure signal_before load happens BEFORE the final check of work.
+                // This prevents the CPU from reordering a stale 'empty' check before a fresh signal load.
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
                 // Final check before OS-level de-scheduling via futex.
-                // We use Acquire loads to ensure any work pushed by a signaler is visible.
+                scheduler.poll_mailboxes(current_core);
                 let head = worker
                     .local_head
                     .load(core::sync::atomic::Ordering::Acquire);
@@ -935,9 +940,6 @@ impl DtaScheduler {
 
                 if head == tail {
                     // Enter OS-managed sleep. The kernel will wake us when event_signal changes.
-                    // Full barrier before sleep to ensure we don't miss a signal.
-                    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
                     crate::utils::futex_wait(&raw const worker.event_signal, signal_before);
                 }
 

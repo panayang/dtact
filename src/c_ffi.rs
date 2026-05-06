@@ -720,15 +720,14 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         let current_ctx_id = unsafe { u64::from((*ctx_ptr).fiber_index) };
         let my_handle = current_ctx_id | ((current_worker as u64) << 32) | (1 << 63);
 
+        // Register the current fiber as a waiter for the target fiber.
+        // We use swap(SeqCst) as a full memory barrier to ensure visibility before state re-check.
+        // On x86, this is more efficient than store + mfence.
         unsafe {
             (*target_ctx)
                 .waiter_handle
-                .store(my_handle, core::sync::atomic::Ordering::Release);
+                .swap(my_handle, core::sync::atomic::Ordering::SeqCst);
         }
-
-        // Full memory barrier: waiter_handle store must be visible before state re-check.
-        // On x86, this prevents Store-Load reordering which could lead to a lost wakeup.
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         // 2. Double-check target state after registering waiter
         let (current_gen_post, status_post) = unsafe {
