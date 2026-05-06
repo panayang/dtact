@@ -32,9 +32,9 @@ unsafe fn wake_by_ref_impl(data: *const ()) {
 
     let prev = ctx
         .state
-        .swap(FiberStatus::Notified as u8, Ordering::AcqRel);
+        .swap(FiberStatus::Notified as u32, Ordering::AcqRel);
 
-    if prev == FiberStatus::Yielded as u8 {
+    if prev == FiberStatus::Yielded as u32 {
         // The fiber was fully suspended and yielded. We can safely enqueue it
         // for migration to any worker.
         crate::wake_fiber(ctx.origin_core as usize, ctx.fiber_index);
@@ -124,9 +124,11 @@ pub fn wait_pinned<F: Future>(mut fut_pinned: Pin<&mut F>) -> F::Output {
     let mut cx = Context::from_waker(&waker);
 
     loop {
-        // Clear Notified state before polling
-        ctx.state
-            .store(FiberStatus::Running as u8, Ordering::Release);
+        // Clear any previous Notified or Suspending state. Using swap ensures a full
+        // memory barrier and allows us to acknowledge that a wake event occurred.
+        let _ = ctx
+            .state
+            .swap(FiberStatus::Running as u32, Ordering::AcqRel);
 
         match fut_pinned.as_mut().poll(&mut cx) {
             Poll::Ready(output) => {
@@ -139,13 +141,13 @@ pub fn wait_pinned<F: Future>(mut fut_pinned: Pin<&mut F>) -> F::Output {
                 let current_spin = ctx.adaptive_spin_count;
                 let failure_count = ctx.spin_failure_count;
 
-                // Adaptive Cooldown: If we've failed many times, yield immediately.
+                // Adaptive Cooldown: Only spin if we haven't failed too many times recently.
                 if failure_count < 10 {
                     for i in 0..current_spin {
                         core::hint::spin_loop();
 
-                        // Sparse Polling: Reduce L1 pressure by only polling every 8 hints.
-                        if i.trailing_zeros() >= 3
+                        // Sparse Polling: Reduce L1 pressure. i=0 always polls due to trailing_zeros.
+                        if (i.trailing_zeros() >= 3 || i == current_spin - 1)
                             && let Poll::Ready(output) = fut_pinned.as_mut().poll(&mut cx)
                         {
                             ctx.adaptive_spin_count = (current_spin + 2).min(200);
@@ -155,17 +157,17 @@ pub fn wait_pinned<F: Future>(mut fut_pinned: Pin<&mut F>) -> F::Output {
                     }
                 }
 
-                // Spin failed. Penalize budget and yield.
+                // Spin failed. Penalize budget and prepare for suspension.
                 ctx.spin_failure_count = failure_count.saturating_add(1);
                 ctx.adaptive_spin_count = current_spin.saturating_sub(5).max(5);
 
-                // Try to transition to Yielded and suspend.
+                // Try to transition to Suspending and natively switch to scheduler.
                 // If it fails, it means a wake() occurred (state is Notified), so we skip suspension.
                 if ctx
                     .state
                     .compare_exchange(
-                        FiberStatus::Running as u8,
-                        FiberStatus::Suspending as u8,
+                        FiberStatus::Running as u32,
+                        FiberStatus::Suspending as u32,
                         Ordering::Release,
                         Ordering::Acquire,
                     )

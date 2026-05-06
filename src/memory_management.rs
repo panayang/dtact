@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 #![allow(non_snake_case)]
 
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Safety policies for context pool memory layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,13 +49,13 @@ impl Default for Registers {
 }
 
 /// Lifecycle state of a fiber.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
+#[repr(u32)]
 #[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiberStatus {
-    /// The fiber is initialized but has not yet started.
+    /// The fiber is newly created and has not yet been polled.
     Initial = 0,
-    /// The fiber is currently executing on a physical core.
+    /// The fiber is currently being executed by a worker core.
     Running = 1,
     /// The fiber is suspended and waiting for an event (e.g. I/O or Mutex).
     Yielded = 2,
@@ -88,7 +88,7 @@ pub struct FiberContext {
     /// The hardware core ID where this fiber was originally spawned.
     pub origin_core: u16,
     /// Current execution state.
-    pub state: AtomicU8,
+    pub state: AtomicU32,
     /// Pointer to the assembly context-switch function.
     pub switch_fn: unsafe extern "C" fn(*mut Registers, *const Registers),
     /// Pointer to the fiber's entry-point closure or future.
@@ -144,7 +144,7 @@ impl FiberContext {
             scheduler_stack_ptr: 0,
             tib_stack_limit: 0,
             tib_stack_base: 0,
-            state: AtomicU8::new(FiberStatus::Initial as u8),
+            state: AtomicU32::new(FiberStatus::Initial as u32),
             kind: WorkloadKind::Compute,
             mode: TopologyMode::P2PMesh,
             origin_core: 0,
@@ -511,7 +511,7 @@ impl ContextPool {
         unsafe {
             (*ctx)
                 .state
-                .store(FiberStatus::Initial as u8, Ordering::Release);
+                .store(FiberStatus::Initial as u32, Ordering::Release);
             (*ctx).generation.fetch_add(1, Ordering::AcqRel);
             crate::utils::futex_wake(&raw const (*ctx).state);
         };

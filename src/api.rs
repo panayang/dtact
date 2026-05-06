@@ -241,7 +241,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                     ctx.adaptive_spin_count = current_spin.saturating_sub(100).max(200);
 
                     ctx.state.store(
-                        crate::memory_management::FiberStatus::Notified as u8,
+                        crate::memory_management::FiberStatus::Notified as u32,
                         core::sync::atomic::Ordering::Release,
                     );
                     (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);
@@ -261,7 +261,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
 
         unsafe {
             (*ctx_ptr).state.store(
-                crate::memory_management::FiberStatus::Running as u8,
+                crate::memory_management::FiberStatus::Running as u32,
                 core::sync::atomic::Ordering::Release,
             );
             (*ctx_ptr).kind = self.kind;
@@ -269,6 +269,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             (*ctx_ptr).origin_core = current_core as u16;
             (*ctx_ptr).fiber_index = ctx_id;
             (*ctx_ptr).switch_fn = S::SWITCH_FN;
+            (*ctx_ptr).last_os_thread_id = 0; // Reset for new fiber execution
 
             // Set adaptive spin count based on workload kind
             (*ctx_ptr).adaptive_spin_count = match self.kind {
@@ -392,7 +393,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
         dtact_handle_t(
             u64::from(ctx_id)
                 | ((current_core as u64) << 32)
-                | ((r#gen & 0xFFFF) << 48)
+                | ((r#gen & 0x7FFF) << 48)
                 | (1 << 63),
         )
     }
@@ -421,9 +422,11 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
     // Mark as Finished. The scheduler will return this context to the pool
     // AFTER we switch back, preventing use-after-free races.
     ctx.state.store(
-        crate::memory_management::FiberStatus::Finished as u8,
+        crate::memory_management::FiberStatus::Finished as u32,
         core::sync::atomic::Ordering::Release,
     );
+    // Notify any waiting host threads immediately.
+    unsafe { crate::utils::futex_wake(&raw const ctx.state) };
 
     // Wake up any fiber waiting for this one (FFI join).
     // MUST happen BEFORE free_context, otherwise the context could be reallocated
@@ -680,7 +683,7 @@ pub mod fiber {
 
         unsafe {
             (*ctx_ptr).state.store(
-                crate::memory_management::FiberStatus::Running as u8,
+                crate::memory_management::FiberStatus::Running as u32,
                 core::sync::atomic::Ordering::Release,
             );
             (*ctx_ptr).origin_core = current_core as u16;
@@ -758,7 +761,7 @@ pub mod fiber {
         unsafe {
             let ctx = &mut *ctx_ptr;
             ctx.state.store(
-                crate::memory_management::FiberStatus::Suspending as u8,
+                crate::memory_management::FiberStatus::Suspending as u32,
                 core::sync::atomic::Ordering::Release,
             );
             (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);

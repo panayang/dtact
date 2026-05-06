@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 #[allow(unused_imports)]
 use core::arch::asm;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 /// Task Index used for Zero-Copy passing within the `ContextPool`.
 pub type TaskIndex = u32;
@@ -306,7 +306,8 @@ pub struct Worker {
     /// Load threshold above which tasks are deflected to peers.
     pub deflection_threshold: AtomicU8,
     /// Counter for incoming work signals, used for hardware-assisted wakeups.
-    pub event_signal: AtomicUsize,
+    /// Uses `AtomicU32` for direct compatibility with Linux futex system calls.
+    pub event_signal: AtomicU32,
 
     /// Local SPSC execution queue.
     pub local_queue: HugeBuffer<[TaskIndex; LOCAL_QUEUE_CAPACITY]>,
@@ -353,7 +354,7 @@ impl Worker {
             local_head: 0,
             local_tail: 0,
             ticks: 0,
-            event_signal: AtomicUsize::new(0),
+            event_signal: AtomicU32::new(0),
             polling_order,
         }
     }
@@ -486,37 +487,41 @@ impl Worker {
 
             crate::future_bridge::CURRENT_FIBER.with(|c| c.set(core::ptr::null_mut()));
 
-            // Post-switch lifecycle: if the fiber finished, return its context to the pool.
-            // This MUST happen here (on the scheduler's stack) rather than inside
-            // fiber_entry_point, because calling free_context from the fiber's own
-            // stack creates a use-after-free race: the context could be reallocated
-            // by another thread while the fiber is still executing its final instructions.
-            let state = unsafe {
+            // Optimized lifecycle state machine: handle Finished, Notified, or Suspending transitions.
+            // We use a single load and robust checks to minimize hot-path latency.
+            let post_state = unsafe {
                 (*target_ptr)
                     .state
                     .load(core::sync::atomic::Ordering::Acquire)
             };
 
-            if state == crate::memory_management::FiberStatus::Suspending as u8 {
-                // Fiber is suspending. Transition to Yielded to allow cross-core migration.
-                let _ = unsafe {
+            let mut final_state = post_state;
+            if post_state == crate::memory_management::FiberStatus::Suspending as u32 {
+                // Fiber requested suspension. Transition to Yielded to allow cross-core migration.
+                // If this CAS fails, it means a concurrent wake() moved it to Notified.
+                match unsafe {
                     (*target_ptr).state.compare_exchange(
-                        crate::memory_management::FiberStatus::Suspending as u8,
-                        crate::memory_management::FiberStatus::Yielded as u8,
+                        crate::memory_management::FiberStatus::Suspending as u32,
+                        crate::memory_management::FiberStatus::Yielded as u32,
                         core::sync::atomic::Ordering::Release,
                         core::sync::atomic::Ordering::Acquire,
                     )
-                };
-            } else if state == crate::memory_management::FiberStatus::Notified as u8 {
+                } {
+                    Ok(_) => final_state = crate::memory_management::FiberStatus::Yielded as u32,
+                    Err(actual) => final_state = actual,
+                }
+            }
+
+            // Terminal states (Finished, Panicked)
+            if final_state == crate::memory_management::FiberStatus::Finished as u32
+                || final_state == crate::memory_management::FiberStatus::Panicked as u32
+            {
+                pool.free_context(task);
+            } else if final_state == crate::memory_management::FiberStatus::Notified as u32 {
                 // Cooperative yield or backpressure-induced suspension: re-enqueue.
-                // We MUST do this here (on the scheduler stack) to ensure the fiber's
-                // registers were fully saved by the switch_fn before it's picked up
-                // by another worker.
                 self.push_local(task);
                 // Return to allow mailbox polling and prevent live-locks on high contention.
                 return;
-            } else if state == crate::memory_management::FiberStatus::Finished as u8 {
-                pool.free_context(task);
             }
         }
     }
@@ -591,6 +596,10 @@ impl DtaScheduler {
         unsafe {
             let worker = &*self.workers[target_core].get();
             worker.event_signal.fetch_add(1, Ordering::Release);
+            // Must call futex_wake to awaken workers in Tier 3 (deep sleep).
+            crate::utils::futex_wake(
+                (&raw const worker.event_signal).cast::<core::sync::atomic::AtomicU32>(),
+            );
         }
     }
 

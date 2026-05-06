@@ -119,17 +119,17 @@ pub fn get_tick_with_cpu() -> (u64, u32) {
 /// blocking of host threads awaiting fiber completion.
 ///
 /// # Safety
-/// * `addr` must point to a valid `AtomicU8`.
+/// * `addr` must point to a valid `AtomicU32`.
 #[cfg(target_os = "linux")]
 #[inline(always)]
-pub unsafe fn futex_wait(addr: *const core::sync::atomic::AtomicU8, val: u8) {
+pub unsafe fn futex_wait(addr: *const core::sync::atomic::AtomicU32, val: u32) {
     unsafe {
         loop {
             let ret = libc::syscall(
                 libc::SYS_futex,
                 addr,
                 libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
-                libc::c_int::from(val),
+                val.cast_signed(),
                 core::ptr::null::<libc::timespec>(),
             );
             if ret == 0 {
@@ -147,16 +147,19 @@ pub unsafe fn futex_wait(addr: *const core::sync::atomic::AtomicU8, val: u8) {
 /// Wakes all OS threads currently blocked on the specified address.
 ///
 /// # Safety
-/// * `addr` must point to a valid `AtomicU8`.
+/// * `addr` must point to a valid `AtomicU32`.
 #[cfg(target_os = "linux")]
 #[inline(always)]
-pub unsafe fn futex_wake(addr: *const core::sync::atomic::AtomicU8) {
+pub unsafe fn futex_wake(addr: *const core::sync::atomic::AtomicU32) {
     unsafe {
         libc::syscall(
             libc::SYS_futex,
             addr,
             libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
-            i32::MAX,
+            libc::c_int::MAX,
+            core::ptr::null::<libc::timespec>(),
+            core::ptr::null::<u32>(),
+            0,
         );
     }
 }

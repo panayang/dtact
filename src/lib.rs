@@ -234,7 +234,7 @@ pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
                 unsafe {
                     let ctx = &mut *ctx_ptr;
                     ctx.state.store(
-                        crate::memory_management::FiberStatus::Notified as u8,
+                        crate::memory_management::FiberStatus::Notified as u32,
                         core::sync::atomic::Ordering::Release,
                     );
                     (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);

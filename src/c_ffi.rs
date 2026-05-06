@@ -166,7 +166,7 @@ pub unsafe extern "C" fn dtact_fiber_launch(
 
     unsafe {
         (*ctx_ptr).state.store(
-            crate::memory_management::FiberStatus::Running as u8,
+            crate::memory_management::FiberStatus::Running as u32,
             core::sync::atomic::Ordering::Release,
         );
         (*ctx_ptr).origin_core = current_core as u16;
@@ -246,9 +246,9 @@ pub unsafe extern "C" fn dtact_fiber_launch(
     crate::wake_fiber(current_core, ctx_id);
 
     // Handle Layout: [1-bit Valid | 15-bit Generation | 16-bit CoreID | 32-bit ContextID]
-    let handle_val =
-        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63);
-    dtact_handle_t(handle_val)
+    dtact_handle_t(
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0x7FFF) << 48) | (1 << 63),
+    )
 }
 
 /// Launches a C-function as a DTA-V3 stackful Fiber with advanced options.
@@ -276,7 +276,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
 
     unsafe {
         (*ctx_ptr).state.store(
-            crate::memory_management::FiberStatus::Running as u8,
+            crate::memory_management::FiberStatus::Running as u32,
             core::sync::atomic::Ordering::Release,
         );
         (*ctx_ptr).origin_core = current_core as u16;
@@ -366,9 +366,9 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
     });
     crate::wake_fiber(current_core, ctx_id);
 
-    let handle_val =
-        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63);
-    dtact_handle_t(handle_val)
+    dtact_handle_t(
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0x7FFF) << 48) | (1 << 63),
+    )
 }
 
 /// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback.
@@ -399,7 +399,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
 
     unsafe {
         (*ctx_ptr).state.store(
-            crate::memory_management::FiberStatus::Running as u8,
+            crate::memory_management::FiberStatus::Running as u32,
             core::sync::atomic::Ordering::Release,
         );
         (*ctx_ptr).origin_core = current_core as u16;
@@ -480,7 +480,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
 
     crate::wake_fiber(current_core, ctx_id);
     dtact_handle_t(
-        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63),
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0x7FFF) << 48) | (1 << 63),
     )
 }
 
@@ -511,7 +511,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
 
     unsafe {
         (*ctx_ptr).state.store(
-            crate::memory_management::FiberStatus::Running as u8,
+            crate::memory_management::FiberStatus::Running as u32,
             core::sync::atomic::Ordering::Release,
         );
         (*ctx_ptr).origin_core = current_core as u16;
@@ -608,9 +608,9 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
     });
     crate::wake_fiber(current_core, ctx_id);
 
-    let handle_val =
-        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0xFFFF) << 48) | (1 << 63);
-    dtact_handle_t(handle_val)
+    dtact_handle_t(
+        u64::from(ctx_id) | ((current_core as u64) << 32) | ((r#gen & 0x7FFF) << 48) | (1 << 63),
+    )
 }
 
 /// Blocks the current thread until the specified fiber terminates.
@@ -627,7 +627,7 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
 pub extern "C" fn dtact_await(handle: dtact_handle_t) {
     let handle_val = handle.0 & !(1 << 63); // Strip sentinel bit
     let target_ctx_id = (handle_val & 0xFFFF_FFFF) as u32;
-    let handle_gen = (handle_val >> 48) as u16;
+    let handle_gen = ((handle_val >> 48) & 0x7FFF) as u16; // Mask out sentinel bit
     let runtime = crate::GLOBAL_RUNTIME
         .get()
         .expect("Runtime not initialized");
@@ -641,21 +641,26 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         // Tiered strategy: spin-loop -> futex_wait
         let mut spins = 0u32;
         loop {
-            let current_gen = unsafe {
-                (*target_ctx)
+            let (_current_gen, status) = unsafe {
+                let g1 = (*target_ctx)
                     .generation
-                    .load(core::sync::atomic::Ordering::Acquire)
-            } as u16;
-            let status = unsafe {
-                (*target_ctx)
+                    .load(core::sync::atomic::Ordering::Acquire) as u16;
+                let s = (*target_ctx)
                     .state
-                    .load(core::sync::atomic::Ordering::Acquire)
+                    .load(core::sync::atomic::Ordering::Acquire);
+                let g2 = (*target_ctx)
+                    .generation
+                    .load(core::sync::atomic::Ordering::Acquire) as u16;
+
+                // If generation changed during our read, or it's already a different generation,
+                // we know the target fiber has finished.
+                if (g1 & 0x7FFF) != handle_gen || (g2 & 0x7FFF) != handle_gen {
+                    break;
+                }
+                (g1 & 0x7FFF, s)
             };
 
-            if current_gen != handle_gen
-                || status == crate::memory_management::FiberStatus::Initial as u8
-                || status == crate::memory_management::FiberStatus::Finished as u8
-            {
+            if status == crate::memory_management::FiberStatus::Finished as u32 {
                 break;
             }
 
@@ -671,29 +676,30 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
 
     // ===== FIBER PATH (called from within a running fiber) =====
     loop {
-        // Clear Notified state before starting check
+        // Ensure we are in Running state before checking target.
+        // We use swap to safely clear any Notified state from a previous wake event.
         unsafe {
-            (*ctx_ptr).state.store(
-                crate::memory_management::FiberStatus::Running as u8,
-                core::sync::atomic::Ordering::Release,
+            (*ctx_ptr).state.swap(
+                crate::memory_management::FiberStatus::Running as u32,
+                core::sync::atomic::Ordering::AcqRel,
             );
         }
 
         // 0. Check target state and generation
-        let current_gen = unsafe {
-            (*target_ctx)
-                .generation
-                .load(core::sync::atomic::Ordering::Acquire)
-        } as u16;
-        let status = unsafe {
-            (*target_ctx)
-                .state
-                .load(core::sync::atomic::Ordering::Acquire)
+        let (current_gen, status) = unsafe {
+            (
+                ((*target_ctx)
+                    .generation
+                    .load(core::sync::atomic::Ordering::Acquire) as u16)
+                    & 0x7FFF,
+                (*target_ctx)
+                    .state
+                    .load(core::sync::atomic::Ordering::Acquire),
+            )
         };
 
         if current_gen != handle_gen
-            || status == crate::memory_management::FiberStatus::Initial as u8
-            || status == crate::memory_management::FiberStatus::Finished as u8
+            || status == crate::memory_management::FiberStatus::Finished as u32
         {
             // Target already finished (or context recycled), clear waiter and break
             unsafe {
@@ -719,20 +725,20 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         // 2. Double-check target state after registering waiter
-        let current_gen = unsafe {
-            (*target_ctx)
-                .generation
-                .load(core::sync::atomic::Ordering::Acquire)
-        } as u16;
-        let status = unsafe {
-            (*target_ctx)
-                .state
-                .load(core::sync::atomic::Ordering::Acquire)
+        let (current_gen_post, status_post) = unsafe {
+            (
+                ((*target_ctx)
+                    .generation
+                    .load(core::sync::atomic::Ordering::Acquire) as u16)
+                    & 0x7FFF,
+                (*target_ctx)
+                    .state
+                    .load(core::sync::atomic::Ordering::Acquire),
+            )
         };
 
-        if current_gen != handle_gen
-            || status == crate::memory_management::FiberStatus::Initial as u8
-            || status == crate::memory_management::FiberStatus::Finished as u8
+        if current_gen_post != handle_gen
+            || status_post == crate::memory_management::FiberStatus::Finished as u32
         {
             // Completed between check and waiter registration
             unsafe {
@@ -743,14 +749,14 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
             break;
         }
 
-        // 3. Try to transition to Yielded and suspend
+        // 3. Try to transition to Suspending and suspend
         unsafe {
             let ctx = &mut *ctx_ptr;
             if ctx
                 .state
                 .compare_exchange(
-                    crate::memory_management::FiberStatus::Running as u8,
-                    crate::memory_management::FiberStatus::Suspending as u8,
+                    crate::memory_management::FiberStatus::Running as u32,
+                    crate::memory_management::FiberStatus::Suspending as u32,
                     core::sync::atomic::Ordering::Release,
                     core::sync::atomic::Ordering::Acquire,
                 )
