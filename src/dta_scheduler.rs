@@ -533,12 +533,6 @@ impl Worker {
                     Ok(_) => final_state = crate::memory_management::FiberStatus::Yielded as u32,
                     Err(actual) => final_state = actual,
                 }
-            } else if post_state == crate::memory_management::FiberStatus::Running as u32 {
-                // Critical: Fiber returned without yielding (finished).
-                // Ensure visibility on AArch64 with SeqCst.
-                if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-                }
             }
 
             // Terminal states (Finished, Panicked)
@@ -626,11 +620,7 @@ impl DtaScheduler {
             let worker = &*self.workers[target_core].get();
             // On AArch64 and RISC-V, SeqCst is necessary for signaling across cores to ensure
             // that all preceding mailbox/queue stores are globally visible.
-            let order = if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                core::sync::atomic::Ordering::SeqCst
-            } else {
-                core::sync::atomic::Ordering::Release
-            };
+            let order = core::sync::atomic::Ordering::Release;
             worker.event_signal.fetch_add(1, order);
             // Must call futex_wake to awaken workers in Tier 3 (deep sleep).
             crate::utils::futex_wake(
@@ -881,13 +871,9 @@ impl DtaScheduler {
             unsafe {
                 let worker = &*scheduler.workers[current_core].get();
 
-                let signal_before = worker.event_signal.load(
-                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                        core::sync::atomic::Ordering::SeqCst
-                    } else {
-                        core::sync::atomic::Ordering::Acquire
-                    },
-                );
+                let signal_before = worker
+                    .event_signal
+                    .load(core::sync::atomic::Ordering::Acquire);
 
                 // Architecture-specific Hardware Standby hints
                 #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
@@ -928,20 +914,12 @@ impl DtaScheduler {
 
                 // Final check before OS-level de-scheduling via futex.
                 scheduler.poll_mailboxes(current_core);
-                let head = worker.local_head.load(
-                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                        core::sync::atomic::Ordering::SeqCst
-                    } else {
-                        core::sync::atomic::Ordering::Acquire
-                    },
-                );
-                let tail = worker.local_tail.load(
-                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                        core::sync::atomic::Ordering::SeqCst
-                    } else {
-                        core::sync::atomic::Ordering::Acquire
-                    },
-                );
+                let head = worker
+                    .local_head
+                    .load(core::sync::atomic::Ordering::Acquire);
+                let tail = worker
+                    .local_tail
+                    .load(core::sync::atomic::Ordering::Acquire);
 
                 if head == tail {
                     // Enter OS-managed sleep. The kernel will wake us when event_signal changes.
