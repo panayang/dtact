@@ -446,7 +446,11 @@ impl Worker {
         }
         self.local_tail.store(
             end_idx & LOCAL_QUEUE_MASK,
-            core::sync::atomic::Ordering::Release,
+            if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                core::sync::atomic::Ordering::SeqCst
+            } else {
+                core::sync::atomic::Ordering::Release
+            },
         );
     }
 
@@ -468,7 +472,14 @@ impl Worker {
             };
 
             head = (head + 1) & LOCAL_QUEUE_MASK;
-            self.local_head.store(head, Ordering::Release);
+            self.local_head.store(
+                head,
+                if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                    core::sync::atomic::Ordering::SeqCst
+                } else {
+                    core::sync::atomic::Ordering::Release
+                },
+            );
 
             let target_ptr = pool.get_context_ptr(task);
 
@@ -519,6 +530,12 @@ impl Worker {
                 } {
                     Ok(_) => final_state = crate::memory_management::FiberStatus::Yielded as u32,
                     Err(actual) => final_state = actual,
+                }
+            } else if post_state == crate::memory_management::FiberStatus::Running as u32 {
+                // Critical: Fiber returned without yielding (finished).
+                // Ensure visibility on AArch64 with SeqCst.
+                if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
                 }
             }
 
@@ -922,6 +939,9 @@ impl DtaScheduler {
 
                 if head == tail {
                     // Enter OS-managed sleep. The kernel will wake us when event_signal changes.
+                    // Full barrier before sleep to ensure we don't miss a signal.
+                    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
                     crate::utils::futex_wait(&raw const worker.event_signal, signal_before);
                 }
 
