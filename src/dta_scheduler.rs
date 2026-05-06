@@ -311,10 +311,10 @@ pub struct Worker {
 
     /// Local SPSC execution queue.
     pub local_queue: HugeBuffer<[TaskIndex; LOCAL_QUEUE_CAPACITY]>,
-    /// Head of the local queue.
-    pub local_head: usize,
-    /// Tail of the local queue.
-    pub local_tail: usize,
+    /// Head of the local queue (Atomic for AArch64 visibility).
+    pub local_head: AtomicUsize,
+    /// Tail of the local queue (Atomic for AArch64 visibility).
+    pub local_tail: AtomicUsize,
 
     /// Total scheduler ticks executed.
     pub ticks: u64,
@@ -351,8 +351,8 @@ impl Worker {
             load_level: AtomicU8::new(0),
             deflection_threshold: AtomicU8::new(80),
             local_queue: HugeBuffer::new(),
-            local_head: 0,
-            local_tail: 0,
+            local_head: AtomicUsize::new(0),
+            local_tail: AtomicUsize::new(0),
             ticks: 0,
             event_signal: AtomicU32::new(0),
             polling_order,
@@ -361,8 +361,10 @@ impl Worker {
 
     /// Returns the current number of tasks in the local queue.
     #[inline(always)]
-    pub const fn local_queue_len(&self) -> usize {
-        self.local_tail.wrapping_sub(self.local_head) & LOCAL_QUEUE_MASK
+    pub fn local_queue_len(&self) -> usize {
+        let head = self.local_head.load(core::sync::atomic::Ordering::Acquire);
+        let tail = self.local_tail.load(core::sync::atomic::Ordering::Acquire);
+        tail.wrapping_sub(head) & LOCAL_QUEUE_MASK
     }
 
     /// Updates the `load_level` based on the current queue length.
@@ -397,15 +399,17 @@ impl Worker {
 
     /// Pushes a single task into the local queue. Returns true if successful.
     #[inline(always)]
-    pub fn push_local(&mut self, task: TaskIndex) -> bool {
+    pub fn push_local(&self, task: TaskIndex) -> bool {
+        let tail = self.local_tail.load(Ordering::Relaxed);
         if self.local_queue_len() >= LOCAL_QUEUE_CAPACITY - 1 {
             return false;
         }
         unsafe {
             let buffer_ptr = self.local_queue.ptr.cast::<TaskIndex>();
-            *buffer_ptr.add(self.local_tail) = task;
+            *buffer_ptr.add(tail) = task;
         }
-        self.local_tail = (self.local_tail + 1) & LOCAL_QUEUE_MASK;
+        self.local_tail
+            .store((tail + 1) & LOCAL_QUEUE_MASK, Ordering::Release);
         true
     }
 
@@ -413,7 +417,7 @@ impl Worker {
     #[inline(always)]
     pub fn push_batch(&mut self, chunk: &TaskChunk) {
         let count = chunk.count;
-        let tail = self.local_tail;
+        let tail = self.local_tail.load(core::sync::atomic::Ordering::Relaxed);
         let end_idx = tail + count;
 
         if end_idx <= LOCAL_QUEUE_CAPACITY {
@@ -440,7 +444,10 @@ impl Worker {
                 );
             }
         }
-        self.local_tail = end_idx & LOCAL_QUEUE_MASK;
+        self.local_tail.store(
+            end_idx & LOCAL_QUEUE_MASK,
+            core::sync::atomic::Ordering::Release,
+        );
     }
 
     /// Primary execution loop for the worker thread.
@@ -452,13 +459,16 @@ impl Worker {
     /// * `context_base` must point to the start of the `ContextPool` memory region.
     /// * `context_size` and `group_guard_size` must match the pool's initialized layout.
     #[inline(always)]
-    pub unsafe fn dispatch_loop(&mut self, pool: &crate::memory_management::ContextPool) {
-        while self.local_head != self.local_tail {
+    pub unsafe fn dispatch_loop(&self, pool: &crate::memory_management::ContextPool) {
+        let mut head = self.local_head.load(Ordering::Acquire);
+        while head != self.local_tail.load(Ordering::Acquire) {
             let task = unsafe {
                 let buffer_ptr = self.local_queue.ptr.cast::<TaskIndex>();
-                *buffer_ptr.add(self.local_head)
+                *buffer_ptr.add(head)
             };
-            self.local_head = (self.local_head + 1) & LOCAL_QUEUE_MASK;
+
+            head = (head + 1) & LOCAL_QUEUE_MASK;
+            self.local_head.store(head, Ordering::Release);
 
             let target_ptr = pool.get_context_ptr(task);
 
@@ -608,7 +618,7 @@ impl DtaScheduler {
         let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
         if current_worker == source_core {
             unsafe {
-                let worker = &mut *self.workers[source_core].get();
+                let worker = &*self.workers[source_core].get();
                 if worker.push_local(task) {
                     return true;
                 }
@@ -769,10 +779,10 @@ impl DtaScheduler {
 
             // 1. Dispatch local tasks
             unsafe {
-                let worker = &mut *scheduler.workers[current_core].get();
-                let head_before = worker.local_head;
+                let worker = &*scheduler.workers[current_core].get();
+                let head_before = worker.local_head.load(Ordering::Acquire);
                 worker.dispatch_loop(pool);
-                if worker.local_head != head_before {
+                if worker.local_head.load(Ordering::Acquire) != head_before {
                     activity = true;
                 }
             }
@@ -829,20 +839,33 @@ impl DtaScheduler {
                 continue;
             }
 
-            // Tier 3: Deep Sleep (Lowest Power / Maximum Adaptiveness)
+            // Tier 3: Adaptive Deep Sleep (OS-level suspension or hardware standby)
             unsafe {
-                #[allow(unused_variables)]
                 let worker = &*scheduler.workers[current_core].get();
 
+                // On AArch64 and RISC-V, the relaxed memory model necessitates a full
+                // barrier (DMB ISH / FENCE) between the final check of work queues/mailboxes
+                // and the observation of the signal counter. Without this SeqCst fence,
+                // the CPU might reorder the 'empty' observation after the signal load,
+                // leading to a permanent stall (lost wakeup) if the signal was sent
+                // exactly in between.
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
+                let signal_before = worker.event_signal.load(
+                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                        core::sync::atomic::Ordering::SeqCst
+                    } else {
+                        core::sync::atomic::Ordering::Acquire
+                    },
+                );
+
+                // Architecture-specific Hardware Standby hints
                 #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
-                {
-                    core::arch::asm!("wfe", options(nostack, preserves_flags));
-                }
+                core::arch::asm!("wfe", options(nostack, preserves_flags));
 
                 #[cfg(all(feature = "hw-acceleration", target_arch = "riscv64"))]
-                {
-                    core::arch::asm!("pause", options(nostack, preserves_flags));
-                }
+                core::arch::asm!("pause", options(nostack, preserves_flags));
 
                 #[cfg(all(
                     feature = "hw-acceleration",
@@ -850,25 +873,37 @@ impl DtaScheduler {
                 ))]
                 {
                     let sig_ptr = &raw const worker.event_signal as *mut core::ffi::c_void;
-                    let current_sig = worker.event_signal.load(Ordering::Acquire);
                     let control = 1u32; // C0.1 (Fast wakeup)
-                    // 1ms timeout @ 2GHz (approx 2,000,000 ticks)
                     let timeout_low = 2_000_000u32;
                     let timeout_high = 0u32;
                     core::arch::asm!(
                         "umonitor {0}",
-                        "cmp {1}, {2}",
+                        "cmp {1:e}, {2:e}",
                         "jne 2f",
                         "umwait {3:e}",
                         "2:",
                         in(reg) sig_ptr,
-                        in(reg) current_sig,
-                        in(reg) worker.event_signal.load(Ordering::Relaxed),
+                        in(reg) signal_before,
+                        in(reg) worker.event_signal.load(core::sync::atomic::Ordering::Relaxed),
                         in(reg) control,
                         inout("eax") timeout_low => _,
                         inout("edx") timeout_high => _,
                         options(nostack, preserves_flags)
                     );
+                }
+
+                // Final check before OS-level de-scheduling via futex.
+                // We use Acquire loads to ensure any work pushed by a signaler is visible.
+                let head = worker
+                    .local_head
+                    .load(core::sync::atomic::Ordering::Acquire);
+                let tail = worker
+                    .local_tail
+                    .load(core::sync::atomic::Ordering::Acquire);
+
+                if head == tail {
+                    // Enter OS-managed sleep. The kernel will wake us when event_signal changes.
+                    crate::utils::futex_wait(&raw const worker.event_signal, signal_before);
                 }
 
                 #[cfg(not(feature = "hw-acceleration"))]
