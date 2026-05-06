@@ -669,11 +669,16 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
                 break;
             }
 
-            if spins < 100 {
+            if spins < 1000 {
                 core::hint::spin_loop();
                 spins += 1;
             } else {
-                unsafe { crate::utils::futex_wait(&raw const (*target_ctx).state, status) };
+                // To prevent ABA-induced permanent deadlocks (where the context is recycled
+                // and state returns to 'Running' before we enter the futex), we use yield_now
+                // as a robust fallback. This ensures the host thread eventually re-checks
+                // the generation counter.
+                std::thread::yield_now();
+                spins = 500; // Reset to a middle-tier spin before next yield
             }
         }
         return;
