@@ -238,14 +238,8 @@ impl Mailbox {
             *buffer_ptr.add(current_tail) = chunk;
         }
 
-        self.tail.store(
-            next_tail,
-            if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
-                core::sync::atomic::Ordering::SeqCst
-            } else {
-                core::sync::atomic::Ordering::Release
-            },
-        );
+        self.tail
+            .store(next_tail, core::sync::atomic::Ordering::Release);
 
         #[cfg(all(
             feature = "hw-acceleration",
