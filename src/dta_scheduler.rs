@@ -633,45 +633,57 @@ impl DtaScheduler {
         }
 
         // Fallback to external mailbox if local queue is full or cross-thread
-        self.external_locks[target_core].lock();
-        let mut chunk = TaskChunk::default();
-        chunk.tasks[0] = task;
-        chunk.count = 1;
-        let res = self.external_mailboxes[target_core].push(chunk);
-        if res.is_ok() {
-            self.signal_worker(target_core);
+        loop {
+            self.external_locks[target_core].lock();
+            let mut chunk = TaskChunk::default();
+            chunk.tasks[0] = task;
+            chunk.count = 1;
+            let res = self.external_mailboxes[target_core].push(chunk);
+            self.external_locks[target_core].unlock();
+
+            if res.is_ok() {
+                self.signal_worker(target_core);
+                return true;
+            }
+            core::hint::spin_loop();
         }
-        self.external_locks[target_core].unlock();
-        res.is_ok()
     }
 
     #[inline(always)]
     fn do_push_remote(&self, _source_core: usize, target_core: usize, task: TaskIndex) -> bool {
         let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
 
-        let res = if current_worker < self.workers.len() {
-            let mut chunk = TaskChunk::default();
-            chunk.tasks[0] = task;
-            chunk.count = 1;
-            self.mailboxes[current_worker][target_core]
-                .push(chunk)
-                .is_ok()
-        } else {
-            // External thread: Push to external mailbox
-            self.external_locks[target_core].lock();
-            let mut chunk = TaskChunk::default();
-            chunk.tasks[0] = task;
-            chunk.count = 1;
-            let success = self.external_mailboxes[target_core].push(chunk).is_ok();
+        let mut retries = 0u32;
+        loop {
+            let success = if current_worker < self.workers.len() {
+                let mut chunk = TaskChunk::default();
+                chunk.tasks[0] = task;
+                chunk.count = 1;
+                self.mailboxes[current_worker][target_core]
+                    .push(chunk)
+                    .is_ok()
+            } else {
+                // External thread: Push to external mailbox
+                self.external_locks[target_core].lock();
+                let mut chunk = TaskChunk::default();
+                chunk.tasks[0] = task;
+                chunk.count = 1;
+                let success = self.external_mailboxes[target_core].push(chunk).is_ok();
+                self.external_locks[target_core].unlock();
+                success
+            };
+
             if success {
                 self.signal_worker(target_core);
+                break;
             }
-            self.external_locks[target_core].unlock();
-            success
-        };
 
-        if res {
-            self.signal_worker(target_core);
+            retries = retries.saturating_add(1);
+            if retries > 1024 {
+                std::thread::yield_now();
+            } else {
+                core::hint::spin_loop();
+            }
         }
 
         #[cfg(all(
@@ -697,7 +709,7 @@ impl DtaScheduler {
         unsafe {
             core::arch::asm!("csrw uipi, {0}", in(reg) target_core);
         }
-        res
+        true
     }
 
     /// Enqueues a task into the mesh, applying work-deflection if necessary.

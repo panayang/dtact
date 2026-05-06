@@ -645,9 +645,14 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
                 let g1 = (*target_ctx)
                     .generation
                     .load(core::sync::atomic::Ordering::Acquire) as u16;
-                let s = (*target_ctx)
+                // On AArch64, we need a fence to ensure 'generation' and 'state' loads are not reordered.
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+                let status = (*target_ctx)
                     .state
                     .load(core::sync::atomic::Ordering::Acquire);
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
                 let g2 = (*target_ctx)
                     .generation
                     .load(core::sync::atomic::Ordering::Acquire) as u16;
@@ -657,7 +662,7 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
                 if (g1 & 0x7FFF) != handle_gen || (g2 & 0x7FFF) != handle_gen {
                     break;
                 }
-                (g1 & 0x7FFF, s)
+                (g1 & 0x7FFF, status)
             };
 
             if status == crate::memory_management::FiberStatus::Finished as u32 {
@@ -721,7 +726,8 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
                 .store(my_handle, core::sync::atomic::Ordering::Release);
         }
 
-        // Full memory barrier: waiter_handle store must be visible before state re-check
+        // Full memory barrier: waiter_handle store must be visible before state re-check.
+        // On x86, this prevents Store-Load reordering which could lead to a lost wakeup.
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
         // 2. Double-check target state after registering waiter
@@ -808,5 +814,18 @@ pub extern "C" fn dtact_shutdown() {
         runtime
             .shutdown
             .store(true, core::sync::atomic::Ordering::SeqCst);
+
+        // Wake all workers to ensure they see the shutdown signal
+        for i in 0..runtime.scheduler.workers.len() {
+            unsafe {
+                let worker = &*runtime.scheduler.workers[i].get();
+                worker
+                    .event_signal
+                    .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+                crate::utils::futex_wake(
+                    (&raw const worker.event_signal).cast::<core::sync::atomic::AtomicU32>(),
+                );
+            }
+        }
     }
 }
