@@ -167,14 +167,14 @@ pub unsafe fn futex_wake(addr: *const core::sync::atomic::AtomicU32) {
 /// Cross-platform fallback for `futex_wait`.
 #[cfg(not(target_os = "linux"))]
 #[inline(always)]
-pub fn futex_wait(_addr: *const core::sync::atomic::AtomicU8, _val: u8) {
+pub fn futex_wait(_addr: *const core::sync::atomic::AtomicU32, _val: u32) {
     std::thread::yield_now();
 }
 
 /// Cross-platform fallback for `futex_wake`.
 #[cfg(not(target_os = "linux"))]
 #[inline(always)]
-pub const fn futex_wake(_addr: *const core::sync::atomic::AtomicU8) {}
+pub const fn futex_wake(_addr: *const core::sync::atomic::AtomicU32) {}
 
 std::thread_local! {
     static CACHED_TID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
