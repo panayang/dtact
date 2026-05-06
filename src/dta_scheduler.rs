@@ -921,6 +921,11 @@ impl DtaScheduler {
                     );
                 }
 
+                // Barrier: Ensure signal_before load happens BEFORE the final check of work.
+                // This prevents the CPU from reordering a stale 'empty' check before a fresh signal load.
+                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
                 // Final check before OS-level de-scheduling via futex.
                 scheduler.poll_mailboxes(current_core);
                 let head = worker.local_head.load(
