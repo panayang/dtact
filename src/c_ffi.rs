@@ -722,7 +722,7 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
 
         // Register the current fiber as a waiter for the target fiber.
         // We use swap(SeqCst) as a full memory barrier to ensure visibility before state re-check.
-        // On x86, this is more efficient than store + mfence.
+        // On x86, this is implemented as LOCK XCHG which is more efficient than store + mfence.
         unsafe {
             (*target_ctx)
                 .waiter_handle

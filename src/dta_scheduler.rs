@@ -238,7 +238,14 @@ impl Mailbox {
             *buffer_ptr.add(current_tail) = chunk;
         }
 
-        self.tail.store(next_tail, Ordering::Release);
+        self.tail.store(
+            next_tail,
+            if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                core::sync::atomic::Ordering::SeqCst
+            } else {
+                core::sync::atomic::Ordering::Release
+            },
+        );
 
         #[cfg(all(
             feature = "hw-acceleration",
@@ -874,23 +881,13 @@ impl DtaScheduler {
             unsafe {
                 let worker = &*scheduler.workers[current_core].get();
 
-                // On AArch64 and RISC-V, the relaxed memory model necessitates a full
-                // barrier (DMB ISH / FENCE) between the final check of work queues/mailboxes
-                // and the observation of the signal counter. Without this SeqCst fence,
-                // the CPU might reorder the 'empty' observation after the signal load,
-                // leading to a permanent stall (lost wakeup) if the signal was sent
-                // exactly in between.
-                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
-                let signal_before = worker
-                    .event_signal
-                    .load(core::sync::atomic::Ordering::Acquire);
-
-                // Barrier: Ensure signal_before load happens BEFORE the following queue/mailbox checks.
-                // This prevents the CPU from reordering a stale 'empty' check before a fresh signal load.
-                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+                let signal_before = worker.event_signal.load(
+                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                        core::sync::atomic::Ordering::SeqCst
+                    } else {
+                        core::sync::atomic::Ordering::Acquire
+                    },
+                );
 
                 // Architecture-specific Hardware Standby hints
                 #[cfg(all(feature = "hw-acceleration", target_arch = "aarch64"))]
@@ -924,19 +921,22 @@ impl DtaScheduler {
                     );
                 }
 
-                // Barrier: Ensure signal_before load happens BEFORE the final check of work.
-                // This prevents the CPU from reordering a stale 'empty' check before a fresh signal load.
-                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-
                 // Final check before OS-level de-scheduling via futex.
                 scheduler.poll_mailboxes(current_core);
-                let head = worker
-                    .local_head
-                    .load(core::sync::atomic::Ordering::Acquire);
-                let tail = worker
-                    .local_tail
-                    .load(core::sync::atomic::Ordering::Acquire);
+                let head = worker.local_head.load(
+                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                        core::sync::atomic::Ordering::SeqCst
+                    } else {
+                        core::sync::atomic::Ordering::Acquire
+                    },
+                );
+                let tail = worker.local_tail.load(
+                    if cfg!(any(target_arch = "aarch64", target_arch = "riscv64")) {
+                        core::sync::atomic::Ordering::SeqCst
+                    } else {
+                        core::sync::atomic::Ordering::Acquire
+                    },
+                );
 
                 if head == tail {
                     // Enter OS-managed sleep. The kernel will wake us when event_signal changes.
