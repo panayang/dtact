@@ -425,6 +425,12 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
         crate::memory_management::FiberStatus::Finished as u32,
         core::sync::atomic::Ordering::Release,
     );
+    // Full memory barrier: ensure state=Finished is visible before we check for waiters.
+    // This prevents a race where a waiter registers itself but we don't see it,
+    // while the waiter sees our state as 'Running' and goes to sleep.
+    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+
     // Notify any waiting host threads immediately.
     unsafe { crate::utils::futex_wake(&raw const ctx.state) };
 
