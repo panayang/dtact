@@ -636,7 +636,11 @@ pub mod topology {
             };
         }
 
-        #[cfg(target_arch = "riscv64")]
+        // `mhartid` is a Machine-mode privileged register. Reading it from User-mode
+        // (U-mode) will raise an illegal instruction exception. Since Dtact is a
+        // user-space library, we fall back to a single-core topology on RISC-V
+        // until a stable platform-specific syscall for topology is integrated.
+        #[cfg(all(target_arch = "riscv64", feature = "hw-acceleration"))]
         {
             let mut hart_id: u64;
             unsafe {
@@ -651,6 +655,7 @@ pub mod topology {
 
         #[cfg(any(
             all(target_arch = "aarch64", not(target_os = "linux")),
+            all(target_arch = "riscv64", not(feature = "hw-acceleration")),
             not(any(
                 target_arch = "x86",
                 target_arch = "x86_64",
