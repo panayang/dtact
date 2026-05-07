@@ -357,10 +357,16 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                 (*ctx_ptr).regs.gprs[7] = fiber_entry_point as *const () as u64; // RIP
                 #[cfg(windows)]
                 {
-                    (*ctx_ptr).regs.gprs[10] = stack_limit as u64; // Stack Base
-                    (*ctx_ptr).regs.gprs[11] = buffer_start as u64; // Stack Limit
-                    (*ctx_ptr).regs.gprs[12] = buffer_start as u64; // DeallocationStack
-                    (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+                    // Calculate the true bottom of the stack (start of the slot)
+                    let align = 64;
+                    let context_sz =
+                        (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
+                    let slot_base = (ctx_ptr as usize + context_sz).saturating_sub(pool.slot_size);
+
+                    (*ctx_ptr).regs.gprs[10] = stack_limit as u64; // Stack Base (top)
+                    (*ctx_ptr).regs.gprs[11] = slot_base as u64; // Stack Limit (bottom)
+                    (*ctx_ptr).regs.gprs[12] = slot_base as u64; // DeallocationStack
+                    (*ctx_ptr).regs.gprs[13] = 0; // ExceptionList
                 }
             }
             #[cfg(target_arch = "aarch64")]
@@ -369,9 +375,14 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                 (*ctx_ptr).regs.gprs[11] = fiber_entry_point as *const () as u64; // x30 (LR)
                 #[cfg(windows)]
                 {
-                    (*ctx_ptr).regs.gprs[13] = stack_limit as u64; // Stack Base
-                    (*ctx_ptr).regs.gprs[14] = buffer_start as u64; // Stack Limit
-                    (*ctx_ptr).regs.gprs[15] = buffer_start as u64; // DeallocationStack
+                    let align = 64;
+                    let context_sz =
+                        (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
+                    let slot_base = (ctx_ptr as usize + context_sz).saturating_sub(pool.slot_size);
+
+                    (*ctx_ptr).regs.gprs[13] = stack_limit as u64; // Stack Base (top)
+                    (*ctx_ptr).regs.gprs[14] = slot_base as u64; // Stack Limit (bottom)
+                    (*ctx_ptr).regs.gprs[15] = slot_base as u64; // DeallocationStack
                 }
             }
             #[cfg(target_arch = "riscv64")]
@@ -720,11 +731,15 @@ pub mod fiber {
                 (*ctx_ptr).regs.gprs[7] = super::fiber_entry_point as *const () as u64; // RIP
                 #[cfg(windows)]
                 {
-                    let limit = buffer_start.saturating_sub(pool.slot_size);
-                    (*ctx_ptr).regs.gprs[10] = buffer_start as u64; // Stack Base
-                    (*ctx_ptr).regs.gprs[11] = limit as u64; // Stack Limit
-                    (*ctx_ptr).regs.gprs[12] = limit as u64; // DeallocationStack
-                    (*ctx_ptr).regs.gprs[13] = !0; // ExceptionList
+                    let align = 64;
+                    let context_sz =
+                        (core::mem::size_of::<crate::FiberContext>() + align - 1) & !(align - 1);
+                    let slot_base = (ctx_ptr as usize + context_sz).saturating_sub(pool.slot_size);
+
+                    (*ctx_ptr).regs.gprs[10] = buffer_start as u64; // Stack Base (top)
+                    (*ctx_ptr).regs.gprs[11] = slot_base as u64; // Stack Limit (bottom)
+                    (*ctx_ptr).regs.gprs[12] = slot_base as u64; // DeallocationStack
+                    (*ctx_ptr).regs.gprs[13] = 0; // ExceptionList
                 }
             }
             #[cfg(target_arch = "aarch64")]
@@ -733,10 +748,14 @@ pub mod fiber {
                 (*ctx_ptr).regs.gprs[11] = super::fiber_entry_point as *const () as u64; // x30 (LR)
                 #[cfg(windows)]
                 {
-                    let limit = buffer_start.saturating_sub(pool.slot_size);
-                    (*ctx_ptr).regs.gprs[13] = buffer_start as u64; // Stack Base
-                    (*ctx_ptr).regs.gprs[14] = limit as u64; // Stack Limit
-                    (*ctx_ptr).regs.gprs[15] = limit as u64; // DeallocationStack
+                    let align = 64;
+                    let context_sz =
+                        (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
+                    let slot_base = (ctx_ptr as usize + context_sz).saturating_sub(pool.slot_size);
+
+                    (*ctx_ptr).regs.gprs[13] = buffer_start as u64; // Stack Base (top)
+                    (*ctx_ptr).regs.gprs[14] = slot_base as u64; // Stack Limit (bottom)
+                    (*ctx_ptr).regs.gprs[15] = slot_base as u64; // DeallocationStack
                 }
             }
             #[cfg(target_arch = "riscv64")]
