@@ -20,3 +20,6 @@ path = "fuzz_targets/fuzz_target_1.rs"
 test = false
 doc = false
 bench = false
+
+[profile.release]
+strip = false
