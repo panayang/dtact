@@ -371,8 +371,17 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             }
             #[cfg(target_arch = "aarch64")]
             {
-                (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-                (*ctx_ptr).regs.gprs[11] = fiber_entry_point as *const () as u64; // x30 (LR)
+                let lr = fiber_entry_point as *const () as u64;
+                let sp = stack_top as u64;
+                let signed_lr: u64;
+                core::arch::asm!(
+                    "pacia {lr}, {sp}",
+                    lr = inout(reg) lr => signed_lr,
+                    sp = in(reg) sp,
+                    options(nomem, nostack, preserves_flags)
+                );
+                (*ctx_ptr).regs.gprs[12] = sp; // SP
+                (*ctx_ptr).regs.gprs[11] = signed_lr; // Signed x30 (LR)
                 #[cfg(windows)]
                 {
                     let align = 64;
@@ -754,8 +763,17 @@ pub mod fiber {
             }
             #[cfg(target_arch = "aarch64")]
             {
-                (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-                (*ctx_ptr).regs.gprs[11] = super::fiber_entry_point as *const () as u64; // x30 (LR)
+                let lr = super::fiber_entry_point as *const () as u64;
+                let sp = stack_top as u64;
+                let signed_lr: u64;
+                core::arch::asm!(
+                    "pacia {lr}, {sp}",
+                    lr = inout(reg) lr => signed_lr,
+                    sp = in(reg) sp,
+                    options(nomem, nostack, preserves_flags)
+                );
+                (*ctx_ptr).regs.gprs[12] = sp; // SP
+                (*ctx_ptr).regs.gprs[11] = signed_lr; // Signed x30 (LR)
                 #[cfg(windows)]
                 {
                     let align = 64;
