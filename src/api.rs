@@ -373,12 +373,15 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             {
                 let lr = fiber_entry_point as *const () as u64;
                 let sp = stack_top as u64;
-                let signed_lr: u64;
+                let mut signed_lr = lr;
                 core::arch::asm!(
-                    "pacia {lr}, {sp}",
-                    lr = inout(reg) lr => signed_lr,
+                    "mov x16, {lr}",
+                    "mov x17, {sp}",
+                    ".inst 0xDAC10230", // pacia x16, x17
+                    "mov {lr}, x16",
+                    lr = inout(reg) signed_lr,
                     sp = in(reg) sp,
-                    options(nomem, nostack, preserves_flags)
+                    out("x16") _, out("x17") _,
                 );
                 (*ctx_ptr).regs.gprs[12] = sp; // SP
                 (*ctx_ptr).regs.gprs[11] = signed_lr; // Signed x30 (LR)
