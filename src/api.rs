@@ -607,7 +607,11 @@ pub mod topology {
             }
         }
 
-        #[cfg(target_arch = "aarch64")]
+        // Linux emulates MPIDR_EL1 reads from EL0 via the kernel trap handler
+        // (`emulate_mrs`). macOS does not provide this emulation — issuing
+        // `mrs mpidr_el1` from userspace traps with SIGILL. Fall back to the
+        // null topology on Darwin; the scheduler treats that as a single group.
+        #[cfg(all(target_arch = "aarch64", not(target_os = "macos")))]
         {
             let mut mpidr: u64;
             unsafe {
@@ -633,12 +637,15 @@ pub mod topology {
             };
         }
 
-        #[cfg(not(any(
-            target_arch = "x86",
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            target_arch = "riscv64"
-        )))]
+        #[cfg(any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            not(any(
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "aarch64",
+                target_arch = "riscv64",
+            )),
+        ))]
         {
             CpuLevel {
                 core_id: 0,
