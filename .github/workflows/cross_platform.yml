@@ -40,9 +40,9 @@ jobs:
           targets: ${{ matrix.platform }}
 
       - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+        uses: mlugg/setup-zig@v1
         with:
-          version: 0.13.0
+          version: "0.13.0"
 
       - name: Install Dependencies
         run: |
@@ -54,6 +54,10 @@ jobs:
       - name: Run Tests
         shell: bash
         run: |
+          # Strip host-specific CPU flags (e.g. znver4/znver3) that are invalid on cross targets
+          export RUSTFLAGS=$(echo "${RUSTFLAGS:-}" | sed 's/-C target-cpu=[^ ]*//g' | xargs)
+          export RUSTDOCFLAGS=$(echo "${RUSTDOCFLAGS:-}" | sed 's/-C target-cpu=[^ ]*//g' | xargs)
+
           ZIG_TARGET=$(echo "${{ matrix.zig_target }}" | sed 's/-unknown//' | sed 's/riscv64gc/riscv64/')
           
           # Create zig wrappers that remove any `--target=` injected by cc-rs

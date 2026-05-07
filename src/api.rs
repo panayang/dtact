@@ -371,8 +371,20 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             }
             #[cfg(target_arch = "aarch64")]
             {
-                (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-                (*ctx_ptr).regs.gprs[11] = fiber_entry_point as *const () as u64; // x30 (LR)
+                let lr = fiber_entry_point as *const () as u64;
+                let sp = stack_top as u64;
+                let mut signed_lr = lr;
+                core::arch::asm!(
+                    "mov x16, {lr}",
+                    "mov x17, {sp}",
+                    ".inst 0xDAC10230", // pacia x16, x17
+                    "mov {lr}, x16",
+                    lr = inout(reg) signed_lr,
+                    sp = in(reg) sp,
+                    out("x16") _, out("x17") _,
+                );
+                (*ctx_ptr).regs.gprs[12] = sp; // SP
+                (*ctx_ptr).regs.gprs[11] = signed_lr; // Signed x30 (LR)
                 #[cfg(windows)]
                 {
                     let align = 64;
@@ -607,7 +619,14 @@ pub mod topology {
             }
         }
 
-        #[cfg(target_arch = "aarch64")]
+        // `mrs mpidr_el1` is an EL1-privileged system register read. Linux is
+        // the only major OS that traps it from EL0 and emulates a sane value
+        // (`emulate_mrs` in arch/arm64/kernel/sys.c). macOS, Windows-on-ARM
+        // and the BSDs do not emulate it — the bare instruction raises an
+        // illegal-instruction fault (SIGILL on Unix, STATUS_ILLEGAL_INSTRUCTION
+        // on Windows). Restrict the read to Linux and fall back to the null
+        // topology elsewhere; the scheduler treats that as a single group.
+        #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
         {
             let mut mpidr: u64;
             unsafe {
@@ -620,7 +639,11 @@ pub mod topology {
             };
         }
 
-        #[cfg(target_arch = "riscv64")]
+        // `mhartid` is a Machine-mode privileged register. Reading it from User-mode
+        // (U-mode) will raise an illegal instruction exception. Since Dtact is a
+        // user-space library, we fall back to a single-core topology on RISC-V
+        // until a stable platform-specific syscall for topology is integrated.
+        #[cfg(all(target_arch = "riscv64", feature = "kernel"))]
         {
             let mut hart_id: u64;
             unsafe {
@@ -633,12 +656,16 @@ pub mod topology {
             };
         }
 
-        #[cfg(not(any(
-            target_arch = "x86",
-            target_arch = "x86_64",
-            target_arch = "aarch64",
-            target_arch = "riscv64"
-        )))]
+        #[cfg(any(
+            all(target_arch = "aarch64", not(target_os = "linux")),
+            all(target_arch = "riscv64", not(feature = "kernel")),
+            not(any(
+                target_arch = "x86",
+                target_arch = "x86_64",
+                target_arch = "aarch64",
+                target_arch = "riscv64",
+            )),
+        ))]
         {
             CpuLevel {
                 core_id: 0,
@@ -744,8 +771,20 @@ pub mod fiber {
             }
             #[cfg(target_arch = "aarch64")]
             {
-                (*ctx_ptr).regs.gprs[12] = stack_top as u64; // SP
-                (*ctx_ptr).regs.gprs[11] = super::fiber_entry_point as *const () as u64; // x30 (LR)
+                let lr = super::fiber_entry_point as *const () as u64;
+                let sp = stack_top as u64;
+                let mut signed_lr = lr;
+                core::arch::asm!(
+                    "mov x16, {lr}",
+                    "mov x17, {sp}",
+                    ".inst 0xDAC10230", // pacia x16, x17
+                    "mov {lr}, x16",
+                    lr = inout(reg) signed_lr,
+                    sp = in(reg) sp,
+                    out("x16") _, out("x17") _,
+                );
+                (*ctx_ptr).regs.gprs[12] = sp; // SP
+                (*ctx_ptr).regs.gprs[11] = signed_lr; // Signed x30 (LR)
                 #[cfg(windows)]
                 {
                     let align = 64;

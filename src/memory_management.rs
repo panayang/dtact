@@ -185,6 +185,10 @@ pub struct ContextPool {
     total_size: usize,
     /// Size of each context slot in bytes.
     pub slot_size: usize,
+    /// OS page size resolved at construction time. macOS arm64 uses 16 KiB
+    /// pages, so this must be queried via `sysconf` rather than hardcoded —
+    /// the slot layout depends on it for guard-page offsets.
+    page_size: usize,
     #[allow(dead_code)]
     capacity: u32,
     safety: SafetyLevel,
@@ -259,6 +263,7 @@ impl ContextPool {
                 base_ptr,
                 total_size: total_size_with_meta,
                 slot_size,
+                page_size,
                 capacity,
                 safety,
                 free_head: AtomicU64::new(0),
@@ -452,7 +457,11 @@ impl ContextPool {
     /// Returns a raw pointer to a context based on its index.
     #[inline(always)]
     pub const fn get_context_ptr(&self, index: u32) -> *mut FiberContext {
-        let page_size = 4096;
+        // Must match the page size used during construction (queried via
+        // `sysconf`) — otherwise guard-page offsets are wrong on platforms
+        // with non-4 KiB pages (e.g. macOS arm64 = 16 KiB), and resolved
+        // pointers land inside a PROT_NONE guard → SIGBUS on access.
+        let page_size = self.page_size;
         let align = 64;
         let context_sz = (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
 
@@ -540,14 +549,9 @@ impl ContextPool {
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_sign_loss)]
     pub fn get_dispatch_layout(&self) -> (*mut u8, usize, usize, usize) {
-        #[cfg(unix)]
-        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
-        #[cfg(windows)]
-        let page_size = unsafe {
-            let mut info = core::mem::zeroed();
-            windows_sys::Win32::System::SystemInformation::GetSystemInfo(&raw mut info);
-            info.dwPageSize as usize
-        };
+        // Use the page size captured at construction so the layout the
+        // dispatcher sees always matches the layout the arena was built with.
+        let page_size = self.page_size;
         let align = 64;
         let context_sz = (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
         let guard_size = if self.safety == SafetyLevel::Safety0 {
