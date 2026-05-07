@@ -640,7 +640,7 @@ pub mod topology {
         // (U-mode) will raise an illegal instruction exception. Since Dtact is a
         // user-space library, we fall back to a single-core topology on RISC-V
         // until a stable platform-specific syscall for topology is integrated.
-        #[cfg(all(target_arch = "riscv64", feature = "hw-acceleration"))]
+        #[cfg(all(target_arch = "riscv64", feature = "kernel"))]
         {
             let mut hart_id: u64;
             unsafe {
@@ -655,7 +655,7 @@ pub mod topology {
 
         #[cfg(any(
             all(target_arch = "aarch64", not(target_os = "linux")),
-            all(target_arch = "riscv64", not(feature = "hw-acceleration")),
+            all(target_arch = "riscv64", not(feature = "kernel")),
             not(any(
                 target_arch = "x86",
                 target_arch = "x86_64",
