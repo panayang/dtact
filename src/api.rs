@@ -767,6 +767,7 @@ pub mod fiber {
                 let sp = stack_top as u64;
                 let signed_lr: u64;
                 core::arch::asm!(
+                    ".arch armv8.3-a",
                     "pacia {lr}, {sp}",
                     lr = inout(reg) lr => signed_lr,
                     sp = in(reg) sp,
