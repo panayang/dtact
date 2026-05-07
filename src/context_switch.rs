@@ -171,6 +171,12 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 }
 
 /// Windows-compatible AArch64 switch (x18 TEB preservation).
+///
+/// Windows on ARM64 enables CFG and may sign return addresses with PAC under
+/// `/guard:cf` and `/CETCOMPAT`-style hardening. The same `bti c` + `xpaclri`
+/// hints used on the Unix path are required so the switcher remains a valid
+/// indirect-call target and the saved x30 is a raw VA (cross-stack `ret`
+/// would otherwise trip FPAC when the SP modifier no longer matches).
 #[cfg(all(target_arch = "aarch64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_float(
@@ -178,6 +184,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller (CFG-compatible)
         "prfm pldl1keep, [x1]",
         "ldr x9, [x1, 96]",
         "prfm pldl1keep, [x9]",
@@ -186,6 +193,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -475,11 +483,13 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller (CFG-compatible)
         "stp x19, x20, [x0, 0]",
         "stp x21, x22, [x0, 16]",
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -666,11 +676,13 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller (CFG-compatible)
         "stp x19, x20, [x0, 0]",
         "stp x21, x22, [x0, 16]",
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -874,6 +886,7 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller (CFG-compatible)
         "prfm pldl1keep, [x1]",
         "ldr x9, [x1, 96]",
         "prfm pldl1keep, [x9]",
@@ -882,6 +895,7 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",

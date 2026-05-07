@@ -607,11 +607,14 @@ pub mod topology {
             }
         }
 
-        // Linux emulates MPIDR_EL1 reads from EL0 via the kernel trap handler
-        // (`emulate_mrs`). macOS does not provide this emulation — issuing
-        // `mrs mpidr_el1` from userspace traps with SIGILL. Fall back to the
-        // null topology on Darwin; the scheduler treats that as a single group.
-        #[cfg(all(target_arch = "aarch64", not(target_os = "macos")))]
+        // `mrs mpidr_el1` is an EL1-privileged system register read. Linux is
+        // the only major OS that traps it from EL0 and emulates a sane value
+        // (`emulate_mrs` in arch/arm64/kernel/sys.c). macOS, Windows-on-ARM
+        // and the BSDs do not emulate it — the bare instruction raises an
+        // illegal-instruction fault (SIGILL on Unix, STATUS_ILLEGAL_INSTRUCTION
+        // on Windows). Restrict the read to Linux and fall back to the null
+        // topology elsewhere; the scheduler treats that as a single group.
+        #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
         {
             let mut mpidr: u64;
             unsafe {
@@ -638,7 +641,7 @@ pub mod topology {
         }
 
         #[cfg(any(
-            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "aarch64", not(target_os = "linux")),
             not(any(
                 target_arch = "x86",
                 target_arch = "x86_64",
