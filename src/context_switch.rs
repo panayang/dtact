@@ -115,14 +115,29 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
     );
 }
 
-/// AArch64 Unix-compatible context switch with PRFM hints.
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+/// AArch64 Unix context switch with SIMD preservation.
+///
+/// Includes defensive `hint`-encoded instructions to harden the switcher
+/// against Apple Silicon's implementation-defined hardening features:
+///
+/// * `hint #34` (`bti c`) at entry — accepts indirect calls (`blr`) under BTI.
+///   On non-BTI pages this is a NOP.
+/// * `hint #7` (`xpaclri`) before saving x30 — strips Pointer Authentication
+///   bits from LR so the saved value is a raw VA. macOS does NOT sign LR for
+///   standard `aarch64-apple-darwin` Rust output, but if Apple ever flips the
+///   default (or a downstream toolchain enables `-Z branch-protection=pac-ret`)
+///   the unsigned save keeps cross-stack `ret` from tripping FPAC.
+/// * Plain `ret` (not `retaa`/`retab`) — branches via x30 without invoking
+///   PAC authentication against the now-restored SP, which would belong to
+///   a different fiber and fail.
+#[cfg(all(target_arch = "aarch64", unix))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_float(
     save: *mut Registers,
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller
         "prfm pldl1keep, [x1]",
         "ldr x9, [x1, 96]",
         "prfm pldl1keep, [x9]",
@@ -131,6 +146,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -151,56 +167,6 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "ldp q12, q13, [x1, 192]",
         "ldp q14, q15, [x1, 224]",
         "ret"
-    );
-}
-
-/// macOS AArch64: PAC-safe context switch with SIMD preservation.
-///
-/// Apple Silicon enforces Pointer Authentication Codes (PAC-B) on return
-/// addresses: `ret` authenticates x30 using the current SP as the modifier.
-/// Because the restored SP belongs to a different fiber, the PAC check would
-/// fail (SIGILL). Fix: save a raw continuation PC via `adr` and resume with
-/// `br` (no authentication) instead of `ret`.
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context_cross_thread_float(
-    save: *mut Registers,
-    restore: *const Registers,
-) {
-    naked_asm!(
-        "prfm pldl1keep, [x1]",
-        "ldr x9, [x1, 96]",
-        "prfm pldl1keep, [x9]",
-        "stp x19, x20, [x0, 0]",
-        "stp x21, x22, [x0, 16]",
-        "stp x23, x24, [x0, 32]",
-        "stp x25, x26, [x0, 48]",
-        "stp x27, x28, [x0, 64]",
-        "str x29, [x0, 80]",
-        "adr x9, 1f",       // raw continuation PC — no PAC signing
-        "str x9, [x0, 88]", // store at x30 slot (offset 88)
-        "mov x9, sp",
-        "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
-        "ldp x19, x20, [x1, 0]",
-        "ldp x21, x22, [x1, 16]",
-        "ldp x23, x24, [x1, 32]",
-        "ldp x25, x26, [x1, 48]",
-        "ldp x27, x28, [x1, 64]",
-        "ldr x29, [x1, 80]",
-        "ldr x30, [x1, 88]", // raw continuation PC
-        "ldr x9, [x1, 96]",
-        "mov sp, x9",
-        "br x30", // branch without PAC authentication
-        "1:",
-        "ret",
     );
 }
 
@@ -473,18 +439,20 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     );
 }
 
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(target_arch = "aarch64", unix))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     save: *mut Registers,
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller
         "stp x19, x20, [x0, 0]",
         "stp x21, x22, [x0, 16]",
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -497,39 +465,6 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
         "ldr x9, [x1, 96]",
         "mov sp, x9",
         "ret"
-    );
-}
-
-/// macOS AArch64: PAC-safe no-float cross-thread switch.
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context_cross_thread_no_float(
-    save: *mut Registers,
-    restore: *const Registers,
-) {
-    naked_asm!(
-        "stp x19, x20, [x0, 0]",
-        "stp x21, x22, [x0, 16]",
-        "stp x23, x24, [x0, 32]",
-        "stp x25, x26, [x0, 48]",
-        "stp x27, x28, [x0, 64]",
-        "str x29, [x0, 80]",
-        "adr x9, 1f",
-        "str x9, [x0, 88]",
-        "mov x9, sp",
-        "str x9, [x0, 96]",
-        "ldp x19, x20, [x1, 0]",
-        "ldp x21, x22, [x1, 16]",
-        "ldp x23, x24, [x1, 32]",
-        "ldp x25, x26, [x1, 48]",
-        "ldp x27, x28, [x1, 64]",
-        "ldr x29, [x1, 80]",
-        "ldr x30, [x1, 88]",
-        "ldr x9, [x1, 96]",
-        "mov sp, x9",
-        "br x30",
-        "1:",
-        "ret",
     );
 }
 
@@ -687,18 +622,20 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
     );
 }
 
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(target_arch = "aarch64", unix))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_float(
     save: *mut Registers,
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller
         "stp x19, x20, [x0, 0]",
         "stp x21, x22, [x0, 16]",
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -719,47 +656,6 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "ldp q12, q13, [x1, 192]",
         "ldp q14, q15, [x1, 224]",
         "ret"
-    );
-}
-
-/// macOS AArch64: PAC-safe same-thread float switch.
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context_same_thread_float(
-    save: *mut Registers,
-    restore: *const Registers,
-) {
-    naked_asm!(
-        "stp x19, x20, [x0, 0]",
-        "stp x21, x22, [x0, 16]",
-        "stp x23, x24, [x0, 32]",
-        "stp x25, x26, [x0, 48]",
-        "stp x27, x28, [x0, 64]",
-        "str x29, [x0, 80]",
-        "adr x9, 1f",
-        "str x9, [x0, 88]",
-        "mov x9, sp",
-        "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
-        "ldp x19, x20, [x1, 0]",
-        "ldp x21, x22, [x1, 16]",
-        "ldp x23, x24, [x1, 32]",
-        "ldp x25, x26, [x1, 48]",
-        "ldp x27, x28, [x1, 64]",
-        "ldr x29, [x1, 80]",
-        "ldr x30, [x1, 88]",
-        "ldr x9, [x1, 96]",
-        "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
-        "br x30",
-        "1:",
-        "ret",
     );
 }
 
@@ -939,13 +835,14 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     );
 }
 
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(target_arch = "aarch64", unix))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_no_float(
     save: *mut Registers,
     restore: *const Registers,
 ) {
     naked_asm!(
+        "hint #34", // bti c — landing pad for blr from caller
         "prfm pldl1keep, [x1]",
         "ldr x9, [x1, 96]",
         "prfm pldl1keep, [x9]",
@@ -954,6 +851,7 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "stp x23, x24, [x0, 32]",
         "stp x25, x26, [x0, 48]",
         "stp x27, x28, [x0, 64]",
+        "hint #7", // xpaclri — strip PAC bits from x30 if signed
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
@@ -966,42 +864,6 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "ldr x9, [x1, 96]",
         "mov sp, x9",
         "ret"
-    );
-}
-
-/// macOS AArch64: PAC-safe same-thread no-float switch with prefetch.
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context_same_thread_no_float(
-    save: *mut Registers,
-    restore: *const Registers,
-) {
-    naked_asm!(
-        "prfm pldl1keep, [x1]",
-        "ldr x9, [x1, 96]",
-        "prfm pldl1keep, [x9]",
-        "stp x19, x20, [x0, 0]",
-        "stp x21, x22, [x0, 16]",
-        "stp x23, x24, [x0, 32]",
-        "stp x25, x26, [x0, 48]",
-        "stp x27, x28, [x0, 64]",
-        "str x29, [x0, 80]",
-        "adr x9, 1f",
-        "str x9, [x0, 88]",
-        "mov x9, sp",
-        "str x9, [x0, 96]",
-        "ldp x19, x20, [x1, 0]",
-        "ldp x21, x22, [x1, 16]",
-        "ldp x23, x24, [x1, 32]",
-        "ldp x25, x26, [x1, 48]",
-        "ldp x27, x28, [x1, 64]",
-        "ldr x29, [x1, 80]",
-        "ldr x30, [x1, 88]",
-        "ldr x9, [x1, 96]",
-        "mov sp, x9",
-        "br x30",
-        "1:",
-        "ret",
     );
 }
 
