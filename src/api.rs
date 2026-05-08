@@ -374,6 +374,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                 let lr = fiber_entry_point as *const () as u64;
                 let sp = stack_top as u64;
                 let mut signed_lr = lr;
+                #[cfg(feature = "security-hardened")]
                 core::arch::asm!(
                     "mov x16, {lr}",
                     "mov x17, {sp}",
