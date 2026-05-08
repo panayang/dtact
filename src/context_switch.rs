@@ -158,7 +158,70 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 /// # Security
 /// * `bti c`: Branch target identification for indirect calls.
 /// * `paciasp` / `autiasp`: Pointer authentication for the link register (x30).
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    not(feature = "security-hardened")
+))]
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context_cross_thread_float(
+    save: *mut Registers,
+    restore: *const Registers,
+) {
+    naked_asm!(
+        "prfm pstl1keep, [x0]",
+        "prfm pldl1keep, [x1]",
+        "prfm pldl1keep, [x1, 64]",
+        "prfm pldl1keep, [x1, 128]",
+        "ldr x9, [x1, 96]",
+        "prfm pldl1keep, [x9]",
+        "prfm pldl1keep, [x9, 64]",
+        "stp x19, x20, [x0, 0]",
+        "stp x21, x22, [x0, 16]",
+        "stp x23, x24, [x0, 32]",
+        "stp x25, x26, [x0, 48]",
+        "stp x27, x28, [x0, 64]",
+        "stp x29, x30, [x0, 80]",
+        "mov x9, sp",
+        "str x9, [x0, 96]",
+        "stp q8, q9, [x0, 128]",
+        "stp q10, q11, [x0, 160]",
+        "stp q12, q13, [x0, 192]",
+        "stp q14, q15, [x0, 224]",
+        "ldp x19, x20, [x1, 0]",
+        "ldp x21, x22, [x1, 16]",
+        "ldp x23, x24, [x1, 32]",
+        "ldp x25, x26, [x1, 48]",
+        "ldp x27, x28, [x1, 64]",
+        "ldp x29, x30, [x1, 80]",
+        "ldr x9, [x1, 96]",
+        "mov sp, x9",
+        "ldp q8, q9, [x1, 128]",
+        "ldp q10, q11, [x1, 160]",
+        "ldp q12, q13, [x1, 192]",
+        "ldp q14, q15, [x1, 224]",
+        "ret"
+    );
+}
+
+/// Switches execution context while preserving floating-point state (Unix AArch64).
+///
+/// Implements BTI and PAC protection. Preserves x19-x30 and SIMD d8-d15 (q8-q15 saved).
+///
+/// # Arguments
+/// * `save` (x0): Pointer to `Registers`.
+/// * `restore` (x1): Pointer to `Registers`.
+///
+/// # Security
+/// * `bti c`: Branch target identification for indirect calls.
+/// * `paciasp` / `autiasp`: Pointer authentication for the link register (x30).
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    feature = "security-hardened"
+))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_float(
     save: *mut Registers,
@@ -569,7 +632,57 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
 /// # Security
 /// * `bti c`: Indirect branch protection.
 /// * `paciasp` / `autiasp`: Return address integrity.
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    not(feature = "security-hardened")
+))]
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context_cross_thread_no_float(
+    save: *mut Registers,
+    restore: *const Registers,
+) {
+    naked_asm!(
+        "prfm pstl1keep, [x0]",
+        "prfm pldl1keep, [x1]",
+        "prfm pldl1keep, [x1, 64]",
+        "ldr x9, [x1, 96]",
+        "prfm pldl1keep, [x9]",
+        "prfm pldl1keep, [x9, 64]",
+        "stp x19, x20, [x0, 0]",
+        "stp x21, x22, [x0, 16]",
+        "stp x23, x24, [x0, 32]",
+        "stp x25, x26, [x0, 48]",
+        "stp x27, x28, [x0, 64]",
+        "stp x29, x30, [x0, 80]",
+        "mov x9, sp",
+        "str x9, [x0, 96]",
+        "ldp x19, x20, [x1, 0]",
+        "ldp x21, x22, [x1, 16]",
+        "ldp x23, x24, [x1, 32]",
+        "ldp x25, x26, [x1, 48]",
+        "ldp x27, x28, [x1, 64]",
+        "ldp x29, x30, [x1, 80]",
+        "ldr x9, [x1, 96]",
+        "mov sp, x9",
+        "ret"
+    );
+}
+
+/// Switches execution context without preserving floating-point state (Unix AArch64).
+///
+/// Includes BTI and PAC protection.
+///
+/// # Security
+/// * `bti c`: Indirect branch protection.
+/// * `paciasp` / `autiasp`: Return address integrity.
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    feature = "security-hardened"
+))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     save: *mut Registers,
@@ -895,7 +1008,66 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
 /// # Security
 /// * `bti c`: Branch target identification.
 /// * `paciasp` / `autiasp`: Pointer authentication for x30.
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    not(feature = "security-hardened")
+))]
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context_same_thread_float(
+    save: *mut Registers,
+    restore: *const Registers,
+) {
+    naked_asm!(
+        "prfm pstl1keep, [x0]",
+        "prfm pldl1keep, [x1]",
+        "prfm pldl1keep, [x1, 64]",
+        "prfm pldl1keep, [x1, 128]",
+        "ldr x9, [x1, 96]",
+        "prfm pldl1keep, [x9]",
+        "prfm pldl1keep, [x9, 64]",
+        "stp x19, x20, [x0, 0]",
+        "stp x21, x22, [x0, 16]",
+        "stp x23, x24, [x0, 32]",
+        "stp x25, x26, [x0, 48]",
+        "stp x27, x28, [x0, 64]",
+        "stp x29, x30, [x0, 80]",
+        "mov x9, sp",
+        "str x9, [x0, 96]",
+        "stp q8, q9, [x0, 128]",
+        "stp q10, q11, [x0, 160]",
+        "stp q12, q13, [x0, 192]",
+        "stp q14, q15, [x0, 224]",
+        "ldp x19, x20, [x1, 0]",
+        "ldp x21, x22, [x1, 16]",
+        "ldp x23, x24, [x1, 32]",
+        "ldp x25, x26, [x1, 48]",
+        "ldp x27, x28, [x1, 64]",
+        "ldp x29, x30, [x1, 80]",
+        "ldr x9, [x1, 96]",
+        "mov sp, x9",
+        "ldp q8, q9, [x1, 128]",
+        "ldp q10, q11, [x1, 160]",
+        "ldp q12, q13, [x1, 192]",
+        "ldp q14, q15, [x1, 224]",
+        "ret"
+    );
+}
+
+/// Lightweight context switch for fibers pinned to the current thread (Unix AArch64).
+///
+/// Skips TIB/TEB metadata preservation but maintains BTI and PAC security.
+///
+/// # Security
+/// * `bti c`: Branch target identification.
+/// * `paciasp` / `autiasp`: Pointer authentication for x30.
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    feature = "security-hardened"
+))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_float(
     save: *mut Registers,
@@ -1279,7 +1451,57 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
 /// # Security
 /// * `bti c`: Branch target identification.
 /// * `paciasp` / `autiasp`: Pointer authentication for x30.
-#[cfg(all(target_arch = "aarch64", unix, not(target_os = "macos")))]
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    not(feature = "security-hardened")
+))]
+#[unsafe(naked)]
+pub unsafe extern "C" fn switch_context_same_thread_no_float(
+    save: *mut Registers,
+    restore: *const Registers,
+) {
+    naked_asm!(
+        "prfm pstl1keep, [x0]",
+        "prfm pldl1keep, [x1]",
+        "prfm pldl1keep, [x1, 64]",
+        "ldr x9, [x1, 96]",
+        "prfm pldl1keep, [x9]",
+        "prfm pldl1keep, [x9, 64]",
+        "stp x19, x20, [x0, 0]",
+        "stp x21, x22, [x0, 16]",
+        "stp x23, x24, [x0, 32]",
+        "stp x25, x26, [x0, 48]",
+        "stp x27, x28, [x0, 64]",
+        "stp x29, x30, [x0, 80]",
+        "mov x9, sp",
+        "str x9, [x0, 96]",
+        "ldp x19, x20, [x1, 0]",
+        "ldp x21, x22, [x1, 16]",
+        "ldp x23, x24, [x1, 32]",
+        "ldp x25, x26, [x1, 48]",
+        "ldp x27, x28, [x1, 64]",
+        "ldp x29, x30, [x1, 80]",
+        "ldr x9, [x1, 96]",
+        "mov sp, x9",
+        "ret"
+    );
+}
+
+/// The fastest possible context switch: same-thread and no floating-point (Unix AArch64).
+///
+/// Includes BTI and PAC security.
+///
+/// # Security
+/// * `bti c`: Branch target identification.
+/// * `paciasp` / `autiasp`: Pointer authentication for x30.
+#[cfg(all(
+    target_arch = "aarch64",
+    unix,
+    not(target_os = "macos"),
+    feature = "security-hardened"
+))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_no_float(
     save: *mut Registers,
