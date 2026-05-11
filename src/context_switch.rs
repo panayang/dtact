@@ -27,7 +27,7 @@ use core::arch::naked_asm;
 // CROSS-THREAD WITH FLOAT
 // ============================================================================
 
-/// Switches execution context while preserving floating-point state (Unix x86_64).
+/// Switches execution context while preserving floating-point state (Unix `x86_64`).
 ///
 /// This implementation follows the System V AMD64 ABI, preserving the
 /// callee-saved registers (rbx, rbp, r12-r15) and SIMD state via FXSAVE.
@@ -524,7 +524,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 // CROSS-THREAD NO FLOAT
 // ============================================================================
 
-/// Switches execution context without preserving floating-point state (Unix x86_64).
+/// Switches execution context without preserving floating-point state (Unix `x86_64`).
 ///
 /// Optimized for non-numerical tasks by ignoring XMM/SIMD registers.
 ///

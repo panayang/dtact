@@ -490,11 +490,18 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
                 let mut chunk = crate::dta_scheduler::TaskChunk::default();
                 chunk.tasks[0] = waiter_ctx_id;
                 chunk.count = 1;
+                let mut retries = 0u32;
                 while runtime.scheduler.mailboxes[current_worker][target_worker]
                     .push(chunk)
                     .is_err()
                 {
-                    core::hint::spin_loop();
+                    runtime.scheduler.poll_mailboxes(current_worker);
+                    retries = retries.saturating_add(1);
+                    if retries > 1024 {
+                        std::thread::yield_now();
+                    } else {
+                        core::hint::spin_loop();
+                    }
                 }
                 runtime.scheduler.signal_worker(target_worker);
             } else {

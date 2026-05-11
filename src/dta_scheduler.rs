@@ -467,7 +467,13 @@ impl Worker {
     #[inline(always)]
     pub unsafe fn dispatch_loop(&self, pool: &crate::memory_management::ContextPool) {
         let mut head = self.local_head.load(Ordering::Acquire);
-        while head != self.local_tail.load(Ordering::Acquire) {
+
+        loop {
+            // Exit when queue is empty.
+            if head == self.local_tail.load(Ordering::Acquire) {
+                break;
+            }
+
             let task = unsafe {
                 let buffer_ptr = self.local_queue.ptr.cast::<TaskIndex>();
                 *buffer_ptr.add(head)
@@ -505,7 +511,6 @@ impl Worker {
             crate::future_bridge::CURRENT_FIBER.with(|c| c.set(core::ptr::null_mut()));
 
             // Optimized lifecycle state machine: handle Finished, Notified, or Suspending transitions.
-            // We use a single load and robust checks to minimize hot-path latency.
             let post_state = unsafe {
                 (*target_ptr)
                     .state
@@ -514,8 +519,6 @@ impl Worker {
 
             let mut final_state = post_state;
             if post_state == crate::memory_management::FiberStatus::Suspending as u32 {
-                // Fiber requested suspension. Transition to Yielded to allow cross-core migration.
-                // If this CAS fails, it means a concurrent wake() moved it to Notified.
                 match unsafe {
                     (*target_ptr).state.compare_exchange(
                         crate::memory_management::FiberStatus::Suspending as u32,
@@ -626,29 +629,11 @@ impl DtaScheduler {
     #[inline(always)]
     fn do_push_local(&self, source_core: usize, target_core: usize, task: TaskIndex) -> bool {
         let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
-        if current_worker == source_core {
-            unsafe {
-                let worker = &*self.workers[source_core].get();
-                if worker.push_local(task) {
-                    return true;
-                }
-            }
-        }
-
-        // Fallback to external mailbox if local queue is full or cross-thread
-        loop {
-            self.external_locks[target_core].lock();
-            let mut chunk = TaskChunk::default();
-            chunk.tasks[0] = task;
-            chunk.count = 1;
-            let res = self.external_mailboxes[target_core].push(chunk);
-            self.external_locks[target_core].unlock();
-
-            if res.is_ok() {
-                self.signal_worker(target_core);
-                return true;
-            }
-            core::hint::spin_loop();
+        if current_worker == target_core {
+            let worker = unsafe { &*self.workers[target_core].get() };
+            worker.push_local(task)
+        } else {
+            self.do_push_remote(source_core, target_core, task)
         }
     }
 
@@ -656,38 +641,29 @@ impl DtaScheduler {
     fn do_push_remote(&self, _source_core: usize, target_core: usize, task: TaskIndex) -> bool {
         let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
 
-        let mut retries = 0u32;
-        loop {
-            let success = if current_worker < self.workers.len() {
-                let mut chunk = TaskChunk::default();
-                chunk.tasks[0] = task;
-                chunk.count = 1;
-                self.mailboxes[current_worker][target_core]
-                    .push(chunk)
-                    .is_ok()
-            } else {
-                // External thread: Push to external mailbox
-                self.external_locks[target_core].lock();
-                let mut chunk = TaskChunk::default();
-                chunk.tasks[0] = task;
-                chunk.count = 1;
-                let success = self.external_mailboxes[target_core].push(chunk).is_ok();
-                self.external_locks[target_core].unlock();
-                success
-            };
+        let success = if current_worker < self.workers.len() {
+            let mut chunk = TaskChunk::default();
+            chunk.tasks[0] = task;
+            chunk.count = 1;
+            self.mailboxes[current_worker][target_core]
+                .push(chunk)
+                .is_ok()
+        } else {
+            // External thread: Push to external mailbox
+            self.external_locks[target_core].lock();
+            let mut chunk = TaskChunk::default();
+            chunk.tasks[0] = task;
+            chunk.count = 1;
+            let success = self.external_mailboxes[target_core].push(chunk).is_ok();
+            self.external_locks[target_core].unlock();
+            success
+        };
 
-            if success {
-                self.signal_worker(target_core);
-                break;
-            }
-
-            retries = retries.saturating_add(1);
-            if retries > 1024 {
-                std::thread::yield_now();
-            } else {
-                core::hint::spin_loop();
-            }
+        if !success {
+            return false;
         }
+
+        self.signal_worker(target_core);
 
         #[cfg(all(
             feature = "hw-acceleration",
@@ -760,17 +736,24 @@ impl DtaScheduler {
 
         for idx in 0..num_polls {
             let i = worker.polling_order[idx];
-
             let row = &self.mailboxes[i];
 
-            while let Some(chunk) = row[current_core].pop() {
-                worker.push_batch(&chunk);
+            while worker.local_queue_len() + CHUNK_SIZE < LOCAL_QUEUE_CAPACITY {
+                if let Some(chunk) = row[current_core].pop() {
+                    worker.push_batch(&chunk);
+                } else {
+                    break;
+                }
             }
         }
 
         // 2. Poll External Mailbox for external host-thread spawns
-        while let Some(chunk) = self.external_mailboxes[current_core].pop() {
-            worker.push_batch(&chunk);
+        while worker.local_queue_len() + CHUNK_SIZE < LOCAL_QUEUE_CAPACITY {
+            if let Some(chunk) = self.external_mailboxes[current_core].pop() {
+                worker.push_batch(&chunk);
+            } else {
+                break;
+            }
         }
 
         worker.update_load();
