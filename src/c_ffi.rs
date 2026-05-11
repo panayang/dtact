@@ -711,12 +711,7 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         if current_gen != handle_gen
             || status == crate::memory_management::FiberStatus::Finished as u32
         {
-            // Target already finished (or context recycled), clear waiter and break
-            unsafe {
-                (*target_ctx)
-                    .waiter_handle
-                    .store(0, core::sync::atomic::Ordering::Relaxed);
-            }
+            // Target already finished (or context recycled), break
             break;
         }
 
@@ -752,9 +747,12 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         {
             // Completed between check and waiter registration
             unsafe {
-                (*target_ctx)
-                    .waiter_handle
-                    .store(0, core::sync::atomic::Ordering::Relaxed);
+                let _ = (*target_ctx).waiter_handle.compare_exchange(
+                    my_handle,
+                    0,
+                    core::sync::atomic::Ordering::Relaxed,
+                    core::sync::atomic::Ordering::Relaxed,
+                );
             }
             break;
         }

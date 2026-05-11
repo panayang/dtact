@@ -490,7 +490,13 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
                 let mut chunk = crate::dta_scheduler::TaskChunk::default();
                 chunk.tasks[0] = waiter_ctx_id;
                 chunk.count = 1;
-                let _ = runtime.scheduler.mailboxes[current_worker][target_worker].push(chunk);
+                while runtime.scheduler.mailboxes[current_worker][target_worker]
+                    .push(chunk)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+                runtime.scheduler.signal_worker(target_worker);
             } else {
                 // Fallback for non-worker threads: use global enqueue or pick a source
                 let _ = runtime.scheduler.enqueue_task(

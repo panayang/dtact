@@ -28,3 +28,4 @@ examples/c_async.exe
 src/lib.rs
 windows_fixes.patch
 clean_fixes.patch
+examples/dtact.dll

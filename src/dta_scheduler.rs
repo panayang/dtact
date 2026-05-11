@@ -609,7 +609,7 @@ impl DtaScheduler {
 
     /// Signals a worker that new work is available in its mailboxes.
     #[inline(always)]
-    fn signal_worker(&self, target_core: usize) {
+    pub(crate) fn signal_worker(&self, target_core: usize) {
         unsafe {
             let worker = &*self.workers[target_core].get();
             // On AArch64 and RISC-V, SeqCst is necessary for signaling across cores to ensure
