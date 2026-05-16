@@ -428,7 +428,6 @@ impl Warehouse {
                 return Err(chunk);
             } else {
                 // Another producer beat us to this position — reload.
-                core::hint::spin_loop();
                 pos = self.tail.load(Ordering::Relaxed);
             }
         }
