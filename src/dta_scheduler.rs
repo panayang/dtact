@@ -544,7 +544,8 @@ impl Worker {
                 polling_order.push(i);
             }
         }
-        for i in 0..total_cores {
+        for offset in 0..total_cores {
+            let i = (my_core + offset) % total_cores;
             if i != my_core && (i / 8) as u16 != my_ccx {
                 polling_order.push(i);
             }
