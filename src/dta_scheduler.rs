@@ -208,7 +208,7 @@ impl<T> Drop for HugeBuffer<T> {
 /// Single-Producer Single-Consumer (SPSC) Queue for the P2P Mesh Mailbox.
 ///
 /// Aligned to 64 bytes to prevent false sharing between sender and receiver cores.
-#[repr(align(64))]
+#[repr(C, align(64))]
 pub struct Mailbox {
     pub head: AtomicUsize,
     _pad1: [u8; 64 - core::mem::size_of::<AtomicUsize>()],
