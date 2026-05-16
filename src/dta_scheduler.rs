@@ -386,7 +386,7 @@ impl Warehouse {
         unsafe {
             let base = wh.slots.ptr.cast::<WarehouseSlot>();
             for i in 0..WAREHOUSE_CAPACITY {
-                (*base.add(i)).seq.store(i, Ordering::Relaxed);
+                (*base.add(i)).seq.store(i, Ordering:: Release);
             }
         }
         wh
