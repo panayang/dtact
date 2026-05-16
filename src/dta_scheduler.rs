@@ -183,7 +183,7 @@ impl<T> HugeBuffer<T> {
 }
 
 impl<T> Drop for HugeBuffer<T> {
-    #[inline(always)]
+    #[inline(never)]
     fn drop(&mut self) {
         #[cfg(unix)]
         unsafe {
