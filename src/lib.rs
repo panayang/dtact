@@ -203,46 +203,104 @@ pub static GLOBAL_RUNTIME: std::sync::OnceLock<Runtime> = std::sync::OnceLock::n
 pub static HEAP_ESCAPED_SPAWNS: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(0);
 
-/// Awakens a suspended fiber by pushing it onto the DTA-V3 Scheduler mesh.
+/// Awakens a fiber by pushing it onto the scheduler mesh.
 ///
-/// This function is the primary signaling mechanism for cross-thread wakeups.
-/// It uses the fiber's index as a flow-id for deterministic load distribution
-/// across the worker cores.
+/// Dispatches between `enqueue_pinned` and `enqueue_deflect` based on the
+/// fiber's stored `mode`. Pinned fibers (`SameThread` switchers) skip the
+/// deflection hash and route strictly to their `origin_core`; deflectable
+/// fibers (`CrossThread` switchers) consult load and may hop / spill to the
+/// warehouse. The mode is set at spawn time and never changes.
 ///
 /// # Arguments
 /// * `origin_core` - The core ID where the fiber was originally spawned.
 /// * `fiber_index` - The unique identifier of the fiber in the context pool.
 #[inline(always)]
 pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
-    if let Some(runtime) = GLOBAL_RUNTIME.get() {
-        // Submit the fiber back to the mesh. Loop with yield on backpressure.
-        loop {
-            let success =
-                runtime
-                    .scheduler
-                    .enqueue_task(origin_core, u64::from(fiber_index), fiber_index);
+    let runtime = GLOBAL_RUNTIME
+        .get()
+        .expect("dtact::wake_fiber() invoked before Runtime Initialization");
+    let pool = &runtime.pool;
+    let ctx_ptr = pool.get_context_ptr(fiber_index);
+    // Non-atomic read: `mode` is set once at spawn and never mutated.
+    let pinned = matches!(
+        unsafe { (*ctx_ptr).mode },
+        common_types::TopologyMode::Pinned
+    );
 
-            if success {
-                break;
-            }
-
-            // Queue is full: yield to scheduler to let it drain
-            let ctx_ptr = crate::future_bridge::CURRENT_FIBER.with(std::cell::Cell::get);
-            if ctx_ptr.is_null() {
-                std::thread::yield_now();
-            } else {
-                unsafe {
-                    let ctx = &mut *ctx_ptr;
-                    ctx.state.store(
-                        crate::memory_management::FiberStatus::Notified as u32,
-                        core::sync::atomic::Ordering::Release,
-                    );
-                    (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);
-                }
-            }
+    loop {
+        // Two-entry function-pointer table — branchless after the bool is computed.
+        type EnqFn = fn(&dta_scheduler::DtaScheduler, usize, u64, u32) -> bool;
+        const ENQUEUE_FNS: [EnqFn; 2] = [enqueue_deflect_shim, enqueue_pinned_shim];
+        let success = ENQUEUE_FNS[usize::from(pinned)](
+            &runtime.scheduler,
+            origin_core,
+            u64::from(fiber_index),
+            fiber_index,
+        );
+        if success {
+            return;
         }
+
+        // Backpressure: enqueue_pinned can fail when the target's local queue
+        // is over the watermark AND the cross-core mailbox is full.
+        // (enqueue_deflect never returns false — it either places in a mailbox
+        //  or panics via warehouse overflow.) Yield to give the scheduler a
+        // chance to drain, then retry.
+        backpressure_yield();
+    }
+}
+
+#[inline(always)]
+fn enqueue_pinned_shim(
+    sched: &dta_scheduler::DtaScheduler,
+    target: usize,
+    _flow: u64,
+    task: u32,
+) -> bool {
+    sched.enqueue_pinned(target, task)
+}
+
+#[inline(always)]
+fn enqueue_deflect_shim(
+    sched: &dta_scheduler::DtaScheduler,
+    source: usize,
+    flow: u64,
+    task: u32,
+) -> bool {
+    sched.enqueue_deflect(source, flow, task)
+}
+
+/// Resolves an opaque waiter handle (encoded by `dtact_await`'s fiber path)
+/// and re-enqueues the waiting fiber via the standard `wake_fiber` routing.
+#[inline]
+pub(crate) fn wake_waiter_handle(packed: u64) {
+    let waiter = packed & !(1u64 << 63);
+    let fiber_index = (waiter & 0xFFFF_FFFF) as u32;
+    // The stored `target_worker` is the worker the waiter was running on when
+    // it suspended — but for routing we always go through wake_fiber, which
+    // reads the fiber's *own* mode-stored origin_core, the source of truth.
+    wake_fiber((waiter >> 32) as usize, fiber_index);
+}
+
+/// Backpressure handler: cooperative yield if inside a fiber, brief
+/// spin + OS yield if on a host thread.
+#[inline]
+fn backpressure_yield() {
+    let ctx_ptr = crate::future_bridge::CURRENT_FIBER.with(std::cell::Cell::get);
+    if ctx_ptr.is_null() {
+        for _ in 0..32 {
+            core::hint::spin_loop();
+        }
+        std::thread::yield_now();
     } else {
-        panic!("dtact::wake_fiber() invoked before Runtime Initialization");
+        unsafe {
+            let ctx = &mut *ctx_ptr;
+            ctx.state.store(
+                crate::memory_management::FiberStatus::Notified as u32,
+                core::sync::atomic::Ordering::Release,
+            );
+            (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);
+        }
     }
 }
 

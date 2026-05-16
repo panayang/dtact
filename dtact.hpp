@@ -26,6 +26,13 @@ constexpr static const size_t CHUNK_SIZE = 32;
 constexpr static const size_t LOCAL_QUEUE_CAPACITY = 131072;
 
 /*
+ High-water mark above which a worker stops accepting new chunks and routes
+ them onward. Set at 7/8 capacity so push_batch has guaranteed headroom for
+ one full chunk on top.
+ */
+constexpr static const size_t LOCAL_QUEUE_HIGH_WATERMARK = (LOCAL_QUEUE_CAPACITY - (LOCAL_QUEUE_CAPACITY / 8));
+
+/*
  Mask for local queue index wrap-around.
  */
 constexpr static const size_t LOCAL_QUEUE_MASK = (LOCAL_QUEUE_CAPACITY - 1);
@@ -40,6 +47,17 @@ constexpr static const size_t MAILBOX_CAPACITY = 1024;
  Mask for mailbox index wrap-around.
  */
 constexpr static const size_t MAILBOX_MASK = (MAILBOX_CAPACITY - 1);
+
+/*
+ Warehouse capacity in chunks. 32 768 chunks × 32 tasks = 1 048 576 tasks of
+ emergency back-pressure storage. Must be a power of two for bitwise masking.
+ */
+constexpr static const size_t WAREHOUSE_CAPACITY = 32768;
+
+/*
+ Mask for warehouse index wrap-around.
+ */
+constexpr static const size_t WAREHOUSE_MASK = (WAREHOUSE_CAPACITY - 1);
 
 /*
  Opaque handle representing a spawned Dtact fiber.

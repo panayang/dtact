@@ -5,6 +5,11 @@ pub enum TopologyMode {
     P2PMesh,
     /// Global: Tasks are shared across all cores via a common pool.
     Global,
+    /// Pinned: Fiber must stay on its origin worker. No cross-core deflection.
+    /// Set automatically when the fiber's switcher is a `SameThread` variant —
+    /// `SameThread` context-switch assumes no thread migration, so deflection
+    /// would violate the switcher's invariants.
+    Pinned,
 }
 
 /// Metadata: Workload Hint for scheduling decisions.

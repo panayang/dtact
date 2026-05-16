@@ -638,47 +638,41 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
 
     if ctx_ptr.is_null() {
         // ===== NON-FIBER PATH (C main thread, host thread) =====
-        // Tiered strategy: spin-loop -> futex_wait
+        // Three consecutive Acquire loads bracket the state read — no SeqCst fence needed.
+        // On AArch64, consecutive `ldar` instructions cannot be reordered by the hardware.
         let mut spins = 0u32;
         loop {
             let (_current_gen, status) = unsafe {
-                let g1 = (*target_ctx)
+                let g1 = ((*target_ctx)
                     .generation
-                    .load(core::sync::atomic::Ordering::Acquire) as u16;
-                // On AArch64, we need a fence to ensure 'generation' and 'state' loads are not reordered.
-                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+                    .load(core::sync::atomic::Ordering::Acquire) as u16)
+                    & 0x7FFF;
                 let status = (*target_ctx)
                     .state
                     .load(core::sync::atomic::Ordering::Acquire);
-                #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-                let g2 = (*target_ctx)
+                let g2 = ((*target_ctx)
                     .generation
-                    .load(core::sync::atomic::Ordering::Acquire) as u16;
+                    .load(core::sync::atomic::Ordering::Acquire) as u16)
+                    & 0x7FFF;
 
-                // If generation changed during our read, or it's already a different generation,
-                // we know the target fiber has finished.
-                if (g1 & 0x7FFF) != handle_gen || (g2 & 0x7FFF) != handle_gen {
+                if g1 != handle_gen || g2 != handle_gen {
                     break;
                 }
-                (g1 & 0x7FFF, status)
+                (g1, status)
             };
 
             if status == crate::memory_management::FiberStatus::Finished as u32 {
                 break;
             }
 
-            if spins < 1000 {
+            if spins < 4000 {
                 core::hint::spin_loop();
                 spins += 1;
             } else {
-                // To prevent ABA-induced permanent deadlocks (where the context is recycled
-                // and state returns to 'Running' before we enter the futex), we use yield_now
-                // as a robust fallback. This ensures the host thread eventually re-checks
-                // the generation counter.
+                // Host thread has nothing else to do — OS yield is acceptable here.
+                // Generation double-check above prevents ABA-induced permanent stalls.
                 std::thread::yield_now();
-                spins = 500; // Reset to a middle-tier spin before next yield
+                spins = 2000;
             }
         }
         return;
@@ -720,13 +714,14 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
         let current_ctx_id = unsafe { u64::from((*ctx_ptr).fiber_index) };
         let my_handle = current_ctx_id | ((current_worker as u64) << 32) | (1 << 63);
 
-        // Register the current fiber as a waiter for the target fiber.
-        // We use swap(SeqCst) as a full memory barrier to ensure visibility before state re-check.
-        // On x86, this is implemented as LOCK XCHG which is more efficient than store + mfence.
+        // Register the current fiber as a waiter.
+        // AcqRel: Release ensures our preceding loads are visible before the swap;
+        // Acquire ensures subsequent state re-check sees the fiber's Release stores.
+        // AcqRel is sufficient — SeqCst is not needed on any architecture here.
         unsafe {
             (*target_ctx)
                 .waiter_handle
-                .swap(my_handle, core::sync::atomic::Ordering::SeqCst);
+                .swap(my_handle, core::sync::atomic::Ordering::AcqRel);
         }
 
         // 2. Double-check target state after registering waiter
@@ -813,17 +808,21 @@ pub extern "C" fn dtact_run(_rt: *mut c_void) {
 #[unsafe(no_mangle)]
 pub extern "C" fn dtact_shutdown() {
     if let Some(runtime) = crate::GLOBAL_RUNTIME.get() {
+        // SeqCst ensures the shutdown flag write is ordered before all subsequent reads.
         runtime
             .shutdown
             .store(true, core::sync::atomic::Ordering::SeqCst);
 
-        // Wake all workers to ensure they see the shutdown signal
+        // Bump event_signal to break workers out of WFE/umwait standby.
+        // Workers spinning in non-hw-accel mode will see shutdown on their next loop iteration.
         for i in 0..runtime.scheduler.workers.len() {
+            let worker = unsafe { &*runtime.scheduler.workers[i].get() };
+            worker
+                .event_signal
+                .fetch_add(1, core::sync::atomic::Ordering::Release);
+            // futex_wake is a no-op if no worker is futex-sleeping (they no longer do),
+            // but kept as belt-and-suspenders for any platform-specific edge cases.
             unsafe {
-                let worker = &*runtime.scheduler.workers[i].get();
-                worker
-                    .event_signal
-                    .fetch_add(1, core::sync::atomic::Ordering::SeqCst);
                 crate::utils::futex_wake(
                     (&raw const worker.event_signal).cast::<core::sync::atomic::AtomicU32>(),
                 );

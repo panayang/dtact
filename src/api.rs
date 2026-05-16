@@ -19,12 +19,20 @@ pub enum Priority {
 }
 
 /// Interface for custom context switching logic.
+///
+/// `ALLOW_DEFLECTION` reports whether fibers using this switcher may be
+/// migrated across worker threads by the scheduler. `SameThread` variants set
+/// this to `false` because their assembly switch routines do not preserve
+/// per-thread state (TLS, TIB, FS/GS); deflecting such a fiber would
+/// silently corrupt it.
 pub trait ContextSwitcher: Send + Sync + 'static {
     /// The raw assembly function used for switching to/from this fiber.
     const SWITCH_FN: unsafe extern "C" fn(
         *mut crate::memory_management::Registers,
         *const crate::memory_management::Registers,
     );
+    /// `true` if the scheduler is allowed to deflect/migrate this fiber across cores.
+    const ALLOW_DEFLECTION: bool;
 }
 
 /// Standard switcher that saves/restores floating-point state and supports cross-thread migration.
@@ -34,6 +42,7 @@ impl ContextSwitcher for CrossThreadFloat {
         *mut crate::memory_management::Registers,
         *const crate::memory_management::Registers,
     ) = crate::context_switch::switch_context_cross_thread_float;
+    const ALLOW_DEFLECTION: bool = true;
 }
 
 /// Lightweight switcher that skips floating-point state but supports cross-thread migration.
@@ -43,6 +52,7 @@ impl ContextSwitcher for CrossThreadNoFloat {
         *mut crate::memory_management::Registers,
         *const crate::memory_management::Registers,
     ) = crate::context_switch::switch_context_cross_thread_no_float;
+    const ALLOW_DEFLECTION: bool = true;
 }
 
 /// Optimized switcher for fibers pinned to a single thread, saving/restoring floating-point state.
@@ -52,6 +62,7 @@ impl ContextSwitcher for SameThreadFloat {
         *mut crate::memory_management::Registers,
         *const crate::memory_management::Registers,
     ) = crate::context_switch::switch_context_same_thread_float;
+    const ALLOW_DEFLECTION: bool = false;
 }
 
 /// The fastest possible switcher: pins to one thread and ignores floating-point state.
@@ -61,6 +72,7 @@ impl ContextSwitcher for SameThreadNoFloat {
         *mut crate::memory_management::Registers,
         *const crate::memory_management::Registers,
     ) = crate::context_switch::switch_context_same_thread_no_float;
+    const ALLOW_DEFLECTION: bool = false;
 }
 
 /// Fluent builder for configuring and launching fibers.
@@ -198,8 +210,8 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
 
             let ctx_ptr = crate::future_bridge::CURRENT_FIBER.with(std::cell::Cell::get);
             if ctx_ptr.is_null() {
-                // HOST-THREAD SPINNING
-                if fixed_spins < 2000 {
+                // HOST-THREAD SPINNING — spin hard first, OS yield only as last resort
+                if fixed_spins < 8000 {
                     core::hint::spin_loop();
                     fixed_spins += 1;
 
@@ -211,7 +223,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                     }
                 } else {
                     std::thread::yield_now();
-                    fixed_spins = 0; // Reset after yield
+                    fixed_spins = 4000; // Keep partial spin budget
                 }
             } else {
                 // FIBER-AWARE ADAPTIVE SPINNING
@@ -265,7 +277,13 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
                 core::sync::atomic::Ordering::Release,
             );
             (*ctx_ptr).kind = self.kind;
-            (*ctx_ptr).mode = self.mode;
+            // Switcher policy overrides user mode: SameThread switchers can never deflect.
+            // Compile-time const, dead-code-eliminated to a single branch by the optimizer.
+            (*ctx_ptr).mode = if S::ALLOW_DEFLECTION {
+                self.mode
+            } else {
+                TopologyMode::Pinned
+            };
             (*ctx_ptr).origin_core = current_core as u16;
             (*ctx_ptr).fiber_index = ctx_id;
             (*ctx_ptr).switch_fn = S::SWITCH_FN;
@@ -454,69 +472,19 @@ pub(crate) unsafe extern "C" fn fiber_entry_point() {
         crate::memory_management::FiberStatus::Finished as u32,
         core::sync::atomic::Ordering::Release,
     );
-    // Notify any waiting host threads immediately.
-    unsafe { crate::utils::futex_wake(&raw const ctx.state) };
+    // No futex_wake needed: dtact_await host-thread path uses spin+yield_now, not futex.
 
     // Wake up any fiber waiting for this one (FFI join).
-    // MUST happen BEFORE free_context, otherwise the context could be reallocated
-    // and the waiter_handle overwritten before we read.
-    // On AArch64/RISC-V, we need a full barrier to ensure state=Finished is visible before waiter check.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    // AcqRel: Release ensures state=Finished is visible before we read waiter_handle;
+    // Acquire syncs with the waiter's AcqRel swap that registered the handle.
     let waiter = ctx
         .waiter_handle
         .swap(0, core::sync::atomic::Ordering::AcqRel);
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-    let waiter = ctx
-        .waiter_handle
-        .swap(0, core::sync::atomic::Ordering::SeqCst);
     if waiter != 0 {
-        let waiter = waiter & !(1 << 63); // Strip sentinel bit
-        let waiter_ctx_id = (waiter & 0xFFFF_FFFF) as u32;
-        let target_worker = (waiter >> 32) as usize;
-
-        if let Some(runtime) = crate::GLOBAL_RUNTIME.get() {
-            let num_workers = runtime.scheduler.workers.len();
-            let target_worker = target_worker % num_workers;
-            let current_worker = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
-
-            if current_worker == target_worker {
-                // We are on the target worker's thread! Safe to push local.
-                unsafe {
-                    let worker = &mut *runtime.scheduler.workers[target_worker].get();
-                    worker.push_local(waiter_ctx_id);
-                }
-            } else if current_worker < num_workers {
-                // Cross-core wakeup: use the mailbox matrix.
-                let mut chunk = crate::dta_scheduler::TaskChunk::default();
-                chunk.tasks[0] = waiter_ctx_id;
-                chunk.count = 1;
-                let mut retries = 0u32;
-                while runtime.scheduler.mailboxes[current_worker][target_worker]
-                    .push(chunk)
-                    .is_err()
-                {
-                    runtime.scheduler.poll_mailboxes(current_worker);
-                    retries = retries.saturating_add(1);
-                    if retries > 1024 {
-                        std::thread::yield_now();
-                    } else {
-                        core::hint::spin_loop();
-                    }
-                }
-                runtime.scheduler.signal_worker(target_worker);
-            } else {
-                // Fallback for non-worker threads: use global enqueue or pick a source
-                let _ = runtime.scheduler.enqueue_task(
-                    target_worker,
-                    u64::from(waiter_ctx_id),
-                    waiter_ctx_id,
-                );
-            }
-        }
+        // Centralised wake routing — reads the waiter's mode and dispatches
+        // through enqueue_pinned or enqueue_deflect with full warehouse fallback.
+        crate::wake_waiter_handle(waiter);
     }
-
-    // Also wake any non-fiber thread blocked on futex_wait
-    unsafe { crate::utils::futex_wake(&raw const ctx.state) };
 
     // Switch back to the scheduler. The scheduler's dispatch_loop will see
     // state == Finished and call free_context on our behalf.

@@ -20,7 +20,7 @@ proptest! {
             worker.deflection_threshold.store(threshold, Ordering::SeqCst);
         }
 
-        let _ = scheduler.enqueue_task(source_core, flow_id, 0);
+        let _ = scheduler.enqueue_deflect(source_core, flow_id, 0);
 
         // Verify task is successfully enqueued somewhere
         let mut total_tasks = 0;
@@ -61,7 +61,7 @@ proptest! {
             worker.deflection_threshold.store(10, Ordering::SeqCst);
         }
 
-        let _ = scheduler.enqueue_task(source_core, flow_id, 1);
+        let _ = scheduler.enqueue_deflect(source_core, flow_id, 1);
 
         let mut total_tasks = 0;
         unsafe {

@@ -113,37 +113,6 @@ pub fn get_tick_with_cpu() -> (u64, u32) {
     }
 }
 
-/// Blocks the current OS thread until notified via `futex_wake`.
-///
-/// Utilizes the Linux `FUTEX_WAIT` system call for efficient, zero-CPU
-/// blocking of host threads awaiting fiber completion.
-///
-/// # Safety
-/// * `addr` must point to a valid `AtomicU32`.
-#[cfg(target_os = "linux")]
-#[inline(always)]
-pub unsafe fn futex_wait(addr: *const core::sync::atomic::AtomicU32, val: u32) {
-    unsafe {
-        loop {
-            let ret = libc::syscall(
-                libc::SYS_futex,
-                addr,
-                libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
-                val.cast_signed(),
-                core::ptr::null::<libc::timespec>(),
-            );
-            if ret == 0 {
-                break;
-            }
-            let err = *libc::__errno_location();
-            if err == libc::EAGAIN || err == libc::EINTR {
-                continue;
-            }
-            break; // Other errors
-        }
-    }
-}
-
 /// Wakes all OS threads currently blocked on the specified address.
 ///
 /// # Safety
@@ -162,13 +131,6 @@ pub unsafe fn futex_wake(addr: *const core::sync::atomic::AtomicU32) {
             0,
         );
     }
-}
-
-/// Cross-platform fallback for `futex_wait`.
-#[cfg(not(target_os = "linux"))]
-#[inline(always)]
-pub fn futex_wait(_addr: *const core::sync::atomic::AtomicU32, _val: u32) {
-    std::thread::yield_now();
 }
 
 /// Cross-platform fallback for `futex_wake`.
