@@ -391,6 +391,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             {
                 let lr = fiber_entry_point as *const () as u64;
                 let sp = stack_top as u64;
+                #[allow(unused)]
                 let mut signed_lr = lr;
                 #[cfg(not(all(
                     target_arch = "aarch64",

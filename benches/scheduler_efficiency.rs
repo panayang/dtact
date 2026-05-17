@@ -2,11 +2,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dtact::yield_now;
 use std::hint::black_box;
 
-/// Initializes the Dtact runtime with 8 workers.
+/// Initializes the Dtact runtime with 4 workers.
 /// Called once before starting benchmarks.
 fn init_dtact() {
     let _ = dtact::GLOBAL_RUNTIME.get_or_init(|| {
-        let workers_count = 8;
+        let workers_count = 4;
         let scheduler = dtact::dta_scheduler::DtaScheduler::new(
             workers_count,
             dtact::dta_scheduler::TopologyMode::P2PMesh,
@@ -33,10 +33,10 @@ fn init_dtact() {
 
 /// Benchmark 1: Pure Spawning Overhead
 /// Spawns N tasks that do minimal work and joins them.
-fn bench_spawn_efficiency(c: &mut Criterion) {
+fn bench_spawn_efficiency_1m(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(8)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -46,11 +46,158 @@ fn bench_spawn_efficiency(c: &mut Criterion) {
     group.bench_function("Dtact", |b| {
         b.iter(|| {
             let handle =
-                dtact::api::SpawnBuilder::<dtact::SameThreadNoFloat>::new().spawn(async move {
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
                     let mut handles = Vec::with_capacity(num_tasks);
                     for _ in 0..num_tasks {
                         handles.push(
-                            dtact::api::SpawnBuilder::<dtact::SameThreadNoFloat>::new().spawn(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    black_box(1);
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    black_box(1);
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_spawn_efficiency_100k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Spawn Efficiency (100k tasks)");
+    let num_tasks = 100_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    black_box(1);
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    black_box(1);
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_spawn_efficiency_10k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Spawn Efficiency (10k tasks)");
+    let num_tasks = 10_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    black_box(1);
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    black_box(1);
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_spawn_efficiency_1k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Spawn Efficiency (1k tasks)");
+    let num_tasks = 1_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
                                 async move {
                                     black_box(1);
                                 },
@@ -87,7 +234,7 @@ fn bench_spawn_efficiency(c: &mut Criterion) {
 fn bench_yield_efficiency(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(8)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -98,11 +245,11 @@ fn bench_yield_efficiency(c: &mut Criterion) {
     group.bench_function("Dtact", |b| {
         b.iter(|| {
             let handle =
-                dtact::api::SpawnBuilder::<dtact::SameThreadNoFloat>::new().spawn(async move {
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
                     let mut handles = Vec::with_capacity(num_tasks);
                     for _ in 0..num_tasks {
                         handles.push(
-                            dtact::api::SpawnBuilder::<dtact::SameThreadNoFloat>::new().spawn(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
                                 async move {
                                     for _ in 0..num_yields {
                                         yield_now().await;
@@ -140,15 +287,243 @@ fn bench_yield_efficiency(c: &mut Criterion) {
 
 /// Benchmark 3: Work Deflection (Load Balancing)
 /// One task spawns many workers to test how well the scheduler distributes load.
-fn bench_deflection_efficiency(c: &mut Criterion) {
+fn bench_deflection_efficiency_10m(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(8)
+        .worker_threads(4)
         .build()
         .unwrap();
 
-    let mut group = c.benchmark_group("Work Deflection (Hot Core)");
+    let mut group = c.benchmark_group("Work Deflection (Hot Core; 10M tasks)");
     let num_tasks = 10_000_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    let mut sum = 0;
+                                    for i in 0..100 {
+                                        sum += black_box(i);
+                                    }
+                                    sum
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    let mut sum = 0;
+                    for i in 0..100 {
+                        sum += black_box(i);
+                    }
+                    sum
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_deflection_efficiency_1m(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Work Deflection (Hot Core; 1M tasks)");
+    let num_tasks = 1_000_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    let mut sum = 0;
+                                    for i in 0..100 {
+                                        sum += black_box(i);
+                                    }
+                                    sum
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    let mut sum = 0;
+                    for i in 0..100 {
+                        sum += black_box(i);
+                    }
+                    sum
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_deflection_efficiency_100k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Work Deflection (Hot Core; 100k tasks)");
+    let num_tasks = 100_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    let mut sum = 0;
+                                    for i in 0..100 {
+                                        sum += black_box(i);
+                                    }
+                                    sum
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    let mut sum = 0;
+                    for i in 0..100 {
+                        sum += black_box(i);
+                    }
+                    sum
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_deflection_efficiency_10k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Work Deflection (Hot Core; 10k tasks)");
+    let num_tasks = 10_000;
+
+    group.bench_function("Dtact", |b| {
+        b.iter(|| {
+            let handle =
+                dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(async move {
+                    let mut handles = Vec::with_capacity(num_tasks);
+                    for _ in 0..num_tasks {
+                        handles.push(
+                            dtact::api::SpawnBuilder::<dtact::CrossThreadNoFloat>::new().spawn(
+                                async move {
+                                    let mut sum = 0;
+                                    for i in 0..100 {
+                                        sum += black_box(i);
+                                    }
+                                    sum
+                                },
+                            ),
+                        );
+                    }
+                    for h in handles {
+                        dtact::c_ffi::dtact_await(h);
+                    }
+                });
+            dtact::c_ffi::dtact_await(handle);
+        });
+    });
+
+    group.bench_function("Tokio", |b| {
+        b.to_async(&tokio_rt).iter(|| async {
+            let mut handles = Vec::with_capacity(num_tasks);
+            for _ in 0..num_tasks {
+                handles.push(tokio::spawn(async move {
+                    let mut sum = 0;
+                    for i in 0..100 {
+                        sum += black_box(i);
+                    }
+                    sum
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_deflection_efficiency_1k(c: &mut Criterion) {
+    init_dtact();
+    let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .build()
+        .unwrap();
+
+    let mut group = c.benchmark_group("Work Deflection (Hot Core; 1k tasks)");
+    let num_tasks = 1_000;
 
     group.bench_function("Dtact", |b| {
         b.iter(|| {
@@ -199,8 +574,15 @@ fn bench_deflection_efficiency(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_spawn_efficiency,
+    bench_spawn_efficiency_1m,
+    bench_spawn_efficiency_100k,
+    bench_spawn_efficiency_10k,
+    bench_spawn_efficiency_1k,
     bench_yield_efficiency,
-    bench_deflection_efficiency
+    bench_deflection_efficiency_10m,
+    bench_deflection_efficiency_1m,
+    bench_deflection_efficiency_100k,
+    bench_deflection_efficiency_10k,
+    bench_deflection_efficiency_1k
 );
 criterion_main!(benches);
