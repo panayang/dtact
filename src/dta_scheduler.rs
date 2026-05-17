@@ -926,7 +926,13 @@ impl DtaScheduler {
     /// (`is_busy() == true`), diverts the task there immediately to relieve
     /// back-pressure on the per-core mailboxes (the soft-back-pressure feedback).
     #[inline(always)]
-    pub fn enqueue_deflect(&self, source_core: usize, flow_id: u64, task: TaskIndex) -> bool {
+    pub fn enqueue_deflect(
+        &self,
+        source_core: usize,
+        flow_id: u64,
+        task: TaskIndex,
+        affinity: crate::api::topology::Affinity,
+    ) -> bool {
         // Soft back-pressure: if the warehouse already holds chunks, every new
         // task goes straight in. Single Relaxed load on an isolated cache line —
         // the cold path is the `#[cold]` divert_to_warehouse, branch-predicted
@@ -947,9 +953,18 @@ impl DtaScheduler {
         #[allow(clippy::cast_possible_truncation)]
         let h2 = ((flow_id >> 3) & 7 | 1) as usize;
 
-        let target = if self.topology == TopologyMode::Global {
+        let target = if self.topology == TopologyMode::Global
+            && matches!(affinity, crate::api::topology::Affinity::Any)
+        {
             (source + h1 + h2) % n
+        } else if matches!(affinity, crate::api::topology::Affinity::SameNUMA) {
+            let numa_base = source & !63;
+            let local_idx = source & 63;
+            let deflect_target = (local_idx + h1 + h2) % 64;
+            let target_idx = local_idx ^ ((local_idx ^ deflect_target) & deflect_mask);
+            (numa_base | target_idx) % n
         } else {
+            // SameCCX or default (which pins deflection to local CCX under P2PMesh)
             let ccx_base = source & !7;
             let local_idx = source & 7;
             let deflect_target = (local_idx + h1 + h2) & 7;

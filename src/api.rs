@@ -284,6 +284,7 @@ impl<S: ContextSwitcher> SpawnBuilder<S> {
             } else {
                 TopologyMode::Pinned
             };
+            (*ctx_ptr).affinity = self.affinity;
             (*ctx_ptr).origin_core = current_core as u16;
             (*ctx_ptr).fiber_index = ctx_id;
             (*ctx_ptr).switch_fn = S::SWITCH_FN;

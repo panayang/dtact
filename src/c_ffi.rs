@@ -21,6 +21,8 @@ pub struct dtact_config_t {
     pub fiber_capacity: u32,
     /// Stack size per fiber in bytes. Set to 0 for default (512KB).
     pub stack_size: u32,
+    /// NUMA node for memory allocation. Set to 0 for default (local node).
+    pub numa: u32,
 }
 
 /// Advanced options for spawning a fiber from C FFI.
@@ -57,6 +59,7 @@ pub const extern "C" fn dtact_default_config() -> dtact_config_t {
         topology_mode: 0,  // P2PMesh
         fiber_capacity: 0, // Default 4096
         stack_size: 0,     // Default 512KB
+        numa: 0,           // Default local node
     }
 }
 
@@ -101,8 +104,13 @@ pub unsafe extern "C" fn dtact_init(cfg: *const dtact_config_t) -> *mut c_void {
 
     crate::GLOBAL_RUNTIME.get_or_init(|| {
         let scheduler = crate::dta_scheduler::DtaScheduler::new(workers, topology);
-        let pool = crate::memory_management::ContextPool::new(capacity, stack_size, safety, 0)
-            .expect("DTA-V3 FFI Initialization Failed");
+        let pool = crate::memory_management::ContextPool::new(
+            capacity,
+            stack_size,
+            safety,
+            cfg.numa as usize,
+        )
+        .expect("DTA-V3 FFI Initialization Failed");
         crate::Runtime {
             scheduler,
             pool,
@@ -172,6 +180,9 @@ pub unsafe extern "C" fn dtact_fiber_launch(
         (*ctx_ptr).origin_core = current_core as u16;
         (*ctx_ptr).fiber_index = ctx_id;
         (*ctx_ptr).switch_fn = crate::context_switch::switch_context_cross_thread_float;
+        (*ctx_ptr).kind = crate::common_types::WorkloadKind::Compute;
+        (*ctx_ptr).mode = crate::common_types::TopologyMode::P2PMesh;
+        (*ctx_ptr).affinity = crate::api::topology::Affinity::SameCore;
 
         (*ctx_ptr).closure_ptr = arg.cast::<()>();
         (*ctx_ptr).trampoline =
@@ -252,8 +263,9 @@ pub unsafe extern "C" fn dtact_fiber_launch(
 }
 
 /// Launches a C-function as a DTA-V3 stackful Fiber with advanced options.
-#[unsafe(no_mangle)]
 #[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::too_many_lines)]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtact_fiber_launch_ext(
     func: extern "C" fn(*mut c_void),
     arg: *mut c_void,
@@ -287,6 +299,26 @@ pub unsafe extern "C" fn dtact_fiber_launch_ext(
             2 => crate::context_switch::switch_context_same_thread_float,
             3 => crate::context_switch::switch_context_same_thread_no_float,
             _ => crate::context_switch::switch_context_cross_thread_float,
+        };
+
+        let allow_deflection = opts.switcher == 0 || opts.switcher == 1;
+        (*ctx_ptr).mode = if allow_deflection {
+            let topology = crate::GLOBAL_RUNTIME.get().unwrap().scheduler.topology;
+            match topology {
+                crate::dta_scheduler::TopologyMode::Global => {
+                    crate::common_types::TopologyMode::Global
+                }
+                _ => crate::common_types::TopologyMode::P2PMesh,
+            }
+        } else {
+            crate::common_types::TopologyMode::Pinned
+        };
+
+        (*ctx_ptr).affinity = match opts.affinity {
+            1 => crate::api::topology::Affinity::SameCCX,
+            2 => crate::api::topology::Affinity::SameNUMA,
+            3 => crate::api::topology::Affinity::Any,
+            _ => crate::api::topology::Affinity::SameCore,
         };
 
         (*ctx_ptr).kind = match opts.kind {
@@ -405,6 +437,9 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup(
         (*ctx_ptr).origin_core = current_core as u16;
         (*ctx_ptr).fiber_index = ctx_id;
         (*ctx_ptr).switch_fn = crate::context_switch::switch_context_cross_thread_float;
+        (*ctx_ptr).kind = crate::common_types::WorkloadKind::Compute;
+        (*ctx_ptr).mode = crate::common_types::TopologyMode::P2PMesh;
+        (*ctx_ptr).affinity = crate::api::topology::Affinity::SameCore;
 
         (*ctx_ptr).closure_ptr = arg.cast::<()>();
         (*ctx_ptr).trampoline =
@@ -522,6 +557,26 @@ pub unsafe extern "C" fn dtact_fiber_launch_with_cleanup_ext(
             2 => crate::context_switch::switch_context_same_thread_float,
             3 => crate::context_switch::switch_context_same_thread_no_float,
             _ => crate::context_switch::switch_context_cross_thread_float,
+        };
+
+        let allow_deflection = opts.switcher == 0 || opts.switcher == 1;
+        (*ctx_ptr).mode = if allow_deflection {
+            let topology = crate::GLOBAL_RUNTIME.get().unwrap().scheduler.topology;
+            match topology {
+                crate::dta_scheduler::TopologyMode::Global => {
+                    crate::common_types::TopologyMode::Global
+                }
+                _ => crate::common_types::TopologyMode::P2PMesh,
+            }
+        } else {
+            crate::common_types::TopologyMode::Pinned
+        };
+
+        (*ctx_ptr).affinity = match opts.affinity {
+            1 => crate::api::topology::Affinity::SameCCX,
+            2 => crate::api::topology::Affinity::SameNUMA,
+            3 => crate::api::topology::Affinity::Any,
+            _ => crate::api::topology::Affinity::SameCore,
         };
 
         (*ctx_ptr).kind = match opts.kind {

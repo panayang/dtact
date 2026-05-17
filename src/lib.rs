@@ -229,21 +229,31 @@ pub(crate) fn wake_fiber(origin_core: usize, fiber_index: u32) {
         .expect("dtact::wake_fiber() invoked before Runtime Initialization");
     let pool = &runtime.pool;
     let ctx_ptr = pool.get_context_ptr(fiber_index);
-    // Non-atomic read: `mode` is set once at spawn and never mutated.
     let pinned = matches!(
         unsafe { (*ctx_ptr).mode },
         common_types::TopologyMode::Pinned
+    ) || matches!(
+        unsafe { (*ctx_ptr).affinity },
+        crate::api::topology::Affinity::SameCore
     );
+    let affinity = unsafe { (*ctx_ptr).affinity };
 
     loop {
         // Two-entry function-pointer table — branchless after the bool is computed.
-        type EnqFn = fn(&dta_scheduler::DtaScheduler, usize, u64, u32) -> bool;
+        type EnqFn = fn(
+            &dta_scheduler::DtaScheduler,
+            usize,
+            u64,
+            u32,
+            crate::api::topology::Affinity,
+        ) -> bool;
         const ENQUEUE_FNS: [EnqFn; 2] = [enqueue_deflect_shim, enqueue_pinned_shim];
         let success = ENQUEUE_FNS[usize::from(pinned)](
             &runtime.scheduler,
             origin_core,
             u64::from(fiber_index),
             fiber_index,
+            affinity,
         );
         if success {
             return;
@@ -264,6 +274,7 @@ fn enqueue_pinned_shim(
     target: usize,
     _flow: u64,
     task: u32,
+    _affinity: crate::api::topology::Affinity,
 ) -> bool {
     sched.enqueue_pinned(target, task)
 }
@@ -274,8 +285,9 @@ fn enqueue_deflect_shim(
     source: usize,
     flow: u64,
     task: u32,
+    affinity: crate::api::topology::Affinity,
 ) -> bool {
-    sched.enqueue_deflect(source, flow, task)
+    sched.enqueue_deflect(source, flow, task, affinity)
 }
 
 /// State-guarded fiber wake by pool index.

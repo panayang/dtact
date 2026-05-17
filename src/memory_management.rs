@@ -105,6 +105,8 @@ pub struct FiberContext {
     pub kind: WorkloadKind,
     /// Metadata: Topology Strategy.
     pub mode: TopologyMode,
+    /// Metadata: Core Affinity Hint for wake routing.
+    pub affinity: crate::api::topology::Affinity,
     /// Statistics: Adaptive Spin Budget.
     pub adaptive_spin_count: u32,
     /// Statistics: Recent Spin Failures.
@@ -147,6 +149,7 @@ impl FiberContext {
             state: AtomicU32::new(FiberStatus::Initial as u32),
             kind: WorkloadKind::Compute,
             mode: TopologyMode::P2PMesh,
+            affinity: crate::api::topology::Affinity::SameCore,
             origin_core: 0,
             fiber_index: 0,
             waiter_thread_id: AtomicU64::new(0),

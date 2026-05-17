@@ -88,17 +88,23 @@ struct dtact_config_t {
      Stack size per fiber in bytes. Set to 0 for default (512KB).
      */
     uint32_t mStackSize;
+    /*
+     NUMA node for memory allocation. Set to 0 for default (local node).
+     */
+    uint32_t mNuma;
 
     dtact_config_t(uint32_t const& aMWorkers,
                    uint8_t const& aMSafetyLevel,
                    uint8_t const& aMTopologyMode,
                    uint32_t const& aMFiberCapacity,
-                   uint32_t const& aMStackSize)
+                   uint32_t const& aMStackSize,
+                   uint32_t const& aMNuma)
       : mWorkers(aMWorkers),
         mSafetyLevel(aMSafetyLevel),
         mTopologyMode(aMTopologyMode),
         mFiberCapacity(aMFiberCapacity),
-        mStackSize(aMStackSize)
+        mStackSize(aMStackSize),
+        mNuma(aMNuma)
     {}
 
     bool operator==(const dtact_config_t& aOther) const {
@@ -106,14 +112,16 @@ struct dtact_config_t {
                mSafetyLevel == aOther.mSafetyLevel &&
                mTopologyMode == aOther.mTopologyMode &&
                mFiberCapacity == aOther.mFiberCapacity &&
-               mStackSize == aOther.mStackSize;
+               mStackSize == aOther.mStackSize &&
+               mNuma == aOther.mNuma;
     }
     bool operator!=(const dtact_config_t& aOther) const {
         return mWorkers != aOther.mWorkers ||
                mSafetyLevel != aOther.mSafetyLevel ||
                mTopologyMode != aOther.mTopologyMode ||
                mFiberCapacity != aOther.mFiberCapacity ||
-               mStackSize != aOther.mStackSize;
+               mStackSize != aOther.mStackSize ||
+               mNuma != aOther.mNuma;
     }
 };
 
