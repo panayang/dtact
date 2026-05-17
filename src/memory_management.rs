@@ -209,7 +209,7 @@ impl ContextPool {
     /// or if hardware protection cannot be applied to the guard pages.
     #[allow(clippy::cast_possible_truncation)]
     #[allow(clippy::cast_sign_loss)]
-    #[inline]
+    #[inline(never)]
     pub fn new(
         capacity: u32,
         stack_size: usize,

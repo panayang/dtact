@@ -53,9 +53,9 @@ pub struct TaskChunk {
     /// Number of times this chunk has been re-routed. Bounded by `max_hops`.
     pub hop_count: u8,
     /// Reserved for future use; keeps the chunk 4-byte aligned for the trailing pad.
-    pub _flags: u8,
+    _flags: u8,
     /// Padding so the chunk's stride is 144 B and cleanly slices into cache lines.
-    pub _pad: [u8; 12],
+    _pad: [u8; 12],
 }
 
 impl Default for TaskChunk {
@@ -406,29 +406,33 @@ impl Warehouse {
         loop {
             let slot = unsafe { &*base.add(pos & WAREHOUSE_MASK) };
             let seq = slot.seq.load(Ordering::Acquire);
-            let diff = (seq as isize).wrapping_sub(pos as isize);
-            if diff == 0 {
-                // Slot is ready for our position — try to claim by bumping tail.
-                if self
-                    .tail
-                    .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    unsafe { (*slot.chunk.get()).write(chunk) };
-                    // Publish: subsequent Acquire on seq by the consumer
-                    // synchronises with this Release and sees the payload.
-                    slot.seq.store(pos + 1, Ordering::Release);
-                    self.backlog.fetch_add(1, Ordering::Release);
-                    return Ok(());
+            let diff = (seq.cast_signed()).wrapping_sub(pos.cast_signed());
+            match diff.cmp(&0) {
+                std::cmp::Ordering::Equal => {
+                    // Slot is ready for our position — try to claim by bumping tail.
+                    if self
+                        .tail
+                        .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        unsafe { (*slot.chunk.get()).write(chunk) };
+                        // Publish: subsequent Acquire on seq by the consumer
+                        // synchronises with this Release and sees the payload.
+                        slot.seq.store(pos + 1, Ordering::Release);
+                        self.backlog.fetch_add(1, Ordering::Release);
+                        return Ok(());
+                    }
+                    // CAS lost — reload tail and try again.
+                    pos = self.tail.load(Ordering::Relaxed);
                 }
-                // CAS lost — reload tail and try again.
-                pos = self.tail.load(Ordering::Relaxed);
-            } else if diff < 0 {
-                // Slot is from a previous round still being drained — full.
-                return Err(chunk);
-            } else {
-                // Another producer beat us to this position — reload.
-                pos = self.tail.load(Ordering::Relaxed);
+                std::cmp::Ordering::Less => {
+                    // Slot is from a previous round still being drained — full.
+                    return Err(chunk);
+                }
+                std::cmp::Ordering::Greater => {
+                    // Another producer beat us to this position — reload.
+                    pos = self.tail.load(Ordering::Relaxed);
+                }
             }
         }
     }
@@ -444,25 +448,29 @@ impl Warehouse {
         loop {
             let slot = unsafe { &*base.add(pos & WAREHOUSE_MASK) };
             let seq = slot.seq.load(Ordering::Acquire);
-            let diff = (seq as isize).wrapping_sub((pos + 1) as isize);
-            if diff == 0 {
-                // Slot has a published chunk for our position — try to claim.
-                if self
-                    .head
-                    .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    let chunk = unsafe { (*slot.chunk.get()).assume_init_read() };
-                    // Release the slot for the next round (pos + CAPACITY).
-                    slot.seq.store(pos + WAREHOUSE_CAPACITY, Ordering::Release);
-                    self.backlog.fetch_sub(1, Ordering::Release);
-                    return Some(chunk);
+            let diff = (seq.cast_signed()).wrapping_sub((pos + 1).cast_signed());
+            match diff.cmp(&0) {
+                std::cmp::Ordering::Equal => {
+                    // Slot has a published chunk for our position — try to claim.
+                    if self
+                        .head
+                        .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        let chunk = unsafe { (*slot.chunk.get()).assume_init_read() };
+                        // Release the slot for the next round (pos + CAPACITY).
+                        slot.seq.store(pos + WAREHOUSE_CAPACITY, Ordering::Release);
+                        self.backlog.fetch_sub(1, Ordering::Release);
+                        return Some(chunk);
+                    }
+                    pos = self.head.load(Ordering::Relaxed);
                 }
-                pos = self.head.load(Ordering::Relaxed);
-            } else if diff < 0 {
-                return None;
-            } else {
-                pos = self.head.load(Ordering::Relaxed);
+                std::cmp::Ordering::Less => {
+                    return None;
+                }
+                std::cmp::Ordering::Greater => {
+                    pos = self.head.load(Ordering::Relaxed);
+                }
             }
         }
     }
@@ -1028,7 +1036,7 @@ impl DtaScheduler {
     #[inline(never)]
     fn park_in_warehouse(&self, chunk: TaskChunk) -> bool {
         assert!(
-            !self.warehouse.push(chunk).is_err(),
+            self.warehouse.push(chunk).is_ok(),
             "DTA-V3: warehouse overflow — backlog exceeds {} chunks ({} tasks). \
              Application has scheduled tasks faster than the runtime can drain, \
              beyond emergency back-pressure capacity.",
@@ -1101,6 +1109,7 @@ impl DtaScheduler {
     /// hot routes (cases 01 and 11 → `push_local`) collapse to a single indirect
     /// call after the index is computed.
     #[inline(always)]
+    #[allow(clippy::items_after_statements)]
     fn route_chunk(&self, worker: &mut Worker, current_core: usize, chunk: TaskChunk) {
         let local_len = worker.local_queue_len();
         let space_ok = (local_len + chunk.count as usize) <= LOCAL_QUEUE_HIGH_WATERMARK;
@@ -1123,6 +1132,7 @@ impl DtaScheduler {
     }
 
     #[inline(always)]
+    #[allow(clippy::unused_self)]
     fn route_local(&self, worker: &mut Worker, _core: usize, chunk: TaskChunk) {
         worker.push_batch(&chunk);
     }
@@ -1154,6 +1164,7 @@ impl DtaScheduler {
     /// Periodically polls local queues, mailboxes, and external queues for work.
     /// Supports cooperative shutdown via the provided atomic flag.
     #[inline]
+    #[allow(clippy::too_many_lines)]
     pub fn run_worker_static(
         scheduler: &Self,
         current_core: usize,

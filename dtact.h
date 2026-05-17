@@ -28,7 +28,7 @@ namespace dtact {
 
 /*
  High-water mark above which a worker stops accepting new chunks and routes
- them onward. Set at 7/8 capacity so push_batch has guaranteed headroom for
+ them onward. Set at 7/8 capacity so `push_batch` has guaranteed headroom for
  one full chunk on top.
  */
 #define LOCAL_QUEUE_HIGH_WATERMARK (LOCAL_QUEUE_CAPACITY - (LOCAL_QUEUE_CAPACITY / 8))
