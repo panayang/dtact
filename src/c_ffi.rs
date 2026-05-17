@@ -17,12 +17,12 @@ pub struct dtact_config_t {
     pub safety_level: u8,
     /// Topology mode (0: `P2PMesh`, 1: Global).
     pub topology_mode: u8,
+    /// NUMA node for memory allocation. Set to 0 for default (local node).
+    pub numa: u8,
     /// Maximum number of concurrent fibers. Set to 0 for default (4096).
     pub fiber_capacity: u32,
     /// Stack size per fiber in bytes. Set to 0 for default (512KB).
     pub stack_size: u32,
-    /// NUMA node for memory allocation. Set to 0 for default (local node).
-    pub numa: u32,
 }
 
 /// Advanced options for spawning a fiber from C FFI.
@@ -57,9 +57,9 @@ pub const extern "C" fn dtact_default_config() -> dtact_config_t {
         workers: 0,        // Auto-detect
         safety_level: 1,   // Safety1
         topology_mode: 0,  // P2PMesh
+        numa: 0,           // Default local node
         fiber_capacity: 0, // Default 4096
         stack_size: 0,     // Default 512KB
-        numa: 0,           // Default local node
     }
 }
 

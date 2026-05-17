@@ -98,8 +98,6 @@ pub use crate::api::yield_to as yield_to_async;
 pub use crate::c_ffi::dtact_await;
 /// Handle for C-compatible FFI.
 pub use crate::c_ffi::dtact_handle_t;
-/// Runtime error types.
-pub use crate::errors::DtactError;
 /// Wait for a fiber to complete.
 #[doc(hidden)]
 pub use crate::future_bridge::wait;
@@ -129,9 +127,6 @@ pub mod context_switch;
 /// Distributed P2P Mesh scheduler implementation.
 #[doc(hidden)]
 pub mod dta_scheduler;
-/// Standard error types for the Dtact runtime.
-#[doc(hidden)]
-pub mod errors;
 /// Bridge for polling futures within a `FiberContext`.
 #[doc(hidden)]
 pub mod future_bridge;

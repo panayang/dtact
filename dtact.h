@@ -82,6 +82,10 @@ typedef struct dtact_config_t {
      */
     uint8_t mTopologyMode;
     /*
+     NUMA node for memory allocation. Set to 0 for default (local node).
+     */
+    uint8_t mNuma;
+    /*
      Maximum number of concurrent fibers. Set to 0 for default (4096).
      */
     uint32_t mFiberCapacity;
@@ -89,10 +93,6 @@ typedef struct dtact_config_t {
      Stack size per fiber in bytes. Set to 0 for default (512KB).
      */
     uint32_t mStackSize;
-    /*
-     NUMA node for memory allocation. Set to 0 for default (local node).
-     */
-    uint32_t mNuma;
 } dtact_config_t;
 
 /*

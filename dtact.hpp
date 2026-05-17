@@ -81,6 +81,10 @@ struct dtact_config_t {
      */
     uint8_t mTopologyMode;
     /*
+     NUMA node for memory allocation. Set to 0 for default (local node).
+     */
+    uint8_t mNuma;
+    /*
      Maximum number of concurrent fibers. Set to 0 for default (4096).
      */
     uint32_t mFiberCapacity;
@@ -88,40 +92,36 @@ struct dtact_config_t {
      Stack size per fiber in bytes. Set to 0 for default (512KB).
      */
     uint32_t mStackSize;
-    /*
-     NUMA node for memory allocation. Set to 0 for default (local node).
-     */
-    uint32_t mNuma;
 
     dtact_config_t(uint32_t const& aMWorkers,
                    uint8_t const& aMSafetyLevel,
                    uint8_t const& aMTopologyMode,
+                   uint8_t const& aMNuma,
                    uint32_t const& aMFiberCapacity,
-                   uint32_t const& aMStackSize,
-                   uint32_t const& aMNuma)
+                   uint32_t const& aMStackSize)
       : mWorkers(aMWorkers),
         mSafetyLevel(aMSafetyLevel),
         mTopologyMode(aMTopologyMode),
+        mNuma(aMNuma),
         mFiberCapacity(aMFiberCapacity),
-        mStackSize(aMStackSize),
-        mNuma(aMNuma)
+        mStackSize(aMStackSize)
     {}
 
     bool operator==(const dtact_config_t& aOther) const {
         return mWorkers == aOther.mWorkers &&
                mSafetyLevel == aOther.mSafetyLevel &&
                mTopologyMode == aOther.mTopologyMode &&
+               mNuma == aOther.mNuma &&
                mFiberCapacity == aOther.mFiberCapacity &&
-               mStackSize == aOther.mStackSize &&
-               mNuma == aOther.mNuma;
+               mStackSize == aOther.mStackSize;
     }
     bool operator!=(const dtact_config_t& aOther) const {
         return mWorkers != aOther.mWorkers ||
                mSafetyLevel != aOther.mSafetyLevel ||
                mTopologyMode != aOther.mTopologyMode ||
+               mNuma != aOther.mNuma ||
                mFiberCapacity != aOther.mFiberCapacity ||
-               mStackSize != aOther.mStackSize ||
-               mNuma != aOther.mNuma;
+               mStackSize != aOther.mStackSize;
     }
 };
 
