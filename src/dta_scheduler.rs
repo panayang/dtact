@@ -978,6 +978,15 @@ impl DtaScheduler {
     /// After `max_hops` attempts, the chunk is parked in the warehouse.
     /// Returns `true` once the chunk has been deposited somewhere (mailbox or
     /// warehouse); only a true warehouse overflow panics.
+    ///
+    /// CRITICAL: `mailboxes[producer][producer]` (the self-column) is **never**
+    /// polled — `Worker::polling_order` filters out `i == my_core`. Anything
+    /// pushed there is permanently stranded. Both the entry target and every
+    /// hopped target must therefore be coerced away from `producer` whenever
+    /// the producer is itself a worker. The bare `(producer + 1 + 7·hop) % n`
+    /// formula lands on `producer` for any `n` that divides `1 + 7·hop`
+    /// (e.g. n=4 at `hop_count=1` → offset 8 → self), so we bump by one in that
+    /// case instead of relying on the formula alone.
     fn push_chunk_with_hop(
         &self,
         producer: usize,
@@ -986,6 +995,9 @@ impl DtaScheduler {
     ) -> bool {
         let n = self.workers.len();
         let mut target = initial_target;
+        if producer < n && n > 1 && target == producer {
+            target = (target + 1) % n;
+        }
         loop {
             let result = if producer < n {
                 // Producer is a worker — use SPSC matrix.
@@ -1010,9 +1022,15 @@ impl DtaScheduler {
                         return self.park_in_warehouse(*chunk);
                     }
                     chunk.hop_count = chunk.hop_count.saturating_add(1);
-                    // Spread re-deflection across peers: +1 ensures != self,
-                    // ×7 is coprime to small worker counts for uniform spread.
+                    // ×7 is coprime to small worker counts for uniform spread,
+                    // but for some (n, hop_count) pairs `(1 + 7·hop_count) % n`
+                    // is 0, which would land us on the self-column. Bump past
+                    // it. Host producers skip the check — external_mailboxes
+                    // are indexed by target only and don't have a self-sink.
                     target = (producer.wrapping_add(1 + chunk.hop_count as usize * 7)) % n;
+                    if producer < n && n > 1 && target == producer {
+                        target = (target + 1) % n;
+                    }
                 }
             }
         }
@@ -1146,11 +1164,19 @@ impl DtaScheduler {
 
     /// This code path utilizes branchless programming to eliminate mispredictions.
     /// Mark with `#[inline(always)]` to ensure the compiler optimizes the call site performance.
+    ///
+    /// Like `push_chunk_with_hop`, the target must never equal `current_core`:
+    /// `mailboxes[current_core][current_core]` is never polled (the self-column
+    /// is filtered out of `Worker::polling_order`), so anything routed there
+    /// is permanently stranded.
     #[inline(always)]
     fn route_deflect(&self, _worker: &mut Worker, current_core: usize, mut chunk: TaskChunk) {
         chunk.hop_count = chunk.hop_count.saturating_add(1);
         let n = self.workers.len();
-        let target = (current_core.wrapping_add(1 + chunk.hop_count as usize * 7)) % n;
+        let mut target = (current_core.wrapping_add(1 + chunk.hop_count as usize * 7)) % n;
+        if n > 1 && target == current_core {
+            target = (target + 1) % n;
+        }
         match self.mailboxes[current_core][target].push(chunk) {
             Ok(()) => self.signal_worker(target),
             Err(c) => {

@@ -704,8 +704,9 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
 
         if current_gen != handle_gen
             || status == crate::memory_management::FiberStatus::Finished as u32
+            || status == crate::memory_management::FiberStatus::Initial as u32
         {
-            // Target already finished (or context recycled), break
+            // Target already finished (or context recycled/freed), break
             break;
         }
 
@@ -739,6 +740,7 @@ pub extern "C" fn dtact_await(handle: dtact_handle_t) {
 
         if current_gen_post != handle_gen
             || status_post == crate::memory_management::FiberStatus::Finished as u32
+            || status_post == crate::memory_management::FiberStatus::Initial as u32
         {
             // Completed between check and waiter registration
             unsafe {

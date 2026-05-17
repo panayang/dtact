@@ -77,18 +77,23 @@ extern crate alloc;
 pub use crate::api::config::set_deflection_threshold;
 /// Spawn a fiber with a custom stack size.
 pub use crate::api::fiber::spawn_with_stack;
+/// Yield execution to another fiber.
+pub use crate::api::fiber::yield_to as yield_to_sync;
 /// Hardware-level demotion API.
 #[cfg(feature = "hw-acceleration")]
 pub use crate::api::hw::cldemote;
 /// Hardware-level interrupt signaling API.
 #[cfg(feature = "hw-acceleration")]
-pub use crate::api::hw::uintr_signal;
+pub use crate::api::hw::uintr_signal as uintr;
 /// Spawn a fiber.
 pub use crate::api::spawn;
 /// Yield execution to the scheduler.
 pub use crate::api::yield_now;
 /// Yield execution to another fiber.
+#[doc(hidden)]
 pub use crate::api::yield_to;
+/// Yield execution to another fiber.
+pub use crate::api::yield_to as yield_to_async;
 /// Wait for a fiber to complete.
 pub use crate::c_ffi::dtact_await;
 /// Handle for C-compatible FFI.
@@ -96,7 +101,10 @@ pub use crate::c_ffi::dtact_handle_t;
 /// Runtime error types.
 pub use crate::errors::DtactError;
 /// Wait for a fiber to complete.
+#[doc(hidden)]
 pub use crate::future_bridge::wait;
+/// Wait for a fiber to complete.
+pub use crate::future_bridge::wait as dtact_wait;
 /// Attribute macro for initializing the Dtact runtime.
 pub use dtact_macros::dtact_init;
 /// Attribute macro for exporting an async function to C.
@@ -270,16 +278,59 @@ fn enqueue_deflect_shim(
     sched.enqueue_deflect(source, flow, task)
 }
 
+/// State-guarded fiber wake by pool index.
+///
+/// Atomically swaps the target's `state` to `Notified`. Only enqueues
+/// the fiber via [`wake_fiber`] when the prior state was `Yielded`
+/// (the fiber is parked off-CPU and needs a worker to re-dispatch it).
+///
+/// For `Running` / `Suspending` the fiber is currently held by a worker;
+/// that worker's `dispatch_loop` observes `Notified` after `switch_fn`
+/// returns and re-pushes via `push_local`. Skipping the redundant
+/// external enqueue is what prevents a double-dispatch race on
+/// deflectable (`CrossThread`) fibers — without the guard, the same
+/// fiber index could land in two workers' queues, both call `switch_fn`
+/// into the same stack concurrently, clobber `executor_regs`, and leave
+/// one worker permanently stranded inside the fiber.
+///
+/// Mirrors the protocol applied inline by
+/// [`future_bridge::wake_by_ref_impl`](crate::future_bridge); the only
+/// difference is that this helper resolves the context via the pool
+/// because callers only hold the index, not a `&FiberContext`.
+///
+/// MUST NOT be used by spawn paths, which intentionally publish a new
+/// fiber while it is still in `Running` and rely on the unconditional
+/// `wake_fiber` enqueue for first dispatch.
+#[inline(always)]
+pub(crate) fn awaken_fiber_by_index(target_worker: usize, fiber_index: u32) {
+    let runtime = GLOBAL_RUNTIME
+        .get()
+        .expect("dtact::awaken_fiber_by_index() invoked before Runtime Initialization");
+    let ctx_ptr = runtime.pool.get_context_ptr(fiber_index);
+    let prev = unsafe {
+        (*ctx_ptr).state.swap(
+            crate::memory_management::FiberStatus::Notified as u32,
+            core::sync::atomic::Ordering::AcqRel,
+        )
+    };
+    if prev == crate::memory_management::FiberStatus::Yielded as u32 {
+        wake_fiber(target_worker, fiber_index);
+    }
+}
+
 /// Resolves an opaque waiter handle (encoded by `dtact_await`'s fiber path)
-/// and re-enqueues the waiting fiber via the standard `wake_fiber` routing.
-#[inline]
+/// and conditionally re-enqueues the waiting fiber via the state-guarded
+/// wake protocol — see [`awaken_fiber_by_index`] for the protocol details
+/// and the double-dispatch race it prevents.
+#[inline(always)]
 pub(crate) fn wake_waiter_handle(packed: u64) {
     let waiter = packed & !(1u64 << 63);
     let fiber_index = (waiter & 0xFFFF_FFFF) as u32;
-    // The stored `target_worker` is the worker the waiter was running on when
-    // it suspended — but for routing we always go through wake_fiber, which
-    // reads the fiber's *own* mode-stored origin_core, the source of truth.
-    wake_fiber((waiter >> 32) as usize, fiber_index);
+    // The stored `target_worker` is the worker the waiter was running on
+    // when it suspended — used as the routing source for `enqueue_deflect`
+    // if we actually need to enqueue.
+    let target_worker = (waiter >> 32) as usize;
+    awaken_fiber_by_index(target_worker, fiber_index);
 }
 
 /// Backpressure handler: cooperative yield if inside a fiber, brief

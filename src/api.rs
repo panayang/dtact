@@ -808,7 +808,9 @@ pub mod fiber {
         let target_ctx_id = (handle.0 & 0xFFFF_FFFF) as u32;
         let target_core_id = ((handle.0 >> 32) & 0xFFFF) as usize;
 
-        crate::wake_fiber(target_core_id, target_ctx_id);
+        // State-guarded wake — see `awaken_fiber_by_index` for the protocol
+        // and the double-dispatch race it prevents on deflectable fibers.
+        crate::awaken_fiber_by_index(target_core_id, target_ctx_id);
 
         unsafe {
             let ctx = &mut *ctx_ptr;
@@ -894,7 +896,9 @@ pub async fn yield_to(handle: dtact_handle_t) {
     let handle_val = handle.0 & !(1 << 63); // Strip sentinel bit
     let target_ctx_id = (handle_val & 0xFFFF_FFFF) as u32;
     let target_core_id = ((handle_val >> 32) & 0xFFFF) as usize;
-    crate::wake_fiber(target_core_id, target_ctx_id);
+    // State-guarded wake — see `awaken_fiber_by_index` for the protocol
+    // and the double-dispatch race it prevents on deflectable fibers.
+    crate::awaken_fiber_by_index(target_core_id, target_ctx_id);
     yield_now().await;
 }
 
