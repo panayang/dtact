@@ -1,6 +1,5 @@
 [workspace]
 members = ["dtact-macros", "fuzz", "web"]
-exclude = ["web"]
 
 [package]
 name = "dtact"
@@ -68,6 +67,10 @@ debug = false
 debug-assertions = false
 overflow-checks = false
 incremental = true
+
+[profile.release.package.dtact-web]
+opt-level = 'z'
+codegen-units = 1
 
 [profile.dev]
 lto = false
