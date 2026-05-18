@@ -100,40 +100,79 @@ impl<T> HugeBuffer<T> {
     /// Panics if the OS fails to allocate memory.
     #[inline(never)]
     #[must_use]
+    #[allow(clippy::useless_let_if_seq)]
     pub fn new() -> Self {
         let size_bytes = core::mem::size_of::<T>();
 
         #[cfg(unix)]
         unsafe {
-            let mut flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
+            let base_flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS;
+
+            // Tier 1: explicit MAP_HUGETLB for ≥ 2 MiB regions when the kernel
+            // has hugepages reserved.  Cheapest TLB footprint when available.
+            let mut ptr = libc::MAP_FAILED;
             if size_bytes >= 2 * 1024 * 1024 {
-                flags |= 0x40000; // MAP_HUGETLB
-            }
-            let ptr = libc::mmap(
-                core::ptr::null_mut(),
-                size_bytes,
-                libc::PROT_READ | libc::PROT_WRITE,
-                flags,
-                -1,
-                0,
-            );
-            if ptr == libc::MAP_FAILED {
-                // Fallback to aligned std::alloc to prevent mmap exhaustion on QEMU/aarch64
-                let layout = std::alloc::Layout::from_size_align(size_bytes, 64).unwrap();
-                let alloc_ptr = std::alloc::alloc_zeroed(layout);
-                assert!(!alloc_ptr.is_null(), "HugeBuffer std::alloc failed");
-                Self {
-                    ptr: alloc_ptr.cast::<T>(),
+                ptr = libc::mmap(
+                    core::ptr::null_mut(),
                     size_bytes,
-                    is_mmap: false,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    base_flags | 0x40000, // MAP_HUGETLB
+                    -1,
+                    0,
+                );
+            }
+
+            // Tier 2: plain anonymous mmap.  Kernel can still back this with
+            // transparent huge pages (khugepaged / MADV_HUGEPAGE).  This tier
+            // was previously absent — the old code jumped straight from a
+            // failed HUGETLB to std::alloc::alloc_zeroed, which on Linux uses
+            // glibc's malloc heuristics rather than a clean page-aligned
+            // mapping and so cannot get a THP backing.
+            if ptr == libc::MAP_FAILED {
+                ptr = libc::mmap(
+                    core::ptr::null_mut(),
+                    size_bytes,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    base_flags,
+                    -1,
+                    0,
+                );
+            }
+
+            if ptr != libc::MAP_FAILED {
+                // Anonymous mmap pages are already zero-filled by the kernel
+                // (MAP_ANONYMOUS contract).  The previous explicit
+                // `write_bytes(ptr, 0, size_bytes)` was a pure 9 MB-class
+                // memset per mailbox at init time — for an 8-worker runtime
+                // this added ~600 MB of wasted write traffic against caches
+                // and the memory bus.  Skip it: rely on the kernel's
+                // guarantee.
+
+                // On Linux, hint the kernel that this region wants huge-page
+                // backing if standard mapping fell through (Tier 2).  Best-
+                // effort: ignore the return value.
+                #[cfg(target_os = "linux")]
+                {
+                    const MADV_HUGEPAGE: libc::c_int = 14;
+                    libc::madvise(ptr, size_bytes, MADV_HUGEPAGE);
                 }
-            } else {
-                core::ptr::write_bytes(ptr, 0, size_bytes);
-                Self {
+
+                return Self {
                     ptr: ptr.cast::<T>(),
                     size_bytes,
                     is_mmap: true,
-                }
+                };
+            }
+
+            // Tier 3: aligned std::alloc fallback for environments where mmap
+            // itself is exhausted (rare — QEMU/aarch64, sandboxed containers).
+            let layout = std::alloc::Layout::from_size_align(size_bytes, 64).unwrap();
+            let alloc_ptr = std::alloc::alloc_zeroed(layout);
+            assert!(!alloc_ptr.is_null(), "HugeBuffer std::alloc failed");
+            Self {
+                ptr: alloc_ptr.cast::<T>(),
+                size_bytes,
+                is_mmap: false,
             }
         }
 

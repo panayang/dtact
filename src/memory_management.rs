@@ -412,6 +412,16 @@ impl ContextPool {
                     return Err("mmap failed");
                 }
 
+                // Linux-only: hint THP for the arena if we fell back to plain
+                // mmap (Safety1/2 or HUGETLB-exhausted Safety0).  Reduces TLB
+                // misses across the lifetime of the runtime.  Safety0 with
+                // successful HUGETLB already gets explicit huge pages.
+                #[cfg(target_os = "linux")]
+                {
+                    const MADV_HUGEPAGE: libc::c_int = 14;
+                    libc::madvise(ptr, size, MADV_HUGEPAGE);
+                }
+
                 #[cfg(target_os = "linux")]
                 if numa > 0 {
                     let mask: usize = 1 << (numa % 64);
@@ -529,13 +539,12 @@ impl ContextPool {
     pub fn free_context(&self, index: u32) {
         let ctx = self.get_context_ptr(index);
 
-        // Reset state to Initial and notify any waiting host threads
+        // Reset state to Initial and notify any waiting host threads.
         unsafe {
             (*ctx)
                 .state
                 .store(FiberStatus::Initial as u32, Ordering::Release);
             (*ctx).generation.fetch_add(1, Ordering::AcqRel);
-            crate::utils::futex_wake(&raw const (*ctx).state);
         };
 
         let mut head = self.free_head.load(Ordering::Relaxed);

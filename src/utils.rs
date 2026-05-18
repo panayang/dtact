@@ -114,6 +114,7 @@ pub fn get_tick_with_cpu() -> (u64, u32) {
 }
 
 /// Wakes all OS threads currently blocked on the specified address.
+/// This is only intended to be used for waking up C threads that are sleeping in the scheduler.
 ///
 /// # Safety
 /// * `addr` must point to a valid `AtomicU32`.
