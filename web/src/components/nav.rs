@@ -5,21 +5,25 @@ use leptos::prelude::*;
 pub fn Nav() -> impl IntoView {
     let page = expect_context::<RwSignal<Page>>();
     let theme = expect_context::<RwSignal<Theme>>();
-
     let go = move |p: Page| move |_: web_sys::MouseEvent| page.set(p);
-
-    let logo_color = move || match theme.get() {
-        Theme::Mist => "color:#23193a;-webkit-text-fill-color:#23193a",
-        Theme::Dusk => "color:#ece5ff;-webkit-text-fill-color:#ece5ff",
-    };
 
     view! {
         <nav class="nav">
             <div class="nav-inner">
-                <button class="nav-logo" style=logo_color on:click=go(Page::Home)>
+                <div
+                    class="nav-logo"
+                    role="button"
+                    tabindex="0"
+                    on:click=go(Page::Home)
+                    on:keydown=move |e: web_sys::KeyboardEvent| {
+                        if e.key() == "Enter" || e.key() == " " {
+                            page.set(Page::Home);
+                        }
+                    }
+                >
                     <span class="nav-logo-dot"></span>
                     "dtact"
-                </button>
+                </div>
 
                 <div class="nav-links">
                     <button

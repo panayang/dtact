@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="mist">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!-- Apply saved theme before CSS renders to prevent flash -->
+  <script>(function(){var t=localStorage.getItem('dtact_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="dtact — Non-preemptive stackful coroutine runtime with P2P mesh scheduling, lock-free arena allocation, and hardware-precise assembly context switchers for x86_64, AArch64, and RISC-V." />
   <meta name="keywords" content="dtact, coroutine, fiber, runtime, scheduler, Rust, async, stackful, context-switch, NUMA, x86_64, AArch64" />

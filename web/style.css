@@ -531,27 +531,38 @@ select.field-input {
 .nav-inner {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   width: 100%;
   max-width: 1180px;
   margin: 0 auto;
   padding: 0 clamp(1rem, 4vw, 2.5rem);
-  gap: 2rem;
+  gap: 1.5rem;
 }
 .nav-logo {
   font-family: 'Plus Jakarta Sans', sans-serif;
   font-weight: 800;
   font-size: 1.25rem;
   letter-spacing: -0.03em;
-  color: var(--c-text-1);
-  -webkit-text-fill-color: var(--c-text-1);
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   transition: opacity 0.2s;
+  color: var(--c-text-1);
+  -webkit-text-fill-color: var(--c-text-1);
+  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .nav-logo:hover { opacity: 0.75; }
+.nav-logo:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-xs);
+}
+
 .nav-logo-dot {
   width: 8px;
   height: 8px;
@@ -568,6 +579,9 @@ select.field-input {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
 }
 .nav-link {
   padding: 0.4em 0.9em;
@@ -587,7 +601,7 @@ select.field-input {
   background: var(--c-accent-soft);
   font-weight: 600;
 }
-.nav-right { display: flex; align-items: center; gap: 0.75rem; }
+.nav-right { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; margin-left: auto; }
 
 /* Theme toggle pill */
 .theme-pill {
