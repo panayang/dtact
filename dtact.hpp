@@ -41,7 +41,7 @@ constexpr static const size_t LOCAL_QUEUE_MASK = (LOCAL_QUEUE_CAPACITY - 1);
  Capacity of a single core-to-core mailbox.
  MUST be a power of two for bitwise masking.
  */
-constexpr static const size_t MAILBOX_CAPACITY = 1024;
+constexpr static const size_t MAILBOX_CAPACITY = 65536;
 
 /*
  Mask for mailbox index wrap-around.

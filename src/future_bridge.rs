@@ -124,11 +124,25 @@ pub fn wait_pinned<F: Future>(mut fut_pinned: Pin<&mut F>) -> F::Output {
     let mut cx = Context::from_waker(&waker);
 
     loop {
-        // Clear any previous Notified or Suspending state. Using swap ensures a full
-        // memory barrier and allows us to acknowledge that a wake event occurred.
-        let _ = ctx
-            .state
-            .swap(FiberStatus::Running as u32, Ordering::AcqRel);
+        // Transition to Running, clearing any pending Notified state.
+        //
+        // Use a load(Acquire) + conditional store(Release) instead of an
+        // unconditional swap(AcqRel). In the common case — re-entering the
+        // loop after a failed suspension CAS where state is already Running —
+        // this saves a costly atomic RMW (compare-and-swap on x86, ldar+stlr
+        // pair on AArch64) and replaces it with a single Acquire load.
+        //
+        // Safety: Only this fiber writes Running; wakers only write Notified.
+        // The Acquire load synchronises with the waker's AcqRel swap so all
+        // external writes before the waker fired are visible before we poll.
+        // If a waker fires after our load but before the poll, the suspension
+        // CAS below will fail (state == Notified), and we loop back to poll
+        // again — correct by the standard Rust Future contract.
+        let cur_state = ctx.state.load(Ordering::Acquire);
+        if cur_state != FiberStatus::Running as u32 {
+            ctx.state
+                .store(FiberStatus::Running as u32, Ordering::Release);
+        }
 
         match fut_pinned.as_mut().poll(&mut cx) {
             Poll::Ready(output) => {

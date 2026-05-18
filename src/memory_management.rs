@@ -196,6 +196,12 @@ pub struct ContextPool {
     capacity: u32,
     safety: SafetyLevel,
     free_head: AtomicU64,
+    /// Byte offset from slot start to the `FiberContext` within each slot.
+    ///
+    /// Pre-computed once as `slot_size − ceil_align(size_of::<FiberContext>(), 64)`
+    /// and cached here so `get_context_ptr` — called on every fiber dispatch —
+    /// never re-executes the alignment arithmetic at runtime.
+    pub context_end_offset: usize,
 }
 
 unsafe impl Send for ContextPool {}
@@ -228,11 +234,15 @@ impl ContextPool {
             info.dwPageSize as usize
         };
 
-        let align = 64;
-        let context_sz = (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
+        #[allow(clippy::items_after_statements)]
+        const ALIGN: usize = 64;
+        let context_sz = (core::mem::size_of::<FiberContext>() + ALIGN - 1) & !(ALIGN - 1);
 
         // Slot Size: [ Stack Space | 8KB Read Buffer | FiberContext ]
         let slot_size = (stack_size + context_sz + 8192 + page_size - 1) & !(page_size - 1);
+        // Pre-compute the intra-slot byte offset to FiberContext, eliminating
+        // a subtract on every get_context_ptr call in the dispatch hot path.
+        let context_end_offset = slot_size - context_sz;
 
         let total_size = match safety {
             SafetyLevel::Safety0 => capacity as usize * slot_size,
@@ -270,6 +280,7 @@ impl ContextPool {
                 capacity,
                 safety,
                 free_head: AtomicU64::new(0),
+                context_end_offset,
             };
 
             for i in 0..capacity {
@@ -458,29 +469,27 @@ impl ContextPool {
     }
 
     /// Returns a raw pointer to a context based on its index.
+    ///
+    /// Hot path: called once per fiber dispatch. `context_end_offset` is
+    /// pre-computed at pool construction so this function executes a single
+    /// multiply + two adds + one pointer cast — no alignment arithmetic.
+    ///
+    /// Guard-page offsets use the page size captured at construction so the
+    /// layout is always consistent with `new()`, even on platforms where the
+    /// OS page size is not 4 KiB (e.g. macOS arm64 = 16 KiB).
     #[inline(always)]
     pub const fn get_context_ptr(&self, index: u32) -> *mut FiberContext {
-        // Must match the page size used during construction (queried via
-        // `sysconf`) — otherwise guard-page offsets are wrong on platforms
-        // with non-4 KiB pages (e.g. macOS arm64 = 16 KiB), and resolved
-        // pointers land inside a PROT_NONE guard → SIGBUS on access.
-        let page_size = self.page_size;
-        let align = 64;
-        let context_sz = (core::mem::size_of::<FiberContext>() + align - 1) & !(align - 1);
-
         let guard_offset = match self.safety {
             SafetyLevel::Safety0 => 0,
-            SafetyLevel::Safety1 => (index as usize / 32 + 1) * page_size,
-            SafetyLevel::Safety2 => (index as usize + 1) * page_size,
+            // `>> 5` == `/ 32` for the group index; avoids a division on every call.
+            SafetyLevel::Safety1 => ((index as usize >> 5) + 1) * self.page_size,
+            SafetyLevel::Safety2 => (index as usize + 1) * self.page_size,
         };
 
         unsafe {
-            let slot_base = self
-                .base_ptr
-                .add(index as usize * self.slot_size + guard_offset);
             #[allow(clippy::cast_ptr_alignment)]
-            slot_base
-                .add(self.slot_size - context_sz)
+            self.base_ptr
+                .add(index as usize * self.slot_size + guard_offset + self.context_end_offset)
                 .cast::<FiberContext>()
         }
     }

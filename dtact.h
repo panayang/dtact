@@ -42,7 +42,7 @@ namespace dtact {
  Capacity of a single core-to-core mailbox.
  MUST be a power of two for bitwise masking.
  */
-#define MAILBOX_CAPACITY 1024
+#define MAILBOX_CAPACITY 65536
 
 /*
  Mask for mailbox index wrap-around.

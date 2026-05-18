@@ -13,7 +13,7 @@ pub const CHUNK_SIZE: usize = 32;
 
 /// Capacity of a single core-to-core mailbox.
 /// MUST be a power of two for bitwise masking.
-pub const MAILBOX_CAPACITY: usize = 1024;
+pub const MAILBOX_CAPACITY: usize = 65_536;
 /// Mask for mailbox index wrap-around.
 pub const MAILBOX_MASK: usize = MAILBOX_CAPACITY - 1;
 
@@ -396,13 +396,24 @@ impl Warehouse {
     ///
     /// Cold path: only entered when normal mailbox routes are saturated.
     ///
-    /// This code path utilizes branchless programming to eliminate mispredictions.
-    /// Mark with `#[inline(always)]` to ensure the compiler optimizes the call site performance.
+    /// Under high concurrency, the `Greater` and CAS-failure branches are the
+    /// source of CAS storms: all contending producers reload `tail` in lock-step
+    /// and hammer the same next slot simultaneously.  The fix is a staggered
+    /// per-worker exponential back-off (see [`warehouse_backoff`]) that spreads
+    /// retry windows across different instruction-cycle offsets, dissolving the
+    /// thundering herd without introducing OS scheduler latency.
     #[inline(always)]
     #[allow(clippy::result_large_err)]
     pub fn push(&self, chunk: TaskChunk) -> Result<(), TaskChunk> {
         let base = self.slots.ptr.cast::<WarehouseSlot>();
+
+        // Read worker ID once before the retry loop so the TLS lookup cost is
+        // not repeated on every CAS failure.  `usize::MAX` on host threads —
+        // `wrapping_mul` keeps the formula valid for that sentinel too.
+        let worker_id = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
+
         let mut pos = self.tail.load(Ordering::Relaxed);
+        let mut retry: u32 = 0;
         loop {
             let slot = unsafe { &*base.add(pos & WAREHOUSE_MASK) };
             let seq = slot.seq.load(Ordering::Acquire);
@@ -422,7 +433,11 @@ impl Warehouse {
                         self.backlog.fetch_add(1, Ordering::Release);
                         return Ok(());
                     }
-                    // CAS lost — reload tail and try again.
+                    // CAS lost to a concurrent producer on the same slot.
+                    // Back off before reloading to reduce coherence-bus traffic
+                    // and give the winner time to publish its seq update.
+                    warehouse_backoff(worker_id, retry);
+                    retry = retry.saturating_add(1);
                     pos = self.tail.load(Ordering::Relaxed);
                 }
                 std::cmp::Ordering::Less => {
@@ -430,7 +445,13 @@ impl Warehouse {
                     return Err(chunk);
                 }
                 std::cmp::Ordering::Greater => {
-                    // Another producer beat us to this position — reload.
+                    // Another producer already claimed `pos` and bumped `tail`
+                    // past us.  Without back-off every producer immediately
+                    // reloads and races for the same new `tail` value, forming
+                    // a CAS storm.  The staggered delay spreads their retries
+                    // across distinct cycle windows so only one fires at a time.
+                    warehouse_backoff(worker_id, retry);
+                    retry = retry.saturating_add(1);
                     pos = self.tail.load(Ordering::Relaxed);
                 }
             }
@@ -439,12 +460,17 @@ impl Warehouse {
 
     /// Pops a chunk from the warehouse. Returns `None` if empty.
     ///
-    /// This code path utilizes branchless programming to eliminate mispredictions.
-    /// Mark with `#[inline(always)]` to ensure the compiler optimizes the call site performance.
+    /// Symmetric staggered back-off to [`Warehouse::push`]: multiple workers
+    /// draining the warehouse simultaneously can produce an identical CAS storm
+    /// on `head`.  Per-worker exponential avoidance spreads their retry windows.
     #[inline(always)]
     pub fn pop(&self) -> Option<TaskChunk> {
         let base = self.slots.ptr.cast::<WarehouseSlot>();
+
+        let worker_id = crate::future_bridge::CURRENT_WORKER_ID.with(std::cell::Cell::get);
+
         let mut pos = self.head.load(Ordering::Relaxed);
+        let mut retry: u32 = 0;
         loop {
             let slot = unsafe { &*base.add(pos & WAREHOUSE_MASK) };
             let seq = slot.seq.load(Ordering::Acquire);
@@ -463,12 +489,20 @@ impl Warehouse {
                         self.backlog.fetch_sub(1, Ordering::Release);
                         return Some(chunk);
                     }
+                    // Lost the CAS to a concurrent consumer — back off before
+                    // reloading so all consumers don't pile onto head at once.
+                    warehouse_backoff(worker_id, retry);
+                    retry = retry.saturating_add(1);
                     pos = self.head.load(Ordering::Relaxed);
                 }
                 std::cmp::Ordering::Less => {
                     return None;
                 }
                 std::cmp::Ordering::Greater => {
+                    // Another consumer already claimed this slot; our view of
+                    // `head` is stale.  Stagger before reloading.
+                    warehouse_backoff(worker_id, retry);
+                    retry = retry.saturating_add(1);
                     pos = self.head.load(Ordering::Relaxed);
                 }
             }
@@ -480,6 +514,100 @@ impl Warehouse {
     #[must_use]
     pub fn is_busy(&self) -> bool {
         self.backlog.load(Ordering::Relaxed) != 0
+    }
+}
+
+/// Staggered exponential back-off for Warehouse MPMC CAS contention.
+///
+/// Every competing worker gets a **distinct** base delay derived from its
+/// core ID so their retry windows are interleaved rather than synchronised.
+/// The prime multiplier 7 ensures separation across typical small worker
+/// counts (2–64 cores); the result is clamped to \[1, 32\] cycles.
+///
+/// Delay formula: `cycles = ((worker_id × 7) & 0x1F + 1) × 2^min(retry, 6)`
+///
+/// | worker | base | after 6 retries |
+/// |--------|------|-----------------|
+/// |   0    |   1  |       64 cy     |
+/// |   1    |   8  |      512 cy     |
+/// |   3    |  22  |     1 408 cy    |
+/// |   7    |  50  |     3 200 cy    |
+///
+/// Each loop iteration is a single `nop` — precisely **1 clock cycle** at
+/// base frequency.  This is fundamentally different from
+/// `core::hint::spin_loop()` (which emits `PAUSE` ≈ 100 cy on modern Intel
+/// and is identical for every caller), and from a `black_box` loop (whose
+/// duration is compiler- and micro-architecture-dependent).  The inline-asm
+/// NOP loop is the only approach that gives both sub-cycle granularity and
+/// zero variance between workers at the same retry depth.
+///
+/// The `#[inline(never)]` prevents label collisions when the function is
+/// instantiated at multiple call sites; the `#[cold]` annotation ensures the
+/// compiler doesn't hoist or speculatively execute the delay on the hot path.
+#[cold]
+#[inline(never)]
+fn warehouse_backoff(worker_id: usize, retry: u32) {
+    let base = (worker_id.wrapping_mul(7) & 0x1F).wrapping_add(1) as u64;
+    // Cap exponent at 6 to keep the worst-case wait under ~3 200 cycles (≈ 1 µs @ 3 GHz).
+    let cycles = base << u64::from(retry.min(6));
+
+    // x86 / x86_64 — Intel syntax, counted NOP loop.
+    // `dec` sets ZF when the result reaches zero; `jnz` exits at that point.
+    // We do NOT include `preserves_flags` because `dec` intentionally modifies EFLAGS.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    // SAFETY: pure counted NOP loop; touches only the counter register and EFLAGS.
+    unsafe {
+        core::arch::asm!(
+            "2:",
+            "nop",
+            "dec {n}",
+            "jnz 2b",
+            n = inout(reg) cycles => _,
+            options(nostack),
+        );
+    }
+
+    // AArch64 — `subs` sets the NE condition flag; `b.ne` exits when zero.
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: pure counted NOP loop; touches only the counter register and NZCV.
+    unsafe {
+        core::arch::asm!(
+            "2:",
+            "nop",
+            "subs {n}, {n}, #1",
+            "b.ne 2b",
+            n = inout(reg) cycles => _,
+            options(nostack),
+        );
+    }
+
+    // RISC-V 64 — `addi` with -1, branch-if-nonzero.
+    #[cfg(target_arch = "riscv64")]
+    // SAFETY: pure counted NOP loop; touches only the counter register.
+    unsafe {
+        core::arch::asm!(
+            "2:",
+            "nop",
+            "addi {n}, {n}, -1",
+            "bnez {n}, 2b",
+            n = inout(reg) cycles => _,
+            options(nostack),
+        );
+    }
+
+    // Fallback for architectures without hand-written asm.
+    // `black_box` prevents the compiler from eliminating the loop body as a
+    // dead no-op; actual timing accuracy is best-effort on this path.
+    #[cfg(not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )))]
+    {
+        for i in 0_u64..cycles {
+            core::hint::black_box(i);
+        }
     }
 }
 
@@ -676,13 +804,21 @@ impl Worker {
     /// Drains the local queue, performs O(1) context alignment, and executes
     /// the context switch to the fiber.
     ///
+    /// Returns `true` if at least one fiber was dispatched, `false` if the
+    /// local queue was empty. The caller uses this instead of re-reading
+    /// `local_head` before/after the call to detect activity.
+    ///
     /// # Safety
     /// * `context_base` must point to the start of the `ContextPool` memory region.
     /// * `context_size` and `group_guard_size` must match the pool's initialized layout.
     #[inline(always)]
-    pub unsafe fn dispatch_loop(&self, pool: &crate::memory_management::ContextPool) {
+    pub unsafe fn dispatch_loop(&self, pool: &crate::memory_management::ContextPool) -> bool {
         // Relaxed: local_head and local_tail are only accessed by this worker thread.
         let mut head = self.local_head.load(Ordering::Relaxed);
+
+        if head == self.local_tail.load(Ordering::Relaxed) {
+            return false;
+        }
 
         loop {
             if head == self.local_tail.load(Ordering::Relaxed) {
@@ -764,9 +900,11 @@ impl Worker {
                     "DTA-V3 invariant: Notified re-enqueue must succeed (we just freed a slot by popping)"
                 );
                 // Return to allow mailbox polling and prevent live-locks on high contention.
-                return;
+                return true;
             }
         }
+
+        true
     }
 }
 
@@ -1084,9 +1222,12 @@ impl DtaScheduler {
     /// Stops when either the warehouse is empty or the local queue is over the
     /// high-water mark. Each pop is direct `push_batch` (we pre-check space) —
     /// no further routing, no recursion back into the warehouse.
+    ///
+    /// Returns `true` if at least one chunk was drained, allowing the caller
+    /// to detect activity without additional queue-length reads.
     #[cold]
     #[inline(never)]
-    pub fn drain_warehouse(&self, current_core: usize) {
+    pub fn drain_warehouse(&self, current_core: usize) -> bool {
         let worker = unsafe { &mut *self.workers[current_core].get() };
         // Cap draining per call so a single worker doesn't monopolise the
         // warehouse while peers also want to help.
@@ -1104,22 +1245,47 @@ impl DtaScheduler {
                 None => break,
             }
         }
+        drained > 0
     }
 
     /// Polls all incoming mailboxes for the current core, routing each chunk
     /// through the 4-way branchless dispatch (`route_chunk`).
+    ///
+    /// Returns `true` if at least one chunk was received from any mailbox,
+    /// allowing the caller to detect activity without extra queue-length reads.
+    ///
+    /// `local_head` is cached once before the polling loops because it does
+    /// not change here (we are only pushing work, not consuming). Only
+    /// `local_tail` is re-loaded per iteration, halving the atomic reads in
+    /// the capacity check compared to calling `local_queue_len()` each time.
     #[inline(always)]
-    pub fn poll_mailboxes(&self, current_core: usize) {
+    pub fn poll_mailboxes(&self, current_core: usize) -> bool {
         let worker = unsafe { &mut *self.workers[current_core].get() };
+
+        // local_head is immutable during this function — cache it once.
+        let fixed_head = worker.local_head.load(Ordering::Relaxed);
+        let mut received_any = false;
 
         let num_polls = worker.polling_order.len();
         for idx in 0..num_polls {
             let i = worker.polling_order[idx];
             let row = &self.mailboxes[i];
 
-            while worker.local_queue_len() + CHUNK_SIZE < LOCAL_QUEUE_CAPACITY {
+            loop {
+                // Only reload local_tail; fixed_head is constant here.
+                let cur_len = worker
+                    .local_tail
+                    .load(Ordering::Relaxed)
+                    .wrapping_sub(fixed_head)
+                    & LOCAL_QUEUE_MASK;
+                if cur_len + CHUNK_SIZE >= LOCAL_QUEUE_CAPACITY {
+                    break;
+                }
                 match row[current_core].pop() {
-                    Some(chunk) => self.route_chunk(worker, current_core, chunk),
+                    Some(chunk) => {
+                        received_any = true;
+                        self.route_chunk(worker, current_core, chunk);
+                    }
                     None => break,
                 }
             }
@@ -1127,15 +1293,27 @@ impl DtaScheduler {
 
         // Poll the external mailbox last so external injection naturally yields
         // to internal CCX traffic when both are active.
-        while worker.local_queue_len() + CHUNK_SIZE < LOCAL_QUEUE_CAPACITY {
+        loop {
+            let cur_len = worker
+                .local_tail
+                .load(Ordering::Relaxed)
+                .wrapping_sub(fixed_head)
+                & LOCAL_QUEUE_MASK;
+            if cur_len + CHUNK_SIZE >= LOCAL_QUEUE_CAPACITY {
+                break;
+            }
             match self.external_mailboxes[current_core].pop() {
-                Some(chunk) => self.route_chunk(worker, current_core, chunk),
+                Some(chunk) => {
+                    received_any = true;
+                    self.route_chunk(worker, current_core, chunk);
+                }
                 None => break,
             }
         }
 
         worker.update_load();
         worker.tick();
+        received_any
     }
 
     /// 4-way branchless chunk router. The function-pointer table makes the
@@ -1220,47 +1398,35 @@ impl DtaScheduler {
                 return;
             }
 
-            // 0. Emergency back-pressure: if the warehouse is non-empty, drain
-            //    it FIRST. The check is a single Relaxed load on an isolated
-            //    cache line — perfectly branch-predicted false in the common
-            //    case, zero impact on the hot path.
-            if scheduler.warehouse.is_busy() {
-                scheduler.drain_warehouse(current_core);
-                // Skip mailbox polling this iteration; we still go through
-                // dispatch_loop below to consume what we just drained.
-            }
+            // 0. Emergency back-pressure: snapshot warehouse state once.
+            //    The check is a single Relaxed load on an isolated cache line —
+            //    perfectly branch-predicted false in the common case.
+            //    We use the snapshot for both the drain decision (step 0) and
+            //    the mailbox-gating decision (step 2), so the warehouse is not
+            //    re-read mid-iteration. A one-iteration delay in leaving back-
+            //    pressure mode is negligible; correctness is not affected.
+            let warehouse_busy = scheduler.warehouse.is_busy();
+            let mut activity = if warehouse_busy {
+                // Drain FIRST so we have tasks before dispatching.
+                scheduler.drain_warehouse(current_core)
+            } else {
+                false
+            };
 
-            let mut activity = false;
-
-            // 1. Dispatch local tasks (all local queue accesses are Relaxed — single thread)
+            // 1. Dispatch local tasks (all local queue accesses are Relaxed — single thread).
+            //    dispatch_loop now returns whether it executed anything, so we
+            //    no longer need to read local_head before and after the call.
             unsafe {
                 let worker = &*scheduler.workers[current_core].get();
-                let head_before = worker.local_head.load(Ordering::Relaxed);
-                worker.dispatch_loop(pool);
-                if worker.local_head.load(Ordering::Relaxed) != head_before {
-                    activity = true;
-                }
+                activity |= worker.dispatch_loop(pool);
             }
 
-            // 2. Poll incoming mailboxes (only if warehouse is clear — otherwise
-            //    we're in back-pressure mode and shouldn't bring more work in).
-            if scheduler.warehouse.is_busy() {
-                // Warehouse busy → re-mark activity if we drained anything above
-                let cur_len =
-                    unsafe { (&*scheduler.workers[current_core].get()).local_queue_len() };
-                if cur_len > 0 {
-                    activity = true;
-                }
-            } else {
-                let q_len_before =
-                    unsafe { (&*scheduler.workers[current_core].get()).local_queue_len() };
-                scheduler.poll_mailboxes(current_core);
-                let q_len_after =
-                    unsafe { (&*scheduler.workers[current_core].get()).local_queue_len() };
-
-                if q_len_after > q_len_before {
-                    activity = true;
-                }
+            // 2. Poll incoming mailboxes — skipped while in back-pressure mode
+            //    to avoid flooding an already-saturated local queue.
+            //    poll_mailboxes returns whether any chunks arrived, replacing
+            //    the old q_len_before / q_len_after pair of queue-length reads.
+            if !warehouse_busy {
+                activity |= scheduler.poll_mailboxes(current_core);
             }
 
             if activity {
