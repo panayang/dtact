@@ -396,12 +396,16 @@ impl ContextPool {
                 }
 
                 if ptr == libc::MAP_FAILED {
+                    // Add MAP_NORESERVE so virtual mapping succeeds under
+                    // strict overcommit accounting (containers, QEMU CI).
+                    // Physical pages are demand-faulted on first write —
+                    // exactly what we want for a sparsely-used context arena.
                     ptr = unsafe {
                         libc::mmap(
                             core::ptr::null_mut(),
                             size,
                             libc::PROT_READ | libc::PROT_WRITE,
-                            flags,
+                            flags | libc::MAP_NORESERVE,
                             -1,
                             0,
                         )

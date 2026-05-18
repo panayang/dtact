@@ -122,18 +122,34 @@ impl<T> HugeBuffer<T> {
                 );
             }
 
-            // Tier 2: plain anonymous mmap.  Kernel can still back this with
-            // transparent huge pages (khugepaged / MADV_HUGEPAGE).  This tier
-            // was previously absent — the old code jumped straight from a
-            // failed HUGETLB to std::alloc::alloc_zeroed, which on Linux uses
-            // glibc's malloc heuristics rather than a clean page-aligned
-            // mapping and so cannot get a THP backing.
+            // Tier 2: plain anonymous mmap with MAP_NORESERVE.  Kernel can
+            // still back this with transparent huge pages (khugepaged /
+            // MADV_HUGEPAGE).  This tier was previously absent — the old
+            // code jumped straight from a failed HUGETLB to
+            // std::alloc::alloc_zeroed, which on Linux uses glibc's malloc
+            // heuristics rather than a clean page-aligned mapping and so
+            // cannot get a THP backing.
+            //
+            // MAP_NORESERVE is critical for the large MAILBOX_CAPACITY:
+            // each mailbox reserves ~9 MiB of address space, and an
+            // 8-worker runtime asks for ~600 MiB total.  Without
+            // NORESERVE, kernels with overcommit_memory=2 (strict
+            // accounting — common in containers and on QEMU rootfses)
+            // refuse the mapping outright even though the runtime touches
+            // only a tiny fraction of each buffer at steady state.  With
+            // NORESERVE the virtual mapping always succeeds and physical
+            // pages are demand-faulted on first write only.  This is what
+            // makes the runtime viable under QEMU-emulated aarch64 CI.
             if ptr == libc::MAP_FAILED {
+                // libc::MAP_NORESERVE is defined on every Unix the crate
+                // supports (Linux/glibc/musl/android = 0x4000, BSDs = 0x40,
+                // OpenBSD = 0x0000/no-op) — the bit never collides with
+                // other map flags, so the OR is portable.
                 ptr = libc::mmap(
                     core::ptr::null_mut(),
                     size_bytes,
                     libc::PROT_READ | libc::PROT_WRITE,
-                    base_flags,
+                    base_flags | libc::MAP_NORESERVE,
                     -1,
                     0,
                 );
