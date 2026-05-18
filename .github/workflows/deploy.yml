@@ -1,0 +1,117 @@
+name: Deploy dtact to GitHub Pages
+
+# Merges the old benchmark.yml (Criterion + gh-pages) and the web deploy workflow.
+# - build-bench: runs cargo bench, uploads criterion report as artifact
+# - build-web:   trunk build --release, uploads dist/ as artifact
+# - deploy:      downloads both artifacts, nests bench/ under dist/, then
+#                pushes a single GitHub Pages deployment
+#                  /          → dtact web frontend
+#                  /bench/    → Criterion HTML report
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "logo.svg"
+      - "src/**"
+      - "benches/**"
+      - "dtact-macros/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # ── Criterion benchmarks ─────────────────────────────────────────────────
+  build-bench:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Criterion benchmarks
+        run: cargo bench
+
+      - name: Upload criterion report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: target/criterion
+          retention-days: 7
+
+  # ── Leptos/WASM web frontend ─────────────────────────────────────────────
+  build-web:
+    name: Build Web Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry + web build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+
+      - name: Install Trunk
+        run: cargo install trunk --locked
+
+      - name: Build Leptos app
+        working-directory: web
+        run: >
+          trunk build --release
+          --public-url "/${{ github.event.repository.name }}/"
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+
+  # ── Combine + deploy ─────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [build-bench, build-web]
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download web dist
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+
+      - name: Download Criterion report
+        uses: actions/download-artifact@v4
+        with:
+          name: criterion-report
+          path: dist/bench
+
+      - name: Upload combined Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

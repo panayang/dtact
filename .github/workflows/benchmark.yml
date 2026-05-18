@@ -1,16 +1,16 @@
-name: Benchmark
+name: Benchmark (PR check)
+
+# Runs benchmarks on PRs for regression detection.
+# Deployment of benchmark reports is handled by deploy.yml (push to main only).
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   benchmark:
@@ -26,14 +26,5 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Benchmarks
+      - name: Run Criterion benchmarks
         run: cargo bench
-
-      - name: Deploy Benchmark Report to GitHub Pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./target/criterion
-          destination_dir: docs/benchmark
-          keep_files: true
