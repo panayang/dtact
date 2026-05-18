@@ -17,7 +17,7 @@ For individual supporters, we accept voluntary contributions via **PayPal** only
 
 * **PayPal ID:** @panayang338  
 * **Mandatory Requirement:** You **MUST** include a note in the transaction with the following declarations:  
-  1. *"This is a voluntary donation/gift with no expectation of commercial return."* 2\. *"I certify that these funds are derived from legal sources."* 3\. *(Optional)* Any name, handle, or organization you wish to be credited with on our official "Sponsors" page.
+  1\. *"This is a voluntary donation/gift with no expectation of commercial return."* 2\. *"I certify that these funds are derived from legal sources."* 3\. *(Optional)* Any name, handle, or organization you wish to be credited with on our official "Sponsors" page.
 
 ### **3\. Corporate Sponsorship**
 
