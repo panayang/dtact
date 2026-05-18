@@ -2,11 +2,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dtact::yield_now;
 use std::hint::black_box;
 
-/// Initializes the Dtact runtime with 16 workers.
+/// Initializes the Dtact runtime with 4 workers.
 /// Called once before starting benchmarks.
 fn init_dtact() {
     let _ = dtact::GLOBAL_RUNTIME.get_or_init(|| {
-        let workers_count = 16;
+        let workers_count = 4;
         let scheduler = dtact::dta_scheduler::DtaScheduler::new(
             workers_count,
             dtact::dta_scheduler::TopologyMode::P2PMesh,
@@ -36,7 +36,7 @@ fn init_dtact() {
 fn bench_spawn_efficiency_1m(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -85,7 +85,7 @@ fn bench_spawn_efficiency_1m(c: &mut Criterion) {
 fn bench_spawn_efficiency_100k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -134,7 +134,7 @@ fn bench_spawn_efficiency_100k(c: &mut Criterion) {
 fn bench_spawn_efficiency_10k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -183,7 +183,7 @@ fn bench_spawn_efficiency_10k(c: &mut Criterion) {
 fn bench_spawn_efficiency_1k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -234,7 +234,7 @@ fn bench_spawn_efficiency_1k(c: &mut Criterion) {
 fn bench_yield_efficiency(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -290,7 +290,7 @@ fn bench_yield_efficiency(c: &mut Criterion) {
 fn bench_deflection_efficiency_10m(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -347,7 +347,7 @@ fn bench_deflection_efficiency_10m(c: &mut Criterion) {
 fn bench_deflection_efficiency_1m(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -404,7 +404,7 @@ fn bench_deflection_efficiency_1m(c: &mut Criterion) {
 fn bench_deflection_efficiency_100k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -461,7 +461,7 @@ fn bench_deflection_efficiency_100k(c: &mut Criterion) {
 fn bench_deflection_efficiency_10k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -518,7 +518,7 @@ fn bench_deflection_efficiency_10k(c: &mut Criterion) {
 fn bench_deflection_efficiency_1k(c: &mut Criterion) {
     init_dtact();
     let tokio_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(16)
+        .worker_threads(4)
         .build()
         .unwrap();
 
@@ -573,8 +573,13 @@ fn bench_deflection_efficiency_1k(c: &mut Criterion) {
 }
 
 criterion_group!(
-    benches,
-    bench_spawn_efficiency_1m,
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(std::time::Duration::from_secs(10))
+        .measurement_time(std::time::Duration::from_secs(600))
+        .sample_size(200)
+        .noise_threshold(0.05);
+    targets = bench_spawn_efficiency_1m,
     bench_spawn_efficiency_100k,
     bench_spawn_efficiency_10k,
     bench_spawn_efficiency_1k,
