@@ -79,7 +79,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 /// Switches execution context while preserving floating-point and Windows TIB state (x86_64).
 ///
 /// Complies with the Windows x64 ABI by preserving callee-saved registers
-/// (rbx, rbp, rdi, rsi, r12-r15), XMM6-XMM15, and the Thread Information Block (TIB).
+/// (rbx, rbp, rdi, rsi, r12-r15), XMM6-XMM15, MXCSR, and the Thread Information Block (TIB).
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
@@ -88,6 +88,8 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 /// # Safety
 /// * Updates `gs:[0x00]` (ExceptionList), `gs:[0x08]` (StackBase), `gs:[0x10]` (StackLimit),
 ///   and `gs:[0x1478]` (DeallocationStack) to reflect the new fiber stack.
+/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
+///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_float(
@@ -111,7 +113,6 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "mov [rcx + 48], r15",
         "mov [rcx + 64], rdi",
         "mov [rcx + 72], rsi",
-        // Save Windows TIB Stack Metadata
         "mov rax, gs:[0x08]",
         "mov [rcx + 80], rax",
         "mov rax, gs:[0x10]",
@@ -120,11 +121,30 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "mov [rcx + 96], rax",
         "mov rax, gs:[0x00]",
         "mov [rcx + 104], rax",
-        "fxsave [rcx + 128]",
+        "stmxcsr [rcx + 112]",
+        "movaps [rcx + 128], xmm6",
+        "movaps [rcx + 144], xmm7",
+        "movaps [rcx + 160], xmm8",
+        "movaps [rcx + 176], xmm9",
+        "movaps [rcx + 192], xmm10",
+        "movaps [rcx + 208], xmm11",
+        "movaps [rcx + 224], xmm12",
+        "movaps [rcx + 240], xmm13",
+        "movaps [rcx + 256], xmm14",
+        "movaps [rcx + 272], xmm15",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
-        "fxrstor [rdx + 128]",
-        // Restore Windows TIB Stack Metadata
+        "movaps xmm6,  [rdx + 128]",
+        "movaps xmm7,  [rdx + 144]",
+        "movaps xmm8,  [rdx + 160]",
+        "movaps xmm9,  [rdx + 176]",
+        "movaps xmm10, [rdx + 192]",
+        "movaps xmm11, [rdx + 208]",
+        "movaps xmm12, [rdx + 224]",
+        "movaps xmm13, [rdx + 240]",
+        "movaps xmm14, [rdx + 256]",
+        "movaps xmm15, [rdx + 272]",
+        "ldmxcsr [rdx + 112]",
         "mov rax, [rdx + 80]",
         "mov gs:[0x08], rax",
         "mov rax, [rdx + 88]",
@@ -564,14 +584,18 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     );
 }
 
-/// Switches execution context without preserving floating-point state (Windows x86_64).
+/// Switches execution context preserving XMM6-XMM15 and Windows TIB state (Windows x86_64).
 ///
-/// Preserves the Windows TIB/TEB metadata and callee-saved registers while
-/// skipping XMM/SIMD state for performance.
+/// Preserves the Windows TIB/TEB metadata, callee-saved GPRs, and XMM6-XMM15
+/// per the Windows x64 ABI. Skips x87/MXCSR state for performance.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
 /// * `restore` (rdx): Pointer to `Registers`.
+///
+/// # Safety
+/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
+///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_no_float(
@@ -601,8 +625,28 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
         "mov [rcx + 96], rax",
         "mov rax, gs:[0x00]",
         "mov [rcx + 104], rax",
+        "movaps [rcx + 128], xmm6",
+        "movaps [rcx + 144], xmm7",
+        "movaps [rcx + 160], xmm8",
+        "movaps [rcx + 176], xmm9",
+        "movaps [rcx + 192], xmm10",
+        "movaps [rcx + 208], xmm11",
+        "movaps [rcx + 224], xmm12",
+        "movaps [rcx + 240], xmm13",
+        "movaps [rcx + 256], xmm14",
+        "movaps [rcx + 272], xmm15",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
+        "movaps xmm6,  [rdx + 128]",
+        "movaps xmm7,  [rdx + 144]",
+        "movaps xmm8,  [rdx + 160]",
+        "movaps xmm9,  [rdx + 176]",
+        "movaps xmm10, [rdx + 192]",
+        "movaps xmm11, [rdx + 208]",
+        "movaps xmm12, [rdx + 224]",
+        "movaps xmm13, [rdx + 240]",
+        "movaps xmm14, [rdx + 256]",
+        "movaps xmm15, [rdx + 272]",
         "mov rax, [rdx + 80]",
         "mov gs:[0x08], rax",
         "mov rax, [rdx + 88]",
@@ -956,11 +1000,16 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
 
 /// Lightweight context switch for fibers pinned to the current thread (Windows x86_64).
 ///
-/// Skips TIB metadata preservation but maintains floating-point state.
+/// Skips TIB metadata preservation but preserves XMM6-XMM15 and MXCSR per the
+/// Windows x64 ABI callee-save requirements.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
 /// * `restore` (rdx): Pointer to `Registers`.
+///
+/// # Safety
+/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
+///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_float(
@@ -983,10 +1032,30 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "mov [rcx + 48], r15",
         "mov [rcx + 64], rdi",
         "mov [rcx + 72], rsi",
-        "fxsave [rcx + 128]",
+        "stmxcsr [rcx + 112]",
+        "movaps [rcx + 128], xmm6",
+        "movaps [rcx + 144], xmm7",
+        "movaps [rcx + 160], xmm8",
+        "movaps [rcx + 176], xmm9",
+        "movaps [rcx + 192], xmm10",
+        "movaps [rcx + 208], xmm11",
+        "movaps [rcx + 224], xmm12",
+        "movaps [rcx + 240], xmm13",
+        "movaps [rcx + 256], xmm14",
+        "movaps [rcx + 272], xmm15",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
-        "fxrstor [rdx + 128]",
+        "movaps xmm6,  [rdx + 128]",
+        "movaps xmm7,  [rdx + 144]",
+        "movaps xmm8,  [rdx + 160]",
+        "movaps xmm9,  [rdx + 176]",
+        "movaps xmm10, [rdx + 192]",
+        "movaps xmm11, [rdx + 208]",
+        "movaps xmm12, [rdx + 224]",
+        "movaps xmm13, [rdx + 240]",
+        "movaps xmm14, [rdx + 256]",
+        "movaps xmm15, [rdx + 272]",
+        "ldmxcsr [rdx + 112]",
         "mov rsp, [rdx + 0]",
         "mov rbp, [rdx + 8]",
         "mov rbx, [rdx + 16]",
@@ -1401,11 +1470,18 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     );
 }
 
-/// The fastest possible context switch: same-thread and no floating-point (Windows x86_64).
+/// Fastest same-thread context switch preserving XMM6-XMM15 (Windows x86_64).
+///
+/// Skips TIB metadata and MXCSR, but preserves XMM6-XMM15 per the Windows x64 ABI
+/// callee-save requirements.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
 /// * `restore` (rdx): Pointer to `Registers`.
+///
+/// # Safety
+/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
+///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_no_float(
@@ -1428,8 +1504,28 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "mov [rcx + 48], r15",
         "mov [rcx + 64], rdi",
         "mov [rcx + 72], rsi",
+        "movaps [rcx + 128], xmm6",
+        "movaps [rcx + 144], xmm7",
+        "movaps [rcx + 160], xmm8",
+        "movaps [rcx + 176], xmm9",
+        "movaps [rcx + 192], xmm10",
+        "movaps [rcx + 208], xmm11",
+        "movaps [rcx + 224], xmm12",
+        "movaps [rcx + 240], xmm13",
+        "movaps [rcx + 256], xmm14",
+        "movaps [rcx + 272], xmm15",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
+        "movaps xmm6,  [rdx + 128]",
+        "movaps xmm7,  [rdx + 144]",
+        "movaps xmm8,  [rdx + 160]",
+        "movaps xmm9,  [rdx + 176]",
+        "movaps xmm10, [rdx + 192]",
+        "movaps xmm11, [rdx + 208]",
+        "movaps xmm12, [rdx + 224]",
+        "movaps xmm13, [rdx + 240]",
+        "movaps xmm14, [rdx + 256]",
+        "movaps xmm15, [rdx + 272]",
         "mov rsp, [rdx + 0]",
         "mov rbp, [rdx + 8]",
         "mov rbx, [rdx + 16]",
