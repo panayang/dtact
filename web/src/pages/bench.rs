@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-const BENCH_URL: &str = "https://dtact.apich.org/bench/";
+const BENCH_URL: &str = "https://dtact.apich.org/bench/report/";
 const BENCH_COMMIT: &str = "13db4ff";
 const BENCH_COMMIT_FULL: &str = "13db4ff883b5675f063edeb3a5269c47f8b2c328";
 const BENCH_RUN_URL: &str =
