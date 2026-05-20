@@ -260,42 +260,124 @@ pub fn HomePage() -> impl IntoView {
 dtact = \"0.2\"
 
 # src/main.rs
-use dtact::prelude::*;
+use dtact::{dtact_await, dtact_init, spawn, task, yield_now};
 
-#[dtact_init(workers = 8, stack = \"512K\")]
-fn main() {
-    for i in 0..1000 {
-        spawn(async move {
-            // stackful fiber body
-            yield_now().await;
-            println!(\"fiber {i} done\");
-        });
+#[task(
+    priority = \"Normal\",
+    kind = \"Compute\",
+    stack = \"256K\",
+    capacity = \"1024\"
+)]
+async fn worker(id: u32) {
+    println!(\"[Fiber {}] Starting async work...\", id);
+
+    for i in 0..3 {
+        println!(\"[Fiber {}] Progress step {}\", id, i);
+        yield_now().await;
     }
+
+    println!(\"[Fiber {}] Task Finished.\", id);
+}
+
+#[dtact_init(workers = 4, stack = \"256K\", capacity = \"1024\")]
+fn main() {
+    println!(\"--- Dtact Rust Macro Example ---\");
+
+    let mut handles = vec![];
+    for i in 0..5 {
+        println!(\"[Master] Launching Fiber {}\", i);
+        // spawn takes a future and returns a handle
+        handles.push(spawn(worker(i)));
+    }
+
+    for (i, handle) in handles.into_iter().enumerate() {
+        println!(\"[Master] Waiting for Fiber {} to complete...\", i);
+        dtact_await(handle);
+        println!(\"[Master] Fiber {} has been joined.\", i);
+    }
+
+    println!(\"[Master] All sub-tasks completed. Exiting cleanly.\");
 }"
                     </pre>
                 </div>
                 <div>
                     <p class="algo-section-title">"C — raw FFI"</p>
                     <pre class="code-block text-xs">
-"#include \"dtact.h\"
+"#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
+#include \"../dtact.h\"
 
-static void my_task(void *arg) {
-    uint64_t id = (uint64_t)arg;
-    printf(\"fiber %llu\\n\", id);
+// Worker fiber that simulates asynchronous work
+void worker_fiber(void* arg) {
+    int id = *(int*)arg;
+    printf(\"[Fiber %d] Starting async work...\n\", id);
+    
+    // Simulating work
+    for(int i = 0; i < 3; i++) {
+        printf(\"[Fiber %d] Progress step %d\n\", id, i);
+        // Normally we would yield here, but dtact handles cooperative switching
+    }
+    
+    printf(\"[Fiber %d] Task Finished.\n\", id);
+    dtact_free_arg(arg);
 }
 
-int main(void) {
-    dtact_config_t cfg = {
-        .workers  = 8,
-        .capacity = 4096,
-        .stack_sz = 512 * 1024,
-        .safety   = DTACT_SAFETY1,
-    };
-    dtact_runtime_t *rt = dtact_init(&cfg);
-    dtact_handle_t h = dtact_fiber_launch(
-        rt, my_task, (void*)42, NULL);
-    dtact_await(rt, h);
-    dtact_shutdown(rt);
+// Master fiber that spawns and joins other fibers
+void master_fiber(void* arg) {
+    printf(\"[Master] Orchestrating sub-fibers...\n\");
+    
+    dtact_handle_t handles[5];
+    for(int i = 0; i < 5; i++) {
+        int* val = malloc(sizeof(int));
+        *val = i;
+        printf(\"[Master] Launching Fiber %d\n\", i);
+        
+        dtact_spawn_options_t opts = dtact_default_spawn_options();
+        if (i % 2 == 0) {
+            opts.mKind = 1; // IO
+            opts.mSwitcher = 1; // CrossThreadNoFloat
+        } else {
+            opts.mKind = 3; // System
+            opts.mSwitcher = 0; // CrossThreadFloat
+        }
+        
+        handles[i] = dtact_fiber_launch_ext(worker_fiber, val, &opts);
+    }
+    
+    for(int i = 0; i < 5; i++) {
+        printf(\"[Master] Waiting for Fiber %d to complete...\n\", i);
+        dtact_await(handles[i]);
+        printf(\"[Master] Fiber %d has been joined.\n\", i);
+    }
+    
+    printf(\"[Master] All sub-tasks completed. Signaling shutdown.\n\");
+    dtact_shutdown();
+}
+
+int main() {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf(\"--- Dtact C-FFI Example ---\n\");
+    
+    // 1. Initialize Runtime
+    dtact_config_t cfg = dtact_default_config();
+    cfg.mWorkers = 4;
+    cfg.mFiberCapacity = 1024; // Limit to 1024 fibers for this example
+    cfg.mStackSize = 256 * 1024; // 256KB stacks are sufficient
+    void* rt = dtact_init(&cfg);
+    
+    // 2. Launch Initial Root Fiber
+    dtact_fiber_launch(master_fiber, NULL);
+    
+    // 3. Start Execution
+    // This call blocks the main thread and starts 4 worker threads.
+    // It returns when dtact_shutdown() is called.
+    printf(\"Entering Runtime execution loop...\n\");
+    dtact_run(rt);
+    
+    printf(\"Runtime exited cleanly.\n\");
+    return 0;
 }"
                     </pre>
                 </div>
@@ -318,9 +400,12 @@ int main(void) {
                         name="#[task(...)]"
                         desc="Attaches priority, kind, stack size, and switcher variant to an async fn.
                               Generates a dtact_metadata_<name> submodule with compile-time constants."
-                        example="#[task(priority = \"High\",
-       kind = \"Compute\",
-       stack = \"256K\")]
+                        example="#[task(
+    priority = \"High\",
+    affinity = \"Any\",
+    kind = \"Compute\",
+    stack = \"256K\",
+    switcher = \"CrossThreadNoFloat\",)]
 async fn worker(id: u32) { ... }"
                     />
                     <MacroCard
@@ -338,9 +423,12 @@ async fn process(x: i32) -> i32 {
                         desc="Entry-point macro on main. Initialises the global runtime singleton,
                               spawns worker threads, and calls user code."
                         example="#[dtact_init(
-  workers = 4,
-  stack   = \"256K\",
-  capacity = \"1024\")]
+    topology = \"P2PMesh\",
+    safety = \"Safety1\",
+    workers = 4,
+    stack   = \"256K\",
+    capacity = \"1024\",
+    numa = \"0\",)]
 fn main() { /* user code */ }"
                     />
                 </div>

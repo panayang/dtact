@@ -12,12 +12,14 @@ impl Theme {
             Theme::Dusk => "dusk",
         }
     }
+    #[allow(dead_code)]
     pub fn toggle(self) -> Self {
         match self {
             Theme::Mist => Theme::Dusk,
             Theme::Dusk => Theme::Mist,
         }
     }
+    #[allow(dead_code)]
     pub fn label(&self) -> &'static str {
         match self {
             Theme::Mist => "Mist",
