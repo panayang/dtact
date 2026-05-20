@@ -27,10 +27,11 @@ use core::arch::naked_asm;
 // CROSS-THREAD WITH FLOAT
 // ============================================================================
 
-/// Switches execution context while preserving floating-point state (Unix `x86_64`).
+/// Switches execution context while preserving MXCSR state (Unix `x86_64`).
 ///
-/// This implementation follows the System V AMD64 ABI, preserving the
-/// callee-saved registers (rbx, rbp, r12-r15) and SIMD state via FXSAVE.
+/// Follows the System V AMD64 ABI: callee-saved GPRs are rbx, rbp, r12-r15.
+/// All XMM registers (xmm0-xmm15) are caller-saved, so only MXCSR (the SSE
+/// control word) is preserved here, stored at gprs[8] (offset 64).
 ///
 /// # Arguments
 /// * `save` (rdi): Pointer to `Registers` where the current context will be saved.
@@ -60,10 +61,10 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "mov [rdi + 32], r13",
         "mov [rdi + 40], r14",
         "mov [rdi + 48], r15",
-        "fxsave [rdi + 128]",
+        "stmxcsr [rdi + 64]",
         "lea rax, [rip + 1f]",
         "mov [rdi + 56], rax",
-        "fxrstor [rsi + 128]",
+        "ldmxcsr [rsi + 64]",
         "mov rsp, [rsi + 0]",
         "mov rbp, [rsi + 8]",
         "mov rbx, [rsi + 16]",
@@ -205,10 +206,10 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -217,10 +218,10 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "ldp x29, x30, [x1, 80]",
         "ldr x9, [x1, 96]",
         "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "ret"
     );
 }
@@ -265,10 +266,10 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -277,10 +278,10 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "ldp x29, x30, [x1, 80]",
         "ldr x9, [x1, 96]",
         "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "autiasp",
         "ret"
     );
@@ -318,14 +319,14 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -371,22 +372,20 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        // Save Windows TEB Stack Metadata
         "ldr x9, [x18, #0x08]",
         "str x9, [x0, #104]",
         "ldr x9, [x18, #0x10]",
         "str x9, [x0, #112]",
         "ldr x9, [x18, #0x12C8]",
         "str x9, [x0, #120]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
-        // Restore Windows TEB Stack Metadata
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "ldr x9, [x1, #104]",
         "str x9, [x18, #0x08]",
         "ldr x9, [x1, #112]",
@@ -584,18 +583,15 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     );
 }
 
-/// Switches execution context preserving XMM6-XMM15 and Windows TIB state (Windows x86_64).
+/// Switches execution context preserving Windows TIB state, no float (Windows x86_64).
 ///
-/// Preserves the Windows TIB/TEB metadata, callee-saved GPRs, and XMM6-XMM15
-/// per the Windows x64 ABI. Skips x87/MXCSR state for performance.
+/// Preserves the Windows TIB/TEB metadata and callee-saved GPRs only.
+/// No XMM or MXCSR state is saved; fibers using this variant must not rely on
+/// XMM6-XMM15 persisting across context switches.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
 /// * `restore` (rdx): Pointer to `Registers`.
-///
-/// # Safety
-/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
-///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_cross_thread_no_float(
@@ -625,28 +621,8 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
         "mov [rcx + 96], rax",
         "mov rax, gs:[0x00]",
         "mov [rcx + 104], rax",
-        "movaps [rcx + 128], xmm6",
-        "movaps [rcx + 144], xmm7",
-        "movaps [rcx + 160], xmm8",
-        "movaps [rcx + 176], xmm9",
-        "movaps [rcx + 192], xmm10",
-        "movaps [rcx + 208], xmm11",
-        "movaps [rcx + 224], xmm12",
-        "movaps [rcx + 240], xmm13",
-        "movaps [rcx + 256], xmm14",
-        "movaps [rcx + 272], xmm15",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
-        "movaps xmm6,  [rdx + 128]",
-        "movaps xmm7,  [rdx + 144]",
-        "movaps xmm8,  [rdx + 160]",
-        "movaps xmm9,  [rdx + 176]",
-        "movaps xmm10, [rdx + 192]",
-        "movaps xmm11, [rdx + 208]",
-        "movaps xmm12, [rdx + 224]",
-        "movaps xmm13, [rdx + 240]",
-        "movaps xmm14, [rdx + 256]",
-        "movaps xmm15, [rdx + 272]",
         "mov rax, [rdx + 80]",
         "mov gs:[0x08], rax",
         "mov rax, [rdx + 88]",
@@ -831,14 +807,12 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        // Save Windows TEB Stack Metadata
         "ldr x9, [x18, #0x08]",
         "str x9, [x0, #104]",
         "ldr x9, [x18, #0x10]",
         "str x9, [x0, #112]",
         "ldr x9, [x18, #0x12C8]",
         "str x9, [x0, #120]",
-        // Restore Windows TEB Stack Metadata
         "ldr x9, [x1, #104]",
         "str x9, [x18, #0x08]",
         "ldr x9, [x1, #112]",
@@ -982,10 +956,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "mov [rdi + 32], r13",
         "mov [rdi + 40], r14",
         "mov [rdi + 48], r15",
-        "fxsave [rdi + 128]",
+        "stmxcsr [rdi + 64]",
         "lea rax, [rip + 1f]",
         "mov [rdi + 56], rax",
-        "fxrstor [rsi + 128]",
+        "ldmxcsr [rsi + 64]",
         "mov rsp, [rsi + 0]",
         "mov rbp, [rsi + 8]",
         "mov rbx, [rsi + 16]",
@@ -998,10 +972,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
     );
 }
 
-/// Lightweight context switch for fibers pinned to the current thread (Windows x86_64).
+/// Context switch for same-thread fibers with TIB and float state (Windows x86_64).
 ///
-/// Skips TIB metadata preservation but preserves XMM6-XMM15 and MXCSR per the
-/// Windows x64 ABI callee-save requirements.
+/// Preserves the Windows TIB/TEB metadata, callee-saved GPRs (rbx, rbp, rdi, rsi,
+/// r12-r15), XMM6-XMM15, and MXCSR per the Windows x64 ABI.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
@@ -1032,6 +1006,14 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "mov [rcx + 48], r15",
         "mov [rcx + 64], rdi",
         "mov [rcx + 72], rsi",
+        "mov rax, gs:[0x08]",
+        "mov [rcx + 80], rax",
+        "mov rax, gs:[0x10]",
+        "mov [rcx + 88], rax",
+        "mov rax, gs:[0x1478]",
+        "mov [rcx + 96], rax",
+        "mov rax, gs:[0x00]",
+        "mov [rcx + 104], rax",
         "stmxcsr [rcx + 112]",
         "movaps [rcx + 128], xmm6",
         "movaps [rcx + 144], xmm7",
@@ -1056,6 +1038,14 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "movaps xmm14, [rdx + 256]",
         "movaps xmm15, [rdx + 272]",
         "ldmxcsr [rdx + 112]",
+        "mov rax, [rdx + 80]",
+        "mov gs:[0x08], rax",
+        "mov rax, [rdx + 88]",
+        "mov gs:[0x10], rax",
+        "mov rax, [rdx + 96]",
+        "mov gs:[0x1478], rax",
+        "mov rax, [rdx + 104]",
+        "mov gs:[0x00], rax",
         "mov rsp, [rdx + 0]",
         "mov rbp, [rdx + 8]",
         "mov rbx, [rdx + 16]",
@@ -1104,10 +1094,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -1116,10 +1106,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "ldp x29, x30, [x1, 80]",
         "ldr x9, [x1, 96]",
         "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "ret"
     );
 }
@@ -1160,10 +1150,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -1172,10 +1162,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "ldp x29, x30, [x1, 80]",
         "ldr x9, [x1, 96]",
         "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "autiasp",
         "ret"
     );
@@ -1210,10 +1200,10 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -1222,18 +1212,18 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "ldp x29, x30, [x1, 80]",
         "ldr x9, [x1, 96]",
         "mov sp, x9",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
         "autiasp",
         "ret"
     );
 }
 
-/// Lightweight context switch for fibers pinned to the current thread (Windows AArch64).
+/// Context switch for same-thread fibers with TEB and float state (Windows AArch64).
 ///
-/// Skips TEB metadata preservation but maintains BTI and PAC security.
+/// Preserves TEB stack metadata, callee-saved GPRs, and d8-d15.
 ///
 /// # Security
 /// * `bti c`: Branch target identification.
@@ -1261,14 +1251,26 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
-        "stp q8, q9, [x0, 128]",
-        "stp q10, q11, [x0, 160]",
-        "stp q12, q13, [x0, 192]",
-        "stp q14, q15, [x0, 224]",
-        "ldp q8, q9, [x1, 128]",
-        "ldp q10, q11, [x1, 160]",
-        "ldp q12, q13, [x1, 192]",
-        "ldp q14, q15, [x1, 224]",
+        "ldr x9, [x18, #0x08]",
+        "str x9, [x0, #104]",
+        "ldr x9, [x18, #0x10]",
+        "str x9, [x0, #112]",
+        "ldr x9, [x18, #0x12C8]",
+        "str x9, [x0, #120]",
+        "stp d8,  d9,  [x0, 128]",
+        "stp d10, d11, [x0, 144]",
+        "stp d12, d13, [x0, 160]",
+        "stp d14, d15, [x0, 176]",
+        "ldp d8,  d9,  [x1, 128]",
+        "ldp d10, d11, [x1, 144]",
+        "ldp d12, d13, [x1, 160]",
+        "ldp d14, d15, [x1, 176]",
+        "ldr x9, [x1, #104]",
+        "str x9, [x18, #0x08]",
+        "ldr x9, [x1, #112]",
+        "str x9, [x18, #0x10]",
+        "ldr x9, [x1, #120]",
+        "str x9, [x18, #0x12C8]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
@@ -1470,18 +1472,15 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     );
 }
 
-/// Fastest same-thread context switch preserving XMM6-XMM15 (Windows x86_64).
+/// Fastest same-thread context switch with TIB, no float (Windows x86_64).
 ///
-/// Skips TIB metadata and MXCSR, but preserves XMM6-XMM15 per the Windows x64 ABI
-/// callee-save requirements.
+/// Preserves the Windows TIB/TEB metadata and callee-saved GPRs only.
+/// No XMM or MXCSR state is saved; fibers using this variant must not rely on
+/// XMM6-XMM15 persisting across context switches.
 ///
 /// # Arguments
 /// * `save` (rcx): Pointer to `Registers`.
 /// * `restore` (rdx): Pointer to `Registers`.
-///
-/// # Safety
-/// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
-///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context_same_thread_no_float(
@@ -1504,28 +1503,24 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "mov [rcx + 48], r15",
         "mov [rcx + 64], rdi",
         "mov [rcx + 72], rsi",
-        "movaps [rcx + 128], xmm6",
-        "movaps [rcx + 144], xmm7",
-        "movaps [rcx + 160], xmm8",
-        "movaps [rcx + 176], xmm9",
-        "movaps [rcx + 192], xmm10",
-        "movaps [rcx + 208], xmm11",
-        "movaps [rcx + 224], xmm12",
-        "movaps [rcx + 240], xmm13",
-        "movaps [rcx + 256], xmm14",
-        "movaps [rcx + 272], xmm15",
+        "mov rax, gs:[0x08]",
+        "mov [rcx + 80], rax",
+        "mov rax, gs:[0x10]",
+        "mov [rcx + 88], rax",
+        "mov rax, gs:[0x1478]",
+        "mov [rcx + 96], rax",
+        "mov rax, gs:[0x00]",
+        "mov [rcx + 104], rax",
         "lea rax, [rip + 1f]",
         "mov [rcx + 56], rax",
-        "movaps xmm6,  [rdx + 128]",
-        "movaps xmm7,  [rdx + 144]",
-        "movaps xmm8,  [rdx + 160]",
-        "movaps xmm9,  [rdx + 176]",
-        "movaps xmm10, [rdx + 192]",
-        "movaps xmm11, [rdx + 208]",
-        "movaps xmm12, [rdx + 224]",
-        "movaps xmm13, [rdx + 240]",
-        "movaps xmm14, [rdx + 256]",
-        "movaps xmm15, [rdx + 272]",
+        "mov rax, [rdx + 80]",
+        "mov gs:[0x08], rax",
+        "mov rax, [rdx + 88]",
+        "mov gs:[0x10], rax",
+        "mov rax, [rdx + 96]",
+        "mov gs:[0x1478], rax",
+        "mov rax, [rdx + 104]",
+        "mov gs:[0x00], rax",
         "mov rsp, [rdx + 0]",
         "mov rbp, [rdx + 8]",
         "mov rbx, [rdx + 16]",
@@ -1674,7 +1669,9 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     );
 }
 
-/// The fastest possible context switch: same-thread and no floating-point (Windows AArch64).
+/// Fastest same-thread context switch with TEB, no float (Windows AArch64).
+///
+/// Preserves TEB stack metadata and callee-saved GPRs; no SIMD state saved.
 ///
 /// # Security
 /// * `bti c`: Branch target identification.
@@ -1702,6 +1699,18 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
         "stp x29, x30, [x0, 80]",
         "mov x9, sp",
         "str x9, [x0, 96]",
+        "ldr x9, [x18, #0x08]",
+        "str x9, [x0, #104]",
+        "ldr x9, [x18, #0x10]",
+        "str x9, [x0, #112]",
+        "ldr x9, [x18, #0x12C8]",
+        "str x9, [x0, #120]",
+        "ldr x9, [x1, #104]",
+        "str x9, [x18, #0x08]",
+        "ldr x9, [x1, #112]",
+        "str x9, [x18, #0x10]",
+        "ldr x9, [x1, #120]",
+        "str x9, [x18, #0x12C8]",
         "ldp x19, x20, [x1, 0]",
         "ldp x21, x22, [x1, 16]",
         "ldp x23, x24, [x1, 32]",
