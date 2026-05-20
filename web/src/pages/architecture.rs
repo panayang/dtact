@@ -196,9 +196,9 @@ fn OverviewSection() -> impl IntoView {
                 </thead>
                 <tbody>
                     <tr><td>"lib.rs"</td><td>"370"</td><td>"Global runtime singleton, backpressure, wake protocol"</td></tr>
-                    <tr><td>"memory_management.rs"</td><td>"602"</td><td>"Lock-free arena, huge page alloc, fiber context pool"</td></tr>
-                    <tr><td>"dta_scheduler.rs"</td><td>"1 566"</td><td>"P2P mesh, mailboxes, warehouse, worker heartbeat"</td></tr>
-                    <tr><td>"context_switch.rs"</td><td>"1 714"</td><td>"Assembly context switchers (4 ISA × ABI variants)"</td></tr>
+                    <tr><td>"memory_management.rs"</td><td>"606"</td><td>"Lock-free arena, huge page alloc, fiber context pool"</td></tr>
+                    <tr><td>"dta_scheduler.rs"</td><td>"1 582"</td><td>"P2P mesh, mailboxes, warehouse, worker heartbeat"</td></tr>
+                    <tr><td>"context_switch.rs"</td><td>"1 819"</td><td>"Assembly context switchers (4 ISA × ABI variants)"</td></tr>
                     <tr><td>"api.rs"</td><td>"939"</td><td>"spawn/yield public API, SpawnBuilder, priorities"</td></tr>
                     <tr><td>"c_ffi.rs"</td><td>"889"</td><td>"C FFI boundary, handle encoding, config structs"</td></tr>
                     <tr><td>"future_bridge.rs"</td><td>"195"</td><td>"Future polling, Waker impl, TLS worker ID"</td></tr>
