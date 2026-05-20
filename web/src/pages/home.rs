@@ -33,7 +33,7 @@ pub fn HomePage() -> impl IntoView {
                 </a>
                 <a href="https://github.com/Apich-Organization/dtact" target="_blank" rel="noopener"
                    class="badge-link" title="GitHub Repository">
-                    <span class="badge badge-primary">"v0.2.1"</span>
+                    <span class="badge badge-primary">"v0.2.2"</span>
                     <span class="badge badge-neutral">"MIT / Apache-2.0"</span>
                 </a>
                 <a href="https://doi.org/10.5281/zenodo.20002105" target="_blank" rel="noopener"
