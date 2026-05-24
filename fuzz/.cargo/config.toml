@@ -1,0 +1,7 @@
+[profile.release]
+strip = false
+debug = true
+rustflags = ["-Zsanitizer=address"]
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-Zsanitizer=address"]

@@ -34,7 +34,12 @@ fuzz_target!(|data: FuzzInput| {
             .store(data.deflection_threshold, Ordering::SeqCst);
     }
 
-    scheduler.enqueue_task(source_core, data.flow_id as u64, data.priority as u32);
+    scheduler.enqueue_deflect(
+        source_core,
+        data.flow_id as u64,
+        data.priority as u32,
+        dtact::Affinity::Any,
+    );
 
     let mut total_tasks = 0;
     unsafe {
@@ -49,6 +54,11 @@ fuzz_target!(|data: FuzzInput| {
                 if tail != head {
                     total_tasks += 1;
                 }
+            }
+
+            let ext_mailbox = &scheduler.external_mailboxes[i];
+            if ext_mailbox.tail.load(Ordering::SeqCst) != ext_mailbox.head.load(Ordering::SeqCst) {
+                total_tasks += 1;
             }
         }
     }
