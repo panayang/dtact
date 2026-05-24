@@ -62,7 +62,6 @@ jobs:
 
       - name: Run Fuzzer
         run: |
-          cd fuzz
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Run the fuzzer 5 times, each for 1 hour (3600 seconds) instead of 1 time for 5 hours.
             # Long single fuzzer runs can hit memory limits or cause CPU starvation in shared CI runners.
