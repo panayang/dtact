@@ -67,12 +67,12 @@ jobs:
             # Long single fuzzer runs can hit memory limits or cause CPU starvation in shared CI runners.
             for i in {1..5}; do
               echo "Starting PR fuzzer iteration $i of 5..."
-              RUSTFLAGS="-Zsanitizer=address" cargo +nightly build --manifest-path fuzz/Cargo.toml --target x86_64-unknown-linux-gnu --release -Z build-std=std,panic_abort --config 'profile.release.debug = "line-tables-only"' --config 'profile.release.lto = false'
+              RUSTFLAGS="-Zsanitizer=address" cargo +nightly build --manifest-path ./fuzz/Cargo.toml --target x86_64-unknown-linux-gnu --release -Z build-std=std,panic_abort --config 'profile.release.debug = "line-tables-only"' --config 'profile.release.lto = false'
               ./target/x86_64-unknown-linux-gnu/release/${{ matrix.target }} -max_total_time=3600
             done
           else
             echo "Starting standard fuzzer iteration (1 hour)..."
-            RUSTFLAGS="-Zsanitizer=address" cargo +nightly build --manifest-path fuzz/Cargo.toml --target x86_64-unknown-linux-gnu --release -Z build-std=std,panic_abort --config 'profile.release.debug = "line-tables-only"' --config 'profile.release.lto = false'
+            RUSTFLAGS="-Zsanitizer=address" cargo +nightly build --manifest-path ./fuzz/Cargo.toml --target x86_64-unknown-linux-gnu --release -Z build-std=std,panic_abort --config 'profile.release.debug = "line-tables-only"' --config 'profile.release.lto = false'
             ./target/x86_64-unknown-linux-gnu/release/${{ matrix.target }} -max_total_time=3600
           fi
 
