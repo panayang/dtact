@@ -20,7 +20,7 @@ Any activity that is illegal under applicable law is strictly prohibited, includ
 
 ### 2.2. Respect for Original Copyright
 
-We fully respect all copyright notices from the original Bincode developers. All code and documentation contributed to **Dtact** must maintain proper attribution and adhere to the licensing terms defined for the project.
+We fully respect all copyright notices from the original developers. All code and documentation contributed to **Dtact** must maintain proper attribution and adhere to the licensing terms defined for the project.
 
 ## 3. Expected Behavior
 
