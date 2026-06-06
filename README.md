@@ -10,7 +10,7 @@
 [![Discord Server](https://img.shields.io/discord/1459399539403522074.svg?label=Discord&logo=discord&color=blue)](https://discord.gg/D5e2czMTT9)
 [![Scc Count Badge Code](https://sloc.xyz/github/Apich-Organization/dtact/?category=code)](https://github.com/Apich-Organization/dtact/)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12962/badge)](https://www.bestpractices.dev/projects/12962)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Apich-Organization/dtact)](https://securityscorecards.dev/viewer/?uri=github.com/Apich-Organization/dtact)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Apich-Organization/dtact/badge)](https://securityscorecards.dev/viewer/?uri=github.com/Apich-Organization/dtact)
 
 Dtact is a non-preemptive, stackful coroutine runtime designed for hardware-level control and heterogeneous orchestration. It provides a unique architecture based on a lock-free context arena, peer-to-peer (P2P) mesh scheduling, and architecture-specific assembly context switchers.
 
