@@ -84,7 +84,7 @@ jobs:
         run: cargo install trunk --locked
 
       - name: Install wasm-bindgen-cli
-        run: cargo install -f wasm-bindgen-cli --version 0.2.122
+        run: cargo install -f wasm-bindgen-cli --version 0.2.121
 
       - name: Build Leptos app
         working-directory: web
