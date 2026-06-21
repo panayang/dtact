@@ -86,7 +86,8 @@ jobs:
       - name: Build Leptos app
         working-directory: web
         run: >
-          trunk build --release
+          export TRUNK_TOOLS_WASM_BINDGEN="0.2.125"
+          trunk build --release -v
 
       - name: Upload web dist artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
