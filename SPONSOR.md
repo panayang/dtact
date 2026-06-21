@@ -13,9 +13,9 @@ All sponsored funds are strictly allocated to the following technical and operat
 
 ### **2\. Individual Sponsorship**
 
-For individual supporters, we accept voluntary contributions via **PayPal** only.
+For individual supporters, we accept voluntary contributions via **Open Collective** only.
 
-* **PayPal ID:** @panayang338  
+* **Open Collective Link:** https://opencollective.com/apich-organization?hostname=opencollective.com  
 * **Mandatory Requirement:** You **MUST** include a note in the transaction with the following declarations:  
   1\. *"This is a voluntary donation/gift with no expectation of commercial return."* 2\. *"I certify that these funds are derived from legal sources."* 3\. *(Optional)* Any name, handle, or organization you wish to be credited with on our official "Sponsors" page.
 
@@ -23,13 +23,13 @@ For individual supporters, we accept voluntary contributions via **PayPal** only
 
 We offer structured tiers for organizations requiring advanced consulting or high-level strategic alignment with the Dtact ecosystem. Corporate sponsors **must provide proof of legal entity/incorporation** before any funds are accepted.
 
-#### **Tier 1: Strategic Support ($10,000+ USD/month)**
+#### **Tier 1: Strategic Support ($1,000+ USD/month)**
 
 * **Status:** Officially recognized as a Lead Corporate Sponsor of Dtact.  
 * **Support:** Priority technical communication channels and direct consulting for runtime integration and optimization.  
 * **Certification:** Must sign a formal declaration certifying the legal origin of funds and full compliance with regional and international dual-use technology regulations.
 
-#### **Tier 2: Core Engineering Support ($100,000+ USD/month)**
+#### **Tier 2: Core Engineering Support ($10,000+ USD/month)**
 
 * **Custom Development:** Ability to request highly specialized runtime plugins or tailored scheduler modifications targetting custom hardware architectures or proprietary virtualization environments.  
 * **Early Access:** Up to 12 months of "Gray-box" staging and testing for custom runtime modules before they are evaluated for potential inclusion in the open-source main branch.
