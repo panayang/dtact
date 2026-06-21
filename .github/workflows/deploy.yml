@@ -85,7 +85,7 @@ jobs:
 
       - name: Build Leptos app
         working-directory: web
-        run: >
+        run: |
           export TRUNK_TOOLS_WASM_BINDGEN="0.2.125"
           trunk build --release -v
 
