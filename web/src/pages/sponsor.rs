@@ -206,14 +206,14 @@ pub fn SponsorPage() -> impl IntoView {
                     <p class="mt-sm">
                         "For individual supporters, we accept voluntary contributions
                          via "
-                        <strong>"PayPal only"</strong>
+                        <strong>"Open Collective only"</strong>
                         "."
                     </p>
 
                     <div class="paypal-card glass-hi mt-md">
                         <div class="paypal-row">
-                            <span class="paypal-label">"PayPal ID"</span>
-                            <span class="paypal-id mono">"@panayang338"</span>
+                            <span class="paypal-label">"Open Collective Link"</span>
+                            <span class="paypal-id mono">"https://opencollective.com/dtact"</span>
                         </div>
                     </div>
 
@@ -224,7 +224,7 @@ pub fn SponsorPage() -> impl IntoView {
                         <p class="mt-sm text-sm">
                             "You "
                             <strong>"MUST"</strong>
-                            " include a note in the PayPal transaction containing all of the following:"
+                            " include a note in the transaction containing all of the following:"
                         </p>
                         <ol class="sponsor-notice-list mt-sm">
                             <li>
@@ -264,7 +264,7 @@ pub fn SponsorPage() -> impl IntoView {
                     <CorpTierCard
                         tier="Tier 1"
                         title="Strategic Support"
-                        price="$10,000+ USD / month"
+                        price="$1,000+ USD / month"
                         color="var(--c-primary)"
                         perks=vec![
                             "Officially recognised Lead Corporate Sponsor of dtact",
@@ -276,7 +276,7 @@ pub fn SponsorPage() -> impl IntoView {
                     <CorpTierCard
                         tier="Tier 2"
                         title="Core Engineering Support"
-                        price="$100,000+ USD / month"
+                        price="$10,000+ USD / month"
                         color="var(--c-accent)"
                         perks=vec![
                             "All Tier 1 benefits",
@@ -293,8 +293,8 @@ pub fn SponsorPage() -> impl IntoView {
                     >
                         "Corporate Sponsorship Enquiry"
                     </a>
-                    <a href="mailto:@panayang338" class="btn btn-ghost btn-sponsor">
-                        "Individual: PayPal @panayang338"
+                    <a href="https://opencollective.com/dtact" class="btn btn-ghost btn-sponsor">
+                        "Individual: Open Collective https://opencollective.com/dtact"
                     </a>
                 </div>
             </section>
