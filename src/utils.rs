@@ -120,7 +120,7 @@ pub fn get_tick_with_cpu() -> (u64, u32) {
 /// * `addr` must point to a valid `AtomicU32`.
 #[cfg(target_os = "linux")]
 #[inline(always)]
-pub unsafe fn futex_wake(addr: *const core::sync::atomic::AtomicU32) {
+pub unsafe fn futex_wake(addr: *const crate::sync::atomic::AtomicU32) {
     unsafe {
         libc::syscall(
             libc::SYS_futex,

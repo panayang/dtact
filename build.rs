@@ -22,6 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     }
+    // Declare `loom` as a known cfg key to avoid `unexpected_cfgs` warnings
+    // when building with `RUSTFLAGS="--cfg loom"`.
+    println!("cargo:rustc-check-cfg=cfg(loom)");
     Ok(())
 }
 

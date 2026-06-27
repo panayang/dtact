@@ -114,8 +114,8 @@ pub unsafe extern "C" fn dtact_init(cfg: *const dtact_config_t) -> *mut c_void {
         crate::Runtime {
             scheduler,
             pool,
-            started: core::sync::atomic::AtomicBool::new(false),
-            shutdown: core::sync::atomic::AtomicBool::new(false),
+            started: crate::sync::atomic::AtomicBool::new(false),
+            shutdown: crate::sync::atomic::AtomicBool::new(false),
         }
     });
 
@@ -868,7 +868,7 @@ pub extern "C" fn dtact_shutdown() {
         // SeqCst ensures the shutdown flag write is ordered before all subsequent reads.
         runtime
             .shutdown
-            .store(true, core::sync::atomic::Ordering::SeqCst);
+            .store(true, crate::sync::atomic::Ordering::SeqCst);
 
         // Bump event_signal to break workers out of WFE/umwait standby.
         // Workers spinning in non-hw-accel mode will see shutdown on their next loop iteration.
@@ -876,12 +876,12 @@ pub extern "C" fn dtact_shutdown() {
             let worker = unsafe { &*runtime.scheduler.workers[i].get() };
             worker
                 .event_signal
-                .fetch_add(1, core::sync::atomic::Ordering::Release);
+                .fetch_add(1, crate::sync::atomic::Ordering::Release);
             // futex_wake is a no-op if no worker is futex-sleeping (they no longer do),
             // but kept as belt-and-suspenders for any platform-specific edge cases.
             unsafe {
                 crate::utils::futex_wake(
-                    (&raw const worker.event_signal).cast::<core::sync::atomic::AtomicU32>(),
+                    (&raw const worker.event_signal).cast::<crate::sync::atomic::AtomicU32>(),
                 );
             }
         }

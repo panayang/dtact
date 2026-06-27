@@ -82,4 +82,36 @@ fn test_dtact_comprehensive_e2e() {
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert_eq!(counter.load(Ordering::SeqCst), 100);
     }
+
+    // 5. Test #[task] macro execution and metadata injection
+    {
+        let res1 = Arc::new(AtomicU32::new(0));
+        let res2 = Arc::new(std::sync::Mutex::new(String::new()));
+
+        let handle1 = spawn(custom_task_1(40, 2, res1.clone()));
+        let handle2 = spawn(custom_task_2(res2.clone()));
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        dtact::dtact_await(handle1);
+        dtact::dtact_await(handle2);
+
+        assert_eq!(res1.load(Ordering::SeqCst), 42);
+        assert_eq!(*res2.lock().unwrap(), "hello_from_task");
+    }
+}
+
+#[dtact::task(priority = "High", kind = "Compute", switcher = "CrossThreadNoFloat")]
+async fn custom_task_1(x: u32, y: u32, output: Arc<AtomicU32>) {
+    output.store(x + y, Ordering::SeqCst);
+}
+
+#[dtact::task(
+    priority = "Low",
+    kind = "IO",
+    switcher = "SameThreadFloat",
+    affinity = "SameCore"
+)]
+async fn custom_task_2(output: Arc<std::sync::Mutex<String>>) {
+    let mut lock = output.lock().unwrap();
+    *lock = "hello_from_task".to_string();
 }

@@ -1,9 +1,9 @@
+use crate::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use alloc::vec::Vec;
 #[allow(unused_imports)]
 use core::arch::asm;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 
 /// Task Index used for Zero-Copy passing within the `ContextPool`.
 pub type TaskIndex = u32;
@@ -13,13 +13,21 @@ pub const CHUNK_SIZE: usize = 32;
 
 /// Capacity of a single core-to-core mailbox.
 /// MUST be a power of two for bitwise masking.
+#[cfg(not(loom))]
 pub const MAILBOX_CAPACITY: usize = 65_536;
+#[cfg(loom)]
+pub const MAILBOX_CAPACITY: usize = 4;
+
 /// Mask for mailbox index wrap-around.
 pub const MAILBOX_MASK: usize = MAILBOX_CAPACITY - 1;
 
 /// Capacity of a worker's local execution queue.
 /// Sized to exactly hold the max queue without global locks.
+#[cfg(not(loom))]
 pub const LOCAL_QUEUE_CAPACITY: usize = 131_072;
+#[cfg(loom)]
+pub const LOCAL_QUEUE_CAPACITY: usize = 8;
+
 /// Mask for local queue index wrap-around.
 pub const LOCAL_QUEUE_MASK: usize = LOCAL_QUEUE_CAPACITY - 1;
 /// High-water mark above which a worker stops accepting new chunks and routes
@@ -29,7 +37,11 @@ pub const LOCAL_QUEUE_HIGH_WATERMARK: usize = LOCAL_QUEUE_CAPACITY - LOCAL_QUEUE
 
 /// Warehouse capacity in chunks. 32 768 chunks × 32 tasks = 1 048 576 tasks of
 /// emergency back-pressure storage. Must be a power of two for bitwise masking.
+#[cfg(not(loom))]
 pub const WAREHOUSE_CAPACITY: usize = 32_768;
+#[cfg(loom)]
+pub const WAREHOUSE_CAPACITY: usize = 4;
+
 /// Mask for warehouse index wrap-around.
 pub const WAREHOUSE_MASK: usize = WAREHOUSE_CAPACITY - 1;
 
@@ -320,8 +332,7 @@ impl Mailbox {
             *buffer_ptr.add(current_tail) = chunk;
         }
 
-        self.tail
-            .store(next_tail, core::sync::atomic::Ordering::Release);
+        self.tail.store(next_tail, Ordering::Release);
 
         #[cfg(all(
             feature = "hw-acceleration",
@@ -476,11 +487,25 @@ impl Warehouse {
             match diff.cmp(&0) {
                 std::cmp::Ordering::Equal => {
                     // Slot is ready for our position — try to claim by bumping tail.
-                    if self
-                        .tail
-                        .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                        .is_ok()
-                    {
+                    // Under loom we use the strong form so spurious CAS failures are
+                    // not treated as new branches (they would cause exponential state-
+                    // space growth in loom's exhaustive-interleaving model).  The
+                    // weak form is kept for production where it is cheaper.
+                    #[cfg(not(loom))]
+                    let cas_result = self.tail.compare_exchange_weak(
+                        pos,
+                        pos + 1,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                    #[cfg(loom)]
+                    let cas_result = self.tail.compare_exchange(
+                        pos,
+                        pos + 1,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                    if cas_result.is_ok() {
                         unsafe { (*slot.chunk.get()).write(chunk) };
                         // Publish: subsequent Acquire on seq by the consumer
                         // synchronises with this Release and sees the payload.
@@ -533,11 +558,22 @@ impl Warehouse {
             match diff.cmp(&0) {
                 std::cmp::Ordering::Equal => {
                     // Slot has a published chunk for our position — try to claim.
-                    if self
-                        .head
-                        .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
-                        .is_ok()
-                    {
+                    // Strong CAS under loom prevents spurious-failure branch explosion.
+                    #[cfg(not(loom))]
+                    let cas_result = self.head.compare_exchange_weak(
+                        pos,
+                        pos + 1,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                    #[cfg(loom)]
+                    let cas_result = self.head.compare_exchange(
+                        pos,
+                        pos + 1,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                    if cas_result.is_ok() {
                         let chunk = unsafe { (*slot.chunk.get()).assume_init_read() };
                         // Release the slot for the next round (pos + CAPACITY).
                         slot.seq.store(pos + WAREHOUSE_CAPACITY, Ordering::Release);
@@ -820,7 +856,7 @@ impl Worker {
     #[inline]
     pub fn push_batch(&mut self, chunk: &TaskChunk) {
         let count = chunk.count as usize;
-        let tail = self.local_tail.load(core::sync::atomic::Ordering::Relaxed);
+        let tail = self.local_tail.load(Ordering::Relaxed);
         let end_idx = tail.wrapping_add(count);
 
         if end_idx <= LOCAL_QUEUE_CAPACITY {
@@ -848,10 +884,8 @@ impl Worker {
             }
         }
         // Relaxed: push_batch is only called from the local worker thread.
-        self.local_tail.store(
-            end_idx & LOCAL_QUEUE_MASK,
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        self.local_tail
+            .store(end_idx & LOCAL_QUEUE_MASK, Ordering::Relaxed);
     }
 
     /// Primary execution loop for the worker thread.
@@ -886,8 +920,7 @@ impl Worker {
             };
 
             head = (head + 1) & LOCAL_QUEUE_MASK;
-            self.local_head
-                .store(head, core::sync::atomic::Ordering::Relaxed);
+            self.local_head.store(head, Ordering::Relaxed);
 
             let target_ptr = pool.get_context_ptr(task);
 
@@ -917,11 +950,7 @@ impl Worker {
             crate::future_bridge::CURRENT_FIBER.with(|c| c.set(core::ptr::null_mut()));
 
             // Optimized lifecycle state machine: handle Finished, Notified, or Suspending transitions.
-            let post_state = unsafe {
-                (*target_ptr)
-                    .state
-                    .load(core::sync::atomic::Ordering::Acquire)
-            };
+            let post_state = unsafe { (*target_ptr).state.load(Ordering::Acquire) };
 
             let mut final_state = post_state;
             if post_state == crate::memory_management::FiberStatus::Suspending as u32 {
@@ -929,8 +958,8 @@ impl Worker {
                     (*target_ptr).state.compare_exchange(
                         crate::memory_management::FiberStatus::Suspending as u32,
                         crate::memory_management::FiberStatus::Yielded as u32,
-                        core::sync::atomic::Ordering::Release,
-                        core::sync::atomic::Ordering::Acquire,
+                        Ordering::Release,
+                        Ordering::Acquire,
                     )
                 } {
                     Ok(_) => final_state = crate::memory_management::FiberStatus::Yielded as u32,
@@ -1443,13 +1472,13 @@ impl DtaScheduler {
         scheduler: &Self,
         current_core: usize,
         pool: &crate::memory_management::ContextPool,
-        shutdown: &core::sync::atomic::AtomicBool,
+        shutdown: &crate::sync::atomic::AtomicBool,
     ) {
         crate::future_bridge::CURRENT_WORKER_ID.with(|c| c.set(current_core));
         let mut idle_count: u32 = 0;
 
         loop {
-            if shutdown.load(core::sync::atomic::Ordering::Acquire) {
+            if shutdown.load(Ordering::Acquire) {
                 return;
             }
 
@@ -1568,7 +1597,7 @@ impl DtaScheduler {
                 // that triggered the SEV/write are visible for the poll below.
                 // Acquire (DMB ISH) is sufficient — SeqCst (DSB ISH+ISB) is overkill.
                 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
-                core::sync::atomic::fence(Ordering::Acquire);
+                crate::sync::atomic::fence(Ordering::Acquire);
 
                 #[cfg(not(feature = "hw-acceleration"))]
                 for _ in 0..16 {

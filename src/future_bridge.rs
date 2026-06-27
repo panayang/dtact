@@ -1,8 +1,8 @@
 #![allow(unsafe_code)]
 
+use crate::sync::atomic::Ordering;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::Ordering;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use crate::memory_management::{FiberContext, FiberStatus};

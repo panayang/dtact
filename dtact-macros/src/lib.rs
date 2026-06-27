@@ -75,7 +75,7 @@ impl Parse for TaskArgs {
 #[proc_macro_attribute]
 pub fn task(args: TokenStream, item: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as TaskArgs);
-    let input = parse_macro_input!(item as ItemFn);
+    let mut input = parse_macro_input!(item as ItemFn);
 
     let fn_name = &input.sig.ident;
     let priority = &args.priority;
@@ -90,8 +90,33 @@ pub fn task(args: TokenStream, item: TokenStream) -> TokenStream {
     let switcher = &args.switcher;
     let switcher_ident = syn::Ident::new(switcher, fn_name.span());
 
+    let return_type = match &input.sig.output {
+        syn::ReturnType::Default => quote! { () },
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+    };
+
+    input.sig.asyncness = None;
+    input.sig.output = syn::parse2(quote! {
+        -> dtact::api::TaskFuture<impl std::future::Future<Output = #return_type> + Send + 'static, dtact::#switcher_ident>
+    }).unwrap();
+
+    let vis = &input.vis;
+    let attrs = &input.attrs;
+    let sig = &input.sig;
+    let body = &input.block;
+
     let expanded = quote! {
-        #input
+        #(#attrs)*
+        #vis #sig {
+            let fut = async move #body;
+            dtact::api::TaskFuture {
+                future: fut,
+                priority: dtact::Priority::#priority_ident,
+                affinity: dtact::topology::Affinity::#affinity_ident,
+                kind: dtact::WorkloadKind::#kind_ident,
+                _marker: std::marker::PhantomData,
+            }
+        }
 
         pub mod #metadata_mod {
             pub const PRIORITY: dtact::Priority = dtact::Priority::#priority_ident;

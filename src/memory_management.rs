@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 #![allow(non_snake_case)]
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use crate::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// Safety policies for context pool memory layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +140,11 @@ pub struct FiberContext {
 
 impl FiberContext {
     /// Creates a new, blank `FiberContext`.
-    pub(crate) const fn new() -> Self {
+    ///
+    /// `const fn` on normal builds; plain `fn` under `cfg(loom)` because
+    /// loom's atomic types do not have `const` constructors.
+    #[cfg(loom)]
+    pub fn new() -> Self {
         Self {
             stack_ptr: 0,
             scheduler_stack_ptr: 0,
@@ -172,6 +176,59 @@ impl FiberContext {
             spin_failure_count: 0,
             last_os_thread_id: 0,
         }
+    }
+    /// Creates a new, blank `FiberContext`.
+    ///
+    /// `const fn` on normal builds; plain `fn` under `cfg(loom)` because
+    /// loom's atomic types do not have `const` constructors.
+    #[cfg(not(loom))]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            stack_ptr: 0,
+            scheduler_stack_ptr: 0,
+            tib_stack_limit: 0,
+            tib_stack_base: 0,
+            state: AtomicU32::new(FiberStatus::Initial as u32),
+            kind: WorkloadKind::Compute,
+            mode: TopologyMode::P2PMesh,
+            affinity: crate::api::topology::Affinity::SameCore,
+            origin_core: 0,
+            fiber_index: 0,
+            waiter_thread_id: AtomicU64::new(0),
+            waiter_handle: AtomicU64::new(0),
+            generation: AtomicU32::new(0),
+            regs: Registers::new(),
+            executor_regs: Registers::new(),
+            next_free: AtomicU32::new(u32::MAX),
+            panic_payload_ptr: core::ptr::null_mut(),
+            trampoline: dummy_trampoline,
+            invoke_closure: dummy_invoke,
+            closure_ptr: core::ptr::null_mut(),
+            result_ptr: core::ptr::null_mut(),
+            reader_ptr: core::ptr::null_mut(),
+            buf_ptr: core::ptr::slice_from_raw_parts_mut(core::ptr::null_mut(), 0),
+            read_buffer_ptr: core::ptr::null_mut(),
+            switch_fn: crate::context_switch::switch_context_cross_thread_float,
+            cleanup_fn: None,
+            adaptive_spin_count: 50,
+            spin_failure_count: 0,
+            last_os_thread_id: 0,
+        }
+    }
+}
+
+#[cfg(not(loom))]
+impl Default for FiberContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(loom)]
+impl Default for FiberContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -525,12 +582,22 @@ impl ContextPool {
 
             let new_head = (u64::from(r#gen.wrapping_add(1)) << 32) | u64::from(next);
 
-            match self.free_head.compare_exchange_weak(
+            // Under loom use strong CAS to avoid spurious-failure branch explosion.
+            #[cfg(not(loom))]
+            let cas = self.free_head.compare_exchange_weak(
                 head,
                 new_head,
                 Ordering::AcqRel,
                 Ordering::Acquire,
-            ) {
+            );
+            #[cfg(loom)]
+            let cas = self.free_head.compare_exchange(
+                head,
+                new_head,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            match cas {
                 Ok(_) => return Some(index),
                 Err(latest) => head = latest,
             }
@@ -557,12 +624,22 @@ impl ContextPool {
             let r#gen = (head >> 32) as u32;
             unsafe { (*ctx).next_free.store(current_idx, Ordering::Relaxed) };
             let new_head = (u64::from(r#gen.wrapping_add(1)) << 32) | u64::from(index);
-            match self.free_head.compare_exchange_weak(
+            // Strong CAS under loom eliminates spurious-failure branches.
+            #[cfg(not(loom))]
+            let cas = self.free_head.compare_exchange_weak(
                 head,
                 new_head,
                 Ordering::Release,
                 Ordering::Relaxed,
-            ) {
+            );
+            #[cfg(loom)]
+            let cas = self.free_head.compare_exchange(
+                head,
+                new_head,
+                Ordering::Release,
+                Ordering::Relaxed,
+            );
+            match cas {
                 Ok(_) => break,
                 Err(h) => head = h,
             }

@@ -86,7 +86,16 @@ pub use crate::api::hw::cldemote;
 #[cfg(feature = "hw-acceleration")]
 pub use crate::api::hw::uintr_signal as uintr;
 /// Spawn a fiber.
-pub use crate::api::spawn;
+///
+/// This macro supports both standard futures and custom tasks defined via `#[task]`.
+#[macro_export]
+macro_rules! spawn {
+    ($fut:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::api::spawner_traits::FallbackSpawner as _;
+        $crate::api::spawner_traits::SpawnerTag.spawn($fut)
+    }};
+}
 /// Yield execution to the scheduler.
 pub use crate::api::yield_now;
 /// Yield execution to another fiber.
@@ -150,9 +159,9 @@ pub struct Runtime {
     /// The lock-free arena for managing fiber stacks and contexts.
     pub pool: memory_management::ContextPool,
     /// Flag indicating if the worker threads have been started.
-    pub started: core::sync::atomic::AtomicBool,
+    pub started: crate::sync::atomic::AtomicBool,
     /// Cooperative shutdown signal for worker threads.
-    pub shutdown: core::sync::atomic::AtomicBool,
+    pub shutdown: crate::sync::atomic::AtomicBool,
 }
 
 impl Runtime {
@@ -165,7 +174,7 @@ impl Runtime {
     pub fn start(&'static self) {
         if self
             .started
-            .swap(true, core::sync::atomic::Ordering::SeqCst)
+            .swap(true, crate::sync::atomic::Ordering::SeqCst)
         {
             return;
         }
@@ -176,7 +185,7 @@ impl Runtime {
             // Each closure must capture its own copy of these values.
             let sched: &'static dta_scheduler::DtaScheduler = &self.scheduler;
             let pool: &'static memory_management::ContextPool = &self.pool;
-            let shutdown: &'static core::sync::atomic::AtomicBool = &self.shutdown;
+            let shutdown: &'static crate::sync::atomic::AtomicBool = &self.shutdown;
             let my_id = i;
 
             std::thread::Builder::new()
@@ -355,11 +364,35 @@ fn backpressure_yield() {
             let ctx = &mut *ctx_ptr;
             ctx.state.store(
                 crate::memory_management::FiberStatus::Notified as u32,
-                core::sync::atomic::Ordering::Release,
+                crate::sync::atomic::Ordering::Release,
             );
             (ctx.switch_fn)(&raw mut ctx.regs, &raw const ctx.executor_regs);
         }
     }
+}
+
+#[cfg(loom)]
+#[allow(unused_imports)]
+pub(crate) mod sync {
+    pub(crate) mod atomic {
+        pub(crate) use loom::sync::atomic::{
+            AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+        };
+    }
+    pub(crate) use loom::sync::Arc;
+    pub(crate) use loom::thread;
+}
+
+#[cfg(not(loom))]
+#[allow(unused_imports)]
+pub(crate) mod sync {
+    pub mod atomic {
+        pub use core::sync::atomic::{
+            AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+        };
+    }
+    pub use std::sync::Arc;
+    pub use std::thread;
 }
 
 #[allow(clippy::mixed_attributes_style)]
