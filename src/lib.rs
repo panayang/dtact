@@ -86,6 +86,8 @@ pub use crate::api::hw::cldemote;
 #[cfg(feature = "hw-acceleration")]
 pub use crate::api::hw::uintr_signal as uintr;
 /// Spawn a fiber.
+pub use crate::api::spawn;
+/// Spawn a fiber.
 ///
 /// This macro supports both standard futures and custom tasks defined via `#[task]`.
 #[macro_export]

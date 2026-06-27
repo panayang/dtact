@@ -13,20 +13,14 @@ pub const CHUNK_SIZE: usize = 32;
 
 /// Capacity of a single core-to-core mailbox.
 /// MUST be a power of two for bitwise masking.
-#[cfg(not(loom))]
 pub const MAILBOX_CAPACITY: usize = 65_536;
-#[cfg(loom)]
-pub const MAILBOX_CAPACITY: usize = 4;
 
 /// Mask for mailbox index wrap-around.
 pub const MAILBOX_MASK: usize = MAILBOX_CAPACITY - 1;
 
 /// Capacity of a worker's local execution queue.
 /// Sized to exactly hold the max queue without global locks.
-#[cfg(not(loom))]
 pub const LOCAL_QUEUE_CAPACITY: usize = 131_072;
-#[cfg(loom)]
-pub const LOCAL_QUEUE_CAPACITY: usize = 8;
 
 /// Mask for local queue index wrap-around.
 pub const LOCAL_QUEUE_MASK: usize = LOCAL_QUEUE_CAPACITY - 1;
@@ -37,10 +31,7 @@ pub const LOCAL_QUEUE_HIGH_WATERMARK: usize = LOCAL_QUEUE_CAPACITY - LOCAL_QUEUE
 
 /// Warehouse capacity in chunks. 32 768 chunks × 32 tasks = 1 048 576 tasks of
 /// emergency back-pressure storage. Must be a power of two for bitwise masking.
-#[cfg(not(loom))]
 pub const WAREHOUSE_CAPACITY: usize = 32_768;
-#[cfg(loom)]
-pub const WAREHOUSE_CAPACITY: usize = 4;
 
 /// Mask for warehouse index wrap-around.
 pub const WAREHOUSE_MASK: usize = WAREHOUSE_CAPACITY - 1;

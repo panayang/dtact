@@ -31,7 +31,7 @@ use core::arch::naked_asm;
 ///
 /// Follows the System V AMD64 ABI: callee-saved GPRs are rbx, rbp, r12-r15.
 /// All XMM registers (xmm0-xmm15) are caller-saved, so only MXCSR (the SSE
-/// control word) is preserved here, stored at gprs[8] (offset 64).
+/// control word) is preserved here, stored at gprs\[8\] (offset 64).
 ///
 /// # Arguments
 /// * `save` (rdi): Pointer to `Registers` where the current context will be saved.
