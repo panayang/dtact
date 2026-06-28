@@ -101,7 +101,7 @@ fn test_heap_escaped_spawns_counter_accuracy() {
 
     let after = dtact::HEAP_ESCAPED_SPAWNS.load(Ordering::Relaxed);
     assert!(
-        after >= before + 1,
+        after > before,
         "exactly the large future should have escaped to heap"
     );
 }

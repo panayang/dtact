@@ -88,8 +88,8 @@ fn test_dtact_comprehensive_e2e() {
         let res1 = Arc::new(AtomicU32::new(0));
         let res2 = Arc::new(std::sync::Mutex::new(String::new()));
 
-        let handle1 = spawn(custom_task_1(40, 2, res1.clone()));
-        let handle2 = spawn(custom_task_2(res2.clone()));
+        let handle1 = spawn!(custom_task_1(40, 2, res1.clone()));
+        let handle2 = spawn!(custom_task_2(res2.clone()));
 
         std::thread::sleep(std::time::Duration::from_millis(100));
         dtact::dtact_await(handle1);
