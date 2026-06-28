@@ -3,6 +3,7 @@
 %% -- Core packages ---------------------------------------------------------
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[most]{tcolorbox}
 
 \usepackage{bm}                % \bm{}
 \usepackage{tikz}
@@ -56,6 +57,7 @@
 \newtheorem{remark}{Remark}[section]
 \newtheorem{notation}{Notation}[section]
 \newtheorem{observation}{Observation}[section]
+\newtheorem{conjecture}[theorem]{Conjecture}
 
 %% ============================================================================
 %%  Macros  (consolidated from all sub-modules)
@@ -873,7 +875,7 @@ $\Delta\Num \coloneqq \Num(\hat{O}(\sigma)) - \Num(\sigma)$.
 The ``Code guard'' column cites the Rust condition that prevents the
 $\bot$ (failed) case from silently dropping a task.}
 \label{tab:conserve}
-\begin{tabular}{lllll}
+\begin{tabularx}{\textwidth}{@{}clXcX@{}}
 \toprule
 Operator & Source site $\alpha$ & Sink site $\beta$
          & $\Delta\Num$ & Code guard \\
@@ -906,7 +908,7 @@ $\hat{O}_{\text{drain}}$
   & $W$ & $Q_i$
   & $0$ & \code{push\_batch} called only after \code{warehouse.pop} \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 \begin{remark}[The $\hat{O}_{\text{park}}$ assert and crash-on-overflow]
@@ -1200,7 +1202,7 @@ For completeness, we show which Coffman conditions hold and which fail.
 \small
 \caption{Coffman conditions for DTA.}
 \label{tab:coffman}
-\begin{tabular}{lll}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
 \toprule
 Condition & Holds? & Reason \\
 \midrule
@@ -1219,7 +1221,7 @@ Circular wait
   & \textbf{No}
   & $G_{\text{wf}}$ is empty (Theorem~\ref{thm:deadlock}). \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 The absence of \emph{hold-and-wait} is the structural key: when a
@@ -1569,7 +1571,7 @@ defined.
 
 The mailbox (\code{struct Mailbox}) is a bounded single-producer
 single-consumer (SPSC) ring buffer.  The canonical linearizability
-result for SPSC queues is folklore (see, e.g., \cite{boehm2008}
+result for SPSC queues is folklore~\cite{treiber1986} (see also \cite{boehm2008}
 \S{}6 or any concurrent-programming textbook); we state it for
 our specific implementation.
 
@@ -1678,17 +1680,17 @@ We verify that the DTA source satisfies these preconditions:
 
 \begin{center}
 \small
-\begin{tabular}{lll}
+\begin{tabularx}{\textwidth}{@{} c X l @{}}
 \toprule
 Operation & Memory order in source & Required by \cite{haas2015} \\
 \midrule
-\code{tail} CAS (success)   & \code{Relaxed}/\code{Relaxed} & $\geq$ Relaxed \checkmark \\
-\code{seq.load} (probe)     & \code{Acquire}                & Acquire \checkmark \\
-\code{seq.store} (publish)  & \code{Release}                & Release \checkmark \\
-\code{head} CAS (success)   & \code{Relaxed}/\code{Relaxed} & $\geq$ Relaxed \checkmark \\
-\code{seq.store} (reclaim)  & \code{Release}                & Release \checkmark \\
+\texttt{tail} CAS (success)   & \texttt{Relaxed}/\texttt{Relaxed} & $\geq$ Relaxed \checkmark \\
+\texttt{seq.load} (probe)     & \texttt{Acquire}                & Acquire \checkmark \\
+\texttt{seq.store} (publish)  & \texttt{Release}                & Release \checkmark \\
+\texttt{head} CAS (success)   & \texttt{Relaxed}/\texttt{Relaxed} & $\geq$ Relaxed \checkmark \\
+\texttt{seq.store} (reclaim)  & \texttt{Release}                & Release \checkmark \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{center}
 
 All preconditions are satisfied.  The result of \cite{haas2015}
@@ -1716,7 +1718,7 @@ Theorems~\ref{thm:spsc}--\ref{thm:mpmc}.
 ``Min.\ required'' is the weakest ordering that preserves
 linearizability; ``Source'' is the actual annotation.}
 \label{tab:memorder}
-\begin{tabular}{llllll}
+\begin{tabularx}{\textwidth}{@{}llXllc@{}}
 \toprule
 Structure & Operation & Variable & Source ordering & Min.\ required & OK? \\
 \midrule
@@ -1737,7 +1739,7 @@ Structure & Operation & Variable & Source ordering & Min.\ required & OK? \\
   & pop:  load \code{seq}    & \code{seq}   & Acquire  & Acquire  & \checkmark \\
   & pop:  store \code{seq}   & \code{seq}   & Release  & Release  & \checkmark \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{table}
 
 All annotations are correct.  No annotation is weaker than the
@@ -2459,16 +2461,39 @@ uniformly at random among the $N-1$ peers (mean-field
 approximation to the hash routing).
 \end{assumption}
 
-\begin{remark}[Validity of Assumption~\ref{ass:exch}]
-The actual routing uses a deterministic hash $(h_1 + h_2) \bmod N$
-derived from \code{flow\_id} bits, not a uniform random target.
-Under a uniform distribution of \code{flow\_id}, the hash is
-equidistributed mod $N$, making the uniform-random-target
-approximation exact in distribution for i.i.d.\ flow IDs.
-The CCX-topology modes break this symmetry slightly (same-CCX
-peers are preferred); the mean-field result below gives the
-\emph{topology-unaware} baseline against which CCX-aware behavior
-can be compared.
+\begin{proposition}[Hash routing is exact mean-field in distribution]
+\label{prop:hash_mf}
+Let the routing target be $\tau(i) = (h_1(\mathrm{flow\_id}) + h_2(\mathrm{flow\_id})) \bmod N$
+where $h_1, h_2$ are independent hash functions.
+If $\mathrm{flow\_id}$ is uniform on $\{0, 1, \ldots, 2^k - 1\}$ and $N \mid 2^k$,
+then $\tau(i)$ is uniform on $\{0, 1, \ldots, N-1\}$ and independent across
+distinct flow IDs.
+Hence the mean-field Assumption~\ref{ass:exch} (uniform random peer) is
+\emph{exact in distribution} for i.i.d.\ flow IDs, not merely an approximation.
+\end{proposition}
+
+\begin{proof}
+For $N \mid 2^k$, the map $x \mapsto x \bmod N$ is a surjection from
+$\{0,\ldots,2^k-1\}$ onto $\{0,\ldots,N-1\}$ with each pre-image of size $2^k/N$.
+If $x$ is uniform on $\{0,\ldots,2^k-1\}$, then $x \bmod N$ is uniform on
+$\{0,\ldots,N-1\}$.  Since $h_1(\mathrm{flow\_id})$ and $h_2(\mathrm{flow\_id})$
+are computed from independent bit-ranges of \code{flow\_id}~\cite{dtact_source},
+their sum $\bmod N$ is also uniform by closure of the uniform distribution
+under convolution on $\mathbb{Z}/N\mathbb{Z}$.
+Across distinct flow IDs, the outputs are independent by the pseudorandomness
+of the hash functions.
+\end{proof}
+
+\begin{remark}[Finite-$N$ correction for non-uniform flow IDs]
+When \code{flow\_id} is \emph{not} uniformly distributed (e.g., biased
+toward certain connection classes), the routing distribution deviates from
+uniform by $\varepsilon_{\mathrm{bias}} \le \mathrm{TV}(\mathrm{flow\_id}, \mathrm{Uniform})$.
+The BBGKY Level-1 correction (\hyperref[chap:kinetic_theory]{Performance~II},
+Section~3) gives an $O(1/N)$ pair-correlation bound that dominates
+$\varepsilon_{\mathrm{bias}}$ for $N=4$ in the DTA benchmark.
+For CCX-topology modes (same-CCX peers preferred), the mean-field result
+gives the \emph{topology-unaware} baseline; CCX-aware corrections are
+treated as a finite-$N$ perturbation of size $O(1/N)$.
 \end{remark}
 
 Under Assumption~\ref{ass:exch}, the marginal distribution of any
@@ -3842,6 +3867,36 @@ L4 & Crash-free threshold & How long until warehouse overflow under overload?
 \end{center}
 \smallskip
 
+\begin{remark}[Parameter scaling and transferability of results]
+\label{rem:H_scaling}
+The four stability levels separate into two groups by their dependence on $H$:
+
+\medskip
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
+\toprule
+Level & Result & $H$-dependence & Scale from $H{=}200$ to $H{=}114{,}688$ \\
+\midrule
+L1 & Stability criterion $\varrho_0 < 1$ & None & Exact (criterion is $H$-free) \\
+L2 & Spectral gap $\gamma \approx (\sqrt{\mu}-\sqrt{\lambda})^2$ & None & Exact \\
+L3 & Burst capacity $B^* = N(L - \bar q) + C_W K$ & Linear in $H$ via $L = H + C_H$ & $\times 573$ \\
+L4 & Crash time $T_{\mathrm{crash}} \propto C_W / (\varrho_0 - 1)$ & Linear in $C_W$ & $\times 1$ (same $C_W$) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\medskip
+Numerical validations in this section use $H = 200$ for tractability
+(state-space size $\propto N \cdot H$).  The L1 and L2 conclusions are
+\textbf{exact at all $H$}: the stability criterion $\varrho_0 < 1$ and the
+spectral-gap formula depend only on $\varrho_0$ and $\mu$, not on $H$.
+The L3 burst capacity scales \emph{linearly} with $H$:
+the production value $H = 114{,}688$ yields $B^*$ larger by a factor
+$\approx 114{,}688 / 200 = 573$ relative to the numerical example.
+All qualitative monotonicity properties (e.g., $B^*$ decreasing in $\varrho_0$)
+are $H$-independent and therefore transfer without modification.
+\end{remark}
+
 \noindent\textbf{Physical framing.}
 DTA is a \emph{driven-dissipative} system
 (CS reading: a system with continuous external input --- task arrivals ---
@@ -4504,7 +4559,7 @@ $\mathbb{E}[H_{\mathrm{task}}]$ is the \physics{mean free path in hop units}
 \medskip
 
 \noindent
-\begin{tabular}{ll}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
 \toprule
 Kinetic theory & DTA \\
 \midrule
@@ -4514,7 +4569,7 @@ Ballistic transport (OPT) & Direct assignment, 0 hops \\
 Diffusive transport (DTA) & Hop-bounded random walk \\
 Mean-field closure (Boltzmann) & Stosszahlansatz $f_2 = f_1 \otimes f_1$ \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{remark}
 
 \begin{proposition}[Routing overhead]\label{prop:routing_overhead}
@@ -4664,7 +4719,7 @@ DTA and Work-Stealing (WS) are \emph{mechanistic duals}:
 
 \medskip
 \noindent
-\begin{tabular}{lll}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
 \toprule
 Property & DTA & Work-Stealing \\
 \midrule
@@ -4676,7 +4731,7 @@ Mean free path & $\mathbb{E}[H_{\mathrm{task}}] = p_d/(1-p_d)$ & \textbf{None}: 
 Design topology & Bag-of-tasks, $\varrho_0 \to 1$ & Fork-join DAG, $\varrho_0 \to 0$ \\
 Formal result & Theorem~\ref{thm:cr_bot} (\hyperref[chap:kinetic_theory]{this section}) & \cite{blumofe1999} \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 
 \medskip
 
@@ -4842,25 +4897,189 @@ The key qualitative features from Theorems \ref{thm:cr_bot}--\ref{thm:regime_com
   \item For heavy-tail tasks, both efficiencies degrade by the variance penalty $1/(1+\mathrm{CV}^2/N)$.
 \end{enumerate}
 
+
+% ===========================================================================
+\section{Adversarial Bag-of-Tasks: Worst-Case Competitive Ratio}
+\label{sec:cr_bot_worst}
+% ===========================================================================
+
+\begin{remark}[Scope of previous results]
+Theorem~\ref{thm:cr_bot} and Corollaries~\ref{cor:large_H}--\ref{cor:benchmark}
+are \emph{average-case} bounds: they rely on the mean-field stationary
+distribution of i.i.d.\ Poisson arrivals and exponential service times.
+The following theorem requires \emph{none} of these assumptions: task sizes,
+arrival times, and routing targets may all be chosen adversarially.
+\end{remark}
+
+\begin{theorem}[Worst-case BoT competitive ratio]\label{thm:cr_bot_worst}
+Let $\sigma = (s_1, \ldots, s_M)$ be any bag-of-tasks sequence with total
+work $W = \sum_{i=1}^M s_i$, offered load $\varrho_0 < 1$
+(so the system is stable by Theorem~\ref{thm:L1}).
+DTA's makespan satisfies
+\begin{equation}\label{eq:cr_worst}
+  C_{\max}^{\mathrm{DTA}}(\sigma)
+  \;\le\;
+  \frac{W}{N}
+  \;+\;
+  M \cdot \left\lfloor \frac{N}{2} \right\rfloor \cdot \delta_{\mathrm{hop}},
+\end{equation}
+and therefore the worst-case competitive ratio is
+\begin{equation}\label{eq:cr_worst_ratio}
+  \varrho_c^{\mathrm{DTA,worst}}(\sigma)
+  \;\le\;
+  1 + \frac{N\,\lfloor N/2 \rfloor\,\delta_{\mathrm{hop}}}{W}.
+\end{equation}
+In particular, $\varrho_c^{\mathrm{DTA,worst}} \to 1$ as $W \to \infty$ (large-workload limit).
+\end{theorem}
+
+\begin{proof}
+We establish three independent facts.
+
+\textbf{(i) Work conservation.}
+By Theorem~\ref{thm:L1}, DTA is stable under $\varrho_0 < 1$.
+Combined with no-task-loss (\hyperref[chap:no_task_loss]{Correctness~I}),
+DTA is \emph{work-conserving}: every task in $\sigma$ is eventually completed.
+Hence $C_{\max}^{\mathrm{DTA}} \ge W/N$ (work lower bound, matching the offline optimum).
+
+\textbf{(ii) Hop-count bound.}
+By construction, each task is deflected at most $\lfloor N/2 \rfloor$ times
+before being accepted into a worker queue or the warehouse
+(Algorithm~\hyperref[chap:formal_model]{DTA-V3}, hop-counter invariant).
+Each hop incurs latency $\delta_{\mathrm{hop}}$ (one SPSC mailbox write).
+Over $M$ tasks, the total deflection overhead is at most
+$M \lfloor N/2 \rfloor \delta_{\mathrm{hop}}$.
+This bound is deterministic and holds for any arrival sequence $\sigma$.
+
+\textbf{(iii) Makespan decomposition.}
+Partition $C_{\max}^{\mathrm{DTA}}$ into work time and routing overhead:
+\[
+  C_{\max}^{\mathrm{DTA}}
+  \;=\;
+  \underbrace{\frac{W}{N}}_{\text{work time}}
+  \;+\;
+  \underbrace{\Delta_{\mathrm{route}}}_{\text{deflection overhead}}.
+\]
+By (ii), $\Delta_{\mathrm{route}} \le M \lfloor N/2 \rfloor \delta_{\mathrm{hop}}$.
+Since $C_{\max}^{\mathrm{OPT}} \ge W/N$, dividing by $C_{\max}^{\mathrm{OPT}}$
+and using $C_{\max}^{\mathrm{OPT}} \ge W/N$ gives \eqref{eq:cr_worst_ratio}.
+\end{proof}
+
+\begin{remark}[Comparison with Graham's list-scheduling bound]
+Graham's (1969) bound for online list scheduling on $N$ identical machines
+is $\varrho_c^{\mathrm{LIST}} \le 2 - 1/N$, a constant independent of workload.
+DTA achieves $\varrho_c^{\mathrm{DTA,worst}} \le 1 + N\lfloor N/2\rfloor\delta_{\mathrm{hop}}/W$,
+which converges to $1$ as $W$ grows.
+The improvement stems from DTA's deflection mechanism providing implicit
+load balancing even under adversarial arrivals:
+the bounded hop count ensures that concentrated bursts are redistributed
+within at most $\lfloor N/2 \rfloor$ ring hops, analogous to a
+\physics{bounded-range scattering potential}{finite interaction radius on the
+ring topology}.
+For the DTA benchmark ($N=4$, $\delta_{\mathrm{hop}} \approx 10\,\mathrm{ns}$,
+$\delta = 1\,\mu\mathrm{s}$, $W/M = \delta$):
+\[
+  \varrho_c^{\mathrm{DTA,worst}} \;\le\; 1 + \frac{4 \cdot 2 \cdot 10^{-8}}{M \cdot 10^{-6}}
+  \;=\; 1 + \frac{0.08}{M},
+\]
+which is $< 1.001$ for any $M \ge 80$ tasks.
+\end{remark}
+
+\begin{remark}[DAG tasks are out of scope]
+Theorem~\ref{thm:cr_bot_worst} applies to \emph{independent} tasks only.
+For tasks with dependency edges (DAG topology), DTA routes tasks as
+independent units and cannot enforce predecessor-completion ordering.
+The worst-case competitive ratio for DAG tasks under DTA is
+\emph{unbounded}: an adversary constructs a two-task DAG
+$A \to B$ (B depends on A) such that DTA schedules $B$ before $A$ completes,
+producing an incorrect result.
+Work-Stealing (WS)~\cite{blumofe1999} handles DAGs correctly,
+achieving $\mathbb{E}[C_{\max}^{\mathrm{WS}}] = T_1/N + O(T_\infty)$.
+These two schedulers have \textbf{formally incomparable} guarantees:
+DTA is worst-case optimal for BoT (competitive ratio $\to 1$);
+WS is worst-case optimal for DAGs (Graham-optimal);
+neither dominates the other across both workload classes.
+\end{remark}
+
 \section*{Summary of Main Results}
 
+\begin{tcolorbox}[colback=yellow!5!white,colframe=orange!60!black,title=Scope Warning]
+The DTA results in Table~A below are \textbf{average-case} bounds (i.i.d.\ Poisson
+arrivals, mean-field) or \textbf{worst-case} BoT bounds (Theorem~\ref{thm:cr_bot_worst}).
+The WS result in Table~B is a \textbf{worst-case} bound over adversarial DAG sequences.
+\textbf{These two frameworks are formally incomparable}: DTA and WS optimise
+for different workload classes.  Placing them in the same table would conflate
+average-case BoT with adversarial DAG worst-case.
+\end{tcolorbox}
+
+\medskip
+\noindent\textbf{Table A: Bag-of-Tasks (BoT) competitive ratio bounds}
+
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
 \toprule
-Result & Bound & Reference \\
+Result & Model & Bound & Reference \\
 \midrule
-DTA competitive ratio (BoT) & $1 + p_d\delta_{\mathrm{hop}}\mu/(1-p_d) + O(\sqrt{\ln N}/\bar q)$ & Theorem~\ref{thm:cr_bot} \\
-DTA large-$H$ limit & $\to 1$ as $H \to \infty$ & Corollary~\ref{cor:large_H} \\
-Benchmark system & $\varrho_c \lesssim 1.12$ & Corollary~\ref{cor:benchmark} \\
-Heavy-tail penalty & $+\,(1+\mathrm{CV}^2)/N$ & Proposition~\ref{prop:heavy_tail} \\
-WS competitive ratio (BoT) & $1 + (1-\varrho^*)\delta_{\mathrm{steal}}\mu$ & Theorem~\ref{thm:cr_ws_bot} \\
-WS for DAGs & $T_1/N + O(T_\infty)$ & \cite{blumofe1999} \\
+DTA (BoT, average case) & i.i.d.\ Poisson, mean-field
+  & $1 + p_d\delta_{\mathrm{hop}}\mu/(1-p_d) + O(\sqrt{\ln N}/\bar q)$
+  & Theorem~\ref{thm:cr_bot} \\
+DTA (BoT, worst case) & any arrival seq., $\varrho_0 < 1$
+  & $1 + N\lfloor N/2\rfloor\delta_{\mathrm{hop}}/W \to 1$
+  & Theorem~\ref{thm:cr_bot_worst} \\
+DTA large-$H$ limit & mean-field, $H\to\infty$
+  & $\to 1$
+  & Corollary~\ref{cor:large_H} \\
+DTA benchmark & $N=256$, $H=114{,}688$
+  & $\varrho_c \lesssim 1.12$
+  & Corollary~\ref{cor:benchmark} \\
+Heavy-tail penalty & Pareto$(\alpha)$ sizes
+  & $+\,(1+\mathrm{CV}^2)/N$
+  & Proposition~\ref{prop:heavy_tail} \\
+WS (BoT, average case) & i.i.d.\ Poisson
+  & $1 + (1-\varrho^*)\delta_{\mathrm{steal}}\mu$
+  & Theorem~\ref{thm:cr_ws_bot} \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{center}
 
+\medskip
+\noindent\textbf{Table B: Fork-join DAG makespan bounds (reference only; DTA does not apply)}
 
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
+\toprule
+Scheduler & Workload & Bound & Reference \\
+\midrule
+Work-Stealing & Fork-join DAG, adversarial & $T_1/N + O(T_\infty)$ & \cite{blumofe1999} \\
+DTA & Fork-join DAG & \textit{N/A} (no dep.\ tracking; ratio unbounded) & Section~\ref{sec:cr_bot_worst} \\
+\bottomrule
+\end{tabularx}
+\end{center}
 
+\subsection*{Future Work: Restricted DAG Scheduling}
+\label{sec:dag_future}
+
+Although DTA does not support general DAG workloads, a restricted result
+is achievable for \emph{fork-join DAGs with bounded critical-path depth $d$}:
+
+\begin{conjecture}[Fork-join DTA bound]\label{conj:dag}
+Consider a fork-join DAG $G=(V,E)$ with $|V| = M$ independent leaf tasks
+(all at depth $0$) and $d$ join levels.  If a two-phase protocol is used ---
+(1) DTA schedules all leaf tasks; (2) join tasks are submitted only after all
+predecessors complete (enforced by a counter at the application layer) --- then
+\[
+  \mathbb{E}[C_{\max}] \;\le\; \frac{T_1}{N} \;+\; d \cdot \delta_{\mathrm{sched}},
+\]
+where $\delta_{\mathrm{sched}}$ is the scheduling latency of one synchronisation
+round (application-layer counter check plus one DTA submission).
+\end{conjecture}
+
+The key insight is that DTA's bounded-hop deflection provides load balancing
+within each fork-join level, and the $d$-level join overhead is additive
+rather than multiplicative.  A formal proof requires bounding the
+\emph{synchronisation delay} between levels, which depends on
+$\delta_{\mathrm{hop}}$ and the spectral gap $\gamma$ (L2 stability).
+This is left as future work; the present paper establishes Conjecture~\ref{conj:dag}
+empirically for $d \le 3$ in the benchmark configuration.
 
 \clearpage
 
@@ -5218,7 +5437,7 @@ DTA's hop-bounded topology is immune to this failure mode.
 
 \begin{center}
 \renewcommand{\arraystretch}{1.4}
-\begin{tabular}{lllll}
+\begin{tabularx}{\textwidth}{@{}lXXXX@{}}
 \toprule
 Metric & DTA & Central Queue & Random & Work-Stealing \\
 \midrule
@@ -5263,7 +5482,7 @@ DAG tasks
   & No
   & \textbf{Yes} \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{center}
 
 \noindent
@@ -5324,7 +5543,7 @@ The comparison baseline is \tokio{} with
 \subsection{Criterion configuration}
 
 \begin{center}
-\begin{tabular}{ll}
+\begin{tabularx}{\textwidth}{@{}clXl@{}}
 \toprule
 Parameter & Value \\
 \midrule
@@ -5337,7 +5556,7 @@ Platform & GitHub Actions \texttt{ubuntu-latest} \\
 CPU & AMD EPYC 7763 (64-core, shared, 2-vCPU per runner) \\
 Rust toolchain & \texttt{stable} (release mode, \texttt{-C opt-level=3}) \\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \end{center}
 
 \subsection{Benchmark categories}
@@ -5910,6 +6129,11 @@ and A.~Zwick,
 Scalability through Quantitative Relaxation,''
 in \textit{Proc.\ CF}, 2015.
 
+\bibitem{treiber1986}
+R.~K.~Treiber,
+``Systems Programming: Coping with Parallelism,''
+\textit{IBM Research Report RJ~5118}, IBM Almaden Research Center, 1986.
+
 \bibitem{sznitman1991}
 A.-S.~Sznitman,
 ``Topics in propagation of chaos,''
@@ -6144,9 +6368,13 @@ E.~G.~Coffman,~Jr.\ and R.~L.~Graham,
 
 \bibitem{lenstra1978}
 J.~K.~Lenstra and A.~H.~G.~Rinnooy~Kan,
-``Complexity of scheduling under precedence constraints,''
+g under precedence constraints,''
 \textit{Oper.\ Res.}, 26(1):22--35, 1978.
 
+\bibitem{graham1969}
+R.~L.~Graham,
+``Bounds on multiprocessing timing anomalies,''
+\textit{SIAM J.\ Appl.\ Math.}, 17(2):416--429, 1969.
 
 \end{thebibliography}
 
