@@ -141,7 +141,8 @@ Correctness, Progress, Performance, and Competitive Bounds}
 \vspace{0.3em}
 
 \textbf{Version History} \\
-      \small v1: June 28, 2026 \quad v2: June 29, 2026
+      \small v1: June 28, 2026 \quad v2: June 29, 2026 \\
+      \small v3: June 30, 2026
 \end{center}
 
 \vspace{0.6em}
@@ -213,7 +214,7 @@ identifier in \code{src/dta\_scheduler.rs} from which it is derived,
 so that proofs in the sub-modules can cite both the mathematical
 statement and the concrete code artifact that instantiates it.
 
-We adopt a notation inspired by \emph{second quantization}~\cite{derrida2007,schutz2001} from
+We adopt a notation inspired by \emph{second quantization}~\cite{dirac1927,jordan_wigner1928,fock1932,landau_qm,feynman_iii,derrida2007,schutz2001} from
 quantum field theory.  This choice is motivated by the observation
 that the scheduler's correctness rests on a \emph{conservation law}
 (tasks are neither created nor destroyed by internal routing) that is
@@ -319,7 +320,7 @@ such that
 The set of all valid states is $\Sigma$.
 
 \medskip\noindent
-\textbf{Occupation-number representation.}
+\textbf{Occupation-number representation}~\cite{fock1932,landau_qm}.
 For each site $\alpha$ and task $\tau$ define the occupation number
 $n_{\alpha,\tau}(\sigma) \coloneqq \mathbf{1}[\tau \in \sigma(\alpha)]
 \in \{0,1\}$.
@@ -376,7 +377,7 @@ The sum excludes $\varnothing$ so that $\Num$ counts only
 \end{definition}
 
 \begin{remark}[Classical vs.\ quantum]
-In quantum mechanics, $\hat{a}^\dagger$ and $\hat{a}$ are linear
+In quantum mechanics~\cite{landau_qm,feynman_iii}, $\hat{a}^\dagger$ and $\hat{a}$ are linear
 operators on a Hilbert space obeying canonical (anti)commutation
 relations.  Here they are \emph{partial functions on a finite set};
 the ``algebra'' they satisfy is simply
@@ -6087,6 +6088,36 @@ confirms the CAS-storm paradox (\S\ref{sec:cas_storm})
 identified in \hyperref[chap:competitive_ratio]{the Competitive Analysis},
 \S5.3.
 
+\begin{remark}[Confounding architectural factors]
+\label{rem:confounders}
+DTA and \tokio{}~\cite{tokio} differ in at least three architectural dimensions
+beyond the scheduling algorithm:
+\begin{enumerate}
+  \item \textbf{Async model.}
+        DTA uses \emph{stackful} fibers (each task carries a full
+        saved register context); \tokio{} uses \emph{stackless}
+        futures (state-machine compilation).  A \texttt{yield\_now()}
+        in DTA therefore incurs a full context-switch, while in \tokio{}
+        it is a state-machine transition with no stack save.
+  \item \textbf{Memory allocation strategy.}
+        DTA pre-allocates a fixed context pool at startup; allocation
+        cost per task is $O(1)$ pointer arithmetic.
+        \tokio{} allocates future objects on the heap via the global
+        allocator; under high spawn rates the allocator becomes
+        a contention point.
+  \item \textbf{Work-routing protocol.}
+        DTA uses push-based deflection (SPSC mailboxes);
+        \tokio{} uses pull-based work-stealing (Chase--Lev deque~\cite{chase_lev2005}).
+\end{enumerate}
+Benchmarks that favour DTA (high spawn rate, batch workloads) may
+partly reflect pool-allocation and SPSC-write advantages rather than
+scheduling algorithm superiority.  Benchmarks where \tokio{} wins
+(cooperative yield) directly reflect the stackful-vs-stackless cost
+asymmetry.  The theoretical model accounts only for the scheduling
+algorithm; the architectural differences are unmodelled confounders
+that the reader should bear in mind when interpreting the ratios.
+\end{remark}
+
 % ===========================================================================
 \section{Experimental Setup}
 % ===========================================================================
@@ -6099,7 +6130,7 @@ mailbox to every other, consistent with the $K_4$ topology assumed in
 \hyperref[chap:formal_model]{the Formal Model}).
 The pool is configured with 8{,}192 contexts of 64\,KiB each
 (\texttt{SafetyLevel::Safety0}).
-The comparison baseline is \tokio{} with
+The comparison baseline is \tokio{}~\cite{tokio} with
 \texttt{multi\_thread} scheduler, also 4 worker threads.
 
 \subsection{Criterion configuration}
@@ -6115,11 +6146,19 @@ Sample size & 200 independent runs \\
 Noise threshold & 5\% \\
 \midrule
 Platform & GitHub Actions \texttt{ubuntu-latest} \\
-CPU & AMD EPYC 7763 (64-core, shared, 2-vCPU per runner) \\
+CPU & AMD EPYC 7763 (64-core, shared, 2-vCPU per runner)\textsuperscript{*} \\
 Rust toolchain & \texttt{stable} (release mode, \texttt{-C opt-level=3}) \\
 \bottomrule
 \end{tabularx}
 \end{center}
+
+{\small\noindent\textsuperscript{*}GitHub Actions does not guarantee
+a specific CPU model; EPYC 7763 was reported by \texttt{/proc/cpuinfo}
+on the runner for CI run~\cite{dtact_ci}.
+Different runs may execute on different hardware.
+All performance conclusions are stated as DTA-to-\tokio{} latency ratios
+measured on the same runner, which are substantially
+hardware-independent to first order.}
 
 \subsection{Benchmark categories}
 
@@ -6500,8 +6539,9 @@ The remaining discrepancy in DTA ($839 - 430 \approx 400\,\mathrm{ns}$)
 likely reflects additional state-machine overhead in the custom async executor.
 
 \begin{observation}[Design intent respected]
-This regression is not a bug but a \textbf{design boundary}: DTA is
-architected for \emph{BoT spawn-and-complete} workloads, not for
+This regression is not a bug but a \textbf{design boundary}
+(see Remark~\ref{rem:confounders} for the full list of confounders):
+DTA is architected for \emph{BoT spawn-and-complete} workloads, not for
 cooperative-multitasking / coroutine-switching workloads.
 The theoretical analysis (\hyperref[chap:competitive_ratio]{the Competitive Analysis}, Definition~1.1,
 task topologies) does not include cooperative-yield workloads in DTA's
@@ -6942,15 +6982,62 @@ E.~G.~Coffman,~Jr.\ and R.~L.~Graham,
 
 \bibitem{lenstra1978}
 J.~K.~Lenstra and A.~H.~G.~Rinnooy~Kan,
-g under precedence constraints,''
+``Complexity of machine scheduling under precedence constraints,''
 \textit{Oper.\ Res.}, 26(1):22--35, 1978.
-
 
 \bibitem{hinrichsen2000}
 H.~Hinrichsen,
 ``Non-equilibrium critical phenomena and phase transitions
 into absorbing states,''
-\textit{Adv.\ Phys.}, 49(7):815--958, 2000.
+
+\bibitem{graham1969b}
+R.~L.~Graham,
+``Bounds on multiprocessing timing anomalies,''
+\textit{SIAM J.\ Appl.\ Math.}, 17(2):416--429, 1969.
+
+\bibitem{tokio}
+\textsc{Tokio Contributors},
+\textit{Tokio --- An Asynchronous Rust Runtime},
+\url{https://github.com/tokio-rs/tokio}, 2024.
+Version 1.x; \texttt{multi\_thread} scheduler with work-stealing deque.
+
+\bibitem{landau_qm}
+L.~D.~Landau and E.~M.~Lifshitz,
+\textit{Quantum Mechanics (Non-Relativistic Theory)},
+3rd~ed., Course of Theoretical Physics, Vol.~3.
+Butterworth-Heinemann, Oxford, 1977.
+\S\S~64--65 (occupation numbers and second quantisation).
+
+\bibitem{feynman_iii}
+R.~P.~Feynman, R.~B.~Leighton, and M.~Sands,
+\textit{The Feynman Lectures on Physics, Vol.~III: Quantum Mechanics}.
+Addison-Wesley, Reading, MA, 1965.
+Chapters~1--2 (state-vector formalism) and Chapter~4 (identical particles).
+
+\bibitem{feynman_ii}
+R.~P.~Feynman, R.~B.~Leighton, and M.~Sands,
+\textit{The Feynman Lectures on Physics, Vol.~II: Mainly Electromagnetism and Matter}.
+Addison-Wesley, Reading, MA, 1964.
+Chapter~1 (field as a collection of harmonic oscillators).
+
+\bibitem{dirac1927}
+P.~A.~M.~Dirac,
+``The quantum theory of the emission and absorption of radiation,''
+\textit{Proc.\ R.\ Soc.\ Lond.\ A}, 114(767):243--265, 1927.
+[First introduction of creation and annihilation operators.]
+
+\bibitem{jordan_wigner1928}
+P.~Jordan and E.~Wigner,
+``\"Uber das Paulische \"Aquivalenzverbot,''
+\textit{Z.\ Phys.}, 47(9--10):631--651, 1928.
+[Fermionic occupation-number representation; Jordan--Wigner transformation.]
+
+\bibitem{fock1932}
+V.~Fock,
+``Konfigurationsraum und zweite Quantelung,''
+\textit{Z.\ Phys.}, 75(9--10):622--647, 1932.
+[Introduction of Fock space and the occupation-number formalism.]
+
 
 \end{thebibliography}
 
