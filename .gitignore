@@ -31,3 +31,16 @@ clean_fixes.patch
 examples/dtact.dll
 web/dist
 web/target
+
+**/*.aux
+**/*.log
+**/*.out
+**/*.pdf
+**/*.toc
+**/*.tar
+**/*.zip
+paper/template
+**/template/*
+**/template/**
+**/template/
+**/template
