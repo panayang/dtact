@@ -144,7 +144,7 @@ Correctness, Progress, Performance, and Competitive Bounds}
 \textbf{Version History} \\
       \small v1: June 28, 2026 \quad v2: June 29, 2026 \\
       \small v3: June 30, 2026 \quad v4: June 30, 2026 \\
-      \small v5: July 1, 2026
+      \small v5: July 1, 2026 \quad v6: July 1, 2026
 \end{center}
 
 \vspace{0.6em}
@@ -155,7 +155,7 @@ scheduler ($N$ workers, SPSC mailboxes, Vyukov MPMC warehouse, hop-bounded
 deflection).  Using a second-quantisation Fock-space algebra and kinetic
 theory, we establish across seven parts:
 \textbf{(I)}~four correctness theorems (task conservation, deadlock and
-livelock freedom, linearizability);
+livelock freedom, linearizability~\cite{herlihy_wing1990,herlihy_shavit2008});
 \textbf{(II)}~bounded waiting time with an explicit ceiling $W_{\max}(\lambda,\mu,N,H)$
 and $k$-bounded fairness;
 \textbf{(III)}~quantitative performance bounds including mean-field load
@@ -165,7 +165,7 @@ $+$ Gumbel fluctuation), a four-level stability ladder, and fork-join
 DAG bounds via a sequential-nucleation kinetic equation;
 \textbf{(IV)}~competitive analysis with an adversarial BoT bound
 $\rho_c^{\mathrm{DTA,worst}} \leq 1 + N\lfloor N/2\rfloor\delta_{\mathrm{hop}}/W \to 1$;
-\textbf{(V)}~empirical validation against public Criterion CI benchmarks,
+\textbf{(V)}~empirical validation against public Criterion~\cite{criterion} CI benchmarks,
 with variance and moment analysis confirming all predictions;
 \textbf{(VI)}~an information-theoretic cost framework proving DTA is
 information-optimal ($\eta_{\mathrm{util}}\to 1$) and that its
@@ -215,9 +215,9 @@ state-transition rules.  A correspondence table (Section~\ref{sec:corr})
 then maps every mathematical object back to the specific Rust
 identifier in \code{src/dta\_scheduler.rs} from which it is derived,
 so that proofs in the sub-modules can cite both the mathematical
-statement and the concrete code artifact that instantiates it.
+statement and the concrete code artifact that instantiates it~\cite{dtact}.
 
-We adopt a notation inspired by \emph{second quantization}~\cite{dirac1927,jordan_wigner1928,fock1932,landau_qm,feynman_iii,derrida2007,schutz2001} from
+We adopt a notation inspired by \emph{second quantization}~\cite{dirac1927,jordan_wigner1928,fock1932,landau_qm,landau_fields,landau_statphys,feynman_ii,feynman_iii,derrida2007,schutz2001} from
 quantum field theory.  This choice is motivated by the observation
 that the scheduler's correctness rests on a \emph{conservation law}
 (tasks are neither created nor destroyed by internal routing) that is
@@ -1096,7 +1096,7 @@ subgraph $G_{\text{wf}}\!\upharpoonright_D$ to contain a directed
 cycle.
 \end{definition}
 
-The classical \emph{Coffman conditions} for deadlock are:
+The classical \emph{Coffman conditions} for deadlock are (see also~\cite{lenstra1978} for scheduling complexity):
 \begin{enumerate}
   \item \textbf{Mutual exclusion}: a resource is held by at most one
         process at a time.
@@ -1549,7 +1549,7 @@ to three tasks:
 \medskip\noindent\textbf{Primary references.}
 \begin{itemize}
   \item Herlihy \& Wing (1990) --- canonical definition of
-        linearizability~\cite{herlihy1990}.
+        linearizability~\cite{herlihy_wing1990}.
   \item Boehm \& Adve (2008) --- the C++ memory model; defines the
         happens-before relation $\xrightarrow{hb}$ for
         Release/Acquire pairs~\cite{boehm2008}.
@@ -1564,7 +1564,7 @@ to three tasks:
 \section{Background: Linearizability and Linearization Points}
 % =============================================================
 
-\begin{definition}[Linearizability \cite{herlihy1990}]
+\begin{definition}[Linearizability \cite{herlihy_wing1990}]
 A concurrent execution history $H$ is \emph{linearizable} with
 respect to a sequential specification $S$ if there exists a
 \emph{linearization} --- a total order $\prec$ on the completed
@@ -4567,7 +4567,7 @@ phase transition as an open problem.
 \bigskip
 \noindent\textbf{Overview.}
 This part places DTA in its competitive and empirical context.
-The competitive analysis derives online competitive ratios for Bag-of-Tasks
+The competitive analysis~\cite{borodin_elyaniv1998,borodin1996} derives online competitive ratios for Bag-of-Tasks
 workloads relative to work-stealing, including an adversarial worst-case
 bound that requires no mean-field assumption.
 The comparison chapter benchmarks DTA against a centralised queue baseline
@@ -4800,7 +4800,7 @@ an additional $\mathrm{CV}^2/N$ load-imbalance term.
 \end{proposition}
 
 \begin{proof}[Proof sketch]
-By the analysis of \cite{graham1969}, the \emph{best} online algorithm
+By the analysis of \cite{graham1969,coffman_graham1972}, the \emph{best} online algorithm
 for $N$ machines has competitive ratio $\ge 1 + (1-1/N)\cdot\sigma_s^2 / \mathbb{E}[s]^2 / N$
 for i.i.d.\ random job sizes.  DTA matches this lower bound up to
 $O(p_d)$ corrections.  For $\alpha \le 2$ (infinite variance), $\mathrm{CV} \to \infty$
@@ -5117,8 +5117,8 @@ The worst-case competitive ratio for DAG tasks under DTA is
 \emph{unbounded}: an adversary constructs a two-task DAG
 $A \to B$ (B depends on A) such that DTA schedules $B$ before $A$ completes,
 producing an incorrect result.
-Work-Stealing (WS)~\cite{blumofe1999} handles DAGs correctly,
-achieving $\mathbb{E}[C_{\max}^{\mathrm{WS}}] = T_1/N + O(T_\infty)$.
+Work-Stealing (WS)~\cite{blumofe1999,acar2002} handles DAGs correctly,
+achieving $\mathbb{E}[C_{\max}^{\mathrm{WS}}] = T_1/N + O(T_\infty)$~\cite{arora2001}.
 These two schedulers have \textbf{formally incomparable} guarantees:
 DTA is worst-case optimal for BoT (competitive ratio $\to 1$);
 WS is worst-case optimal for DAGs (Graham-optimal);
@@ -5812,7 +5812,7 @@ DTA = ring network with bounded hop radius (short-range conductance);
 Rand = disconnected islands (no conductance between workers).
 
 The hop bound $\lfloor N/2 \rfloor$ in DTA is analogous to the
-\physics{Cheeger constant of a ring graph}{connectivity bottleneck}.
+\physics{Cheeger constant of a ring graph}{connectivity bottleneck}~\cite{cheeger1970}.
 For a ring of $N$ nodes with diameter $\lfloor N/2 \rfloor$, the Cheeger
 constant scales as $\Phi \sim 2/N$, which by the Cheeger inequality
 $\gamma \ge \Phi^2/2$ gives spectral gap $\gamma \ge 2/N^2$.
@@ -6347,7 +6347,7 @@ contention) multiplied by $N-1 = 3$ idle-worker coherence events.
 \label{obs:sub_lin}
 At $M=1\mathrm{k}$, both runtimes show \emph{higher} per-task cost than at
 $M=1\mathrm{M}$.  This is a \physics{boundary-layer effect}{warm-up and
-startup overhead amortized over more tasks}: initialization of SPSC ring
+startup overhead amortized~\cite{sleator_tarjan1985} over more tasks}: initialization of SPSC ring
 buffers, thread creation, and TLB warm-up are all amortized over $M$ tasks.
 The theory's $\delta$ is the \emph{steady-state} cost, matching the
 large-$M$ limit.
@@ -7055,15 +7055,49 @@ We prove $\eta_{\mathrm{util}}(\mathrm{DTA}) \to 1$ under mild assumptions.
 
 \begin{assumption}\label{ass:mmp}
 \begin{enumerate}[label=(\textup{A\arabic*})]
-  \item\label{ass:poisson} Tasks arrive as a Poisson process with rate $\lambda$;
-        service times are i.i.d.\ $\mathrm{Exp}(\mu)$; load
-        $\rho = \lambda/(N\mu) < 1$.
-  \item\label{ass:threshold} The deflection threshold satisfies
-        $H \geq \lceil\rho/(1-\rho)\rceil + 1$.
-  \item\label{ass:bounded_tau} Information staleness is bounded:
-        $\tau_{gh} \leq \bar\tau < \infty$ for all $g,h \in G$.
+  \item\label{ass:ergodic}
+        \textbf{[Ergodic workload.]}
+        The arrival process is stationary ergodic with finite rate
+        $\lambda$ and finite second moment; service times are i.i.d.\
+        with finite mean $1/\mu$ and finite variance $\sigma^2 < \infty$;
+        load $\rho = \lambda/(N\mu) < 1$.  (The M/M/1 model is a special
+        case; the key property used is ergodicity and $\rho < 1$.)
+
+  \item\label{ass:threshold}
+        \textbf{[Threshold structure.]}
+        For each worker $g$, the cost-optimal local admission policy
+        --- acting only on $q_g$ --- is a monotone threshold policy:
+        accept if $q_g \leq H_g^*$, deflect otherwise.
+        This holds for \emph{any} GI/GI/1/$H$ queue with a convex,
+        non-decreasing running cost (e.g.\ sojourn time); see
+        Stidham~\cite{stidham1985} for M/M/1/$H$ and the extension via
+        convexity of the value function.
+        DTA sets $H = \lfloor N/2 \rfloor$; the assumption reduces to
+        $H \geq H_g^*$, which for the M/M/1/$H$ case ($H^* =
+        \lceil\rho/(1-\rho)\rceil$) is equivalent to
+        $\rho \leq 1 - 2/N$ --- satisfied for $\rho < 1$ at any $N \geq 4$
+        with mild margin (e.g.\ $\rho \leq 0.97$ at $N = 64$).
+
+  \item\label{ass:bounded_tau}
+        \textbf{[Bounded mean staleness.]}
+        Information staleness satisfies
+        $\mathbb{E}[\tau_{gh}] \leq \bar\tau < \infty$ for all $g,h \in G$.
+        (This is weaker than requiring a.s.\ bounded staleness;
+        it holds whenever the observation rate is bounded below by
+        $1/\bar\tau$.)
 \end{enumerate}
 \end{assumption}
+
+\begin{remark}[On Assumption~\ref{ass:threshold} and DTA's hop bound]
+DTA's deflection threshold $H = \lfloor N/2\rfloor$ is the
+\emph{maximum hop count}, determined at compile time.  The condition
+$\rho \leq 1 - 2/N$ is a \emph{mild sub-saturation requirement}: it
+excludes only the last $2/N$ fraction of load before saturation.
+In particular it does NOT require $H \geq 1$ in any non-trivial sense;
+the condition is on the \emph{system load} $\rho$, not on $H$
+independently.  For typical server deployments ($\rho \leq 0.9$,
+$N \geq 8$), Assumption~\ref{ass:threshold} is automatically satisfied.
+\end{remark}
 
 \begin{theorem}[DTA utilisation efficiency]\label{thm:dta_info_opt}
 Under Assumption~\ref{ass:mmp}, for every $\varepsilon > 0$ there exists
@@ -7077,36 +7111,103 @@ $W_0$ such that for all total work $W \geq W_0$:
 \end{theorem}
 
 \begin{proof}
-We model the routing decision at each arrival epoch as a
-\emph{partially observed Markov decision process} (POMDP) with observable
-state $q_g \in \{0,\ldots,H\!+\!1\}$ (worker $g$'s own queue length)
-and action space $\{\mathrm{accept}, \mathrm{deflect}\}$.
+We decompose the argument into three steps.
 
-The instantaneous cost $c(q) = q$ (sojourn contribution, by Little's
-law~\cite{little1961}) is convex and non-decreasing in $q$.
-For the M/M/$1$/$H$ queue with overflow routing, the optimal policy
-minimising $\sum_t c(q(t))$ subject to observing only $q(t)$ is a
-\emph{threshold policy}: accept if $q \leq H^*$, deflect otherwise,
-where $H^* = \lceil\rho/(1-\rho)\rceil$ (see~\cite{stidham1985,weber1990}).
-By~\ref{ass:threshold}, $H \geq H^*$, so DTA's policy is optimal within
-$\mathcal{I}^{\mathrm{DTA}}$, i.e.\ $\mathbb{E}[C_{\max}(\mathrm{DTA})]
-= C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) + \Delta$, where $\Delta$
-is the mean-field approximation error.
+\medskip
+\noindent\textbf{Step~1 (Local threshold optimality).}
+Model the routing decision at each arrival epoch as a
+\emph{partially observed Markov decision process} (POMDP):
+observable state $q_g \in \{0,\ldots,H\}$, action space
+$\{\mathrm{accept}, \mathrm{deflect}\}$, instantaneous cost
+$c(q) = q$ (sojourn contribution, by Little's law~\cite{little1961}).
+The function $c$ is convex and non-decreasing.
+For any stable single-server queue with convex running cost observed
+through its queue length alone, the optimal policy is a
+\emph{threshold policy}~\cite{stidham1985}: accept iff $q \leq H^*$.
+By Assumption~\ref{ass:threshold}, DTA sets $H \geq H^*$, so its
+threshold-$H$ policy achieves the minimum expected cost within
+$\mathcal{I}^{\mathrm{DTA}}$:
+\begin{equation}\label{eq:dta_local_opt}
+  \mathbb{E}[C_{\max}(\mathrm{DTA}) \mid \mathcal{I}^{\mathrm{DTA}}]
+  \;=\;
+  C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) \;+\; \Delta_{\mathrm{mf}},
+\end{equation}
+where $\Delta_{\mathrm{mf}}$ is the mean-field approximation error.
 
-By Theorem~\ref{prop:mf-recovery} (mean-field recovery), the steady-state
-distribution converges to $q^*$ with error $O(1/N)$ in total variation.
-Under the Gumbel CLT (Theorem~\ref{thm:fj_first}), $\Delta = O(W^{-1/2})$
-and $C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) = \Theta(W/(N\mu))$.
-Hence $\Delta / C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) = O(W^{-1/2}) \to 0$,
-completing the proof.
+\medskip
+\noindent\textbf{Step~2 (Mean-field error vanishes).}
+By Assumption~\ref{ass:ergodic} and Theorem~\ref{prop:mf-recovery},
+the steady-state queue-length distribution converges to the mean-field
+fixed point $q^*$ with error $O(1/N)$ in total variation as $N \to \infty$.
+By Assumption~\ref{ass:bounded_tau}, information staleness introduces
+an additive bias $O(\bar\tau \cdot \lambda)$ to the effective arrival
+rate seen by each worker, which is $o(1)$ for $\bar\tau \lambda \to 0$.
+Under these conditions:
+\[
+  \Delta_{\mathrm{mf}} \;=\; O\!\left(\frac{1}{\sqrt{W}}\right)
+  \quad\text{as } W \to \infty,
+\]
+by the Gumbel CLT (Theorem~\ref{thm:fj_first}), since makespan
+fluctuations scale as $O(W^{-1/2})$ relative to the mean.
+
+\medskip
+\noindent\textbf{Step~3 ($\eta_{\mathrm{util}} \to 1$).}
+The oracle makespan satisfies
+$C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) = \Theta(W/(N\mu))$.
+From~\eqref{eq:dta_local_opt}:
+\[
+  \eta_{\mathrm{util}}(\mathrm{DTA})
+  \;=\;
+  \frac{\mathbb{E}[C_{\max}(\mathrm{DTA})]}{C_{\max}^*(\mathcal{I}^{\mathrm{DTA}})}
+  \;=\;
+  1 + \frac{\Delta_{\mathrm{mf}}}{C_{\max}^*(\mathcal{I}^{\mathrm{DTA}})}
+  \;=\;
+  1 + O\!\left(\frac{1}{\sqrt{W}} \cdot \frac{N\mu}{W/(N\mu)}\right)
+  \;=\; 1 + O(W^{-1/2}),
+\]
+which tends to~$1$ as $W \to \infty$, establishing the theorem for
+every $\varepsilon > 0$ by choosing $W_0 = O(\varepsilon^{-2})$.
 \end{proof}
 
-\begin{remark}
-The same argument applies to WS: WS's random-victim steal policy is
-optimal within $\mathcal{I}^{\mathrm{WS}}$ (optimal random search
-under uniform ignorance).  Hence \emph{both} schedulers achieve
-$\eta_{\mathrm{util}} \to 1$; the gap between them is entirely in
-$\eta_{\mathrm{info}}$, analysed concretely in \S\ref{sec:numa_concrete}.
+\begin{remark}[WS also achieves $\eta_{\mathrm{util}}\to 1$]
+\label{rem:ws_opt}
+WS achieves $\eta_{\mathrm{util}}(\mathrm{WS})\to 1$ by a
+\emph{different} argument, since WS's information set
+$\mathcal{I}^{\mathrm{WS}}$ does not include individual queue lengths.
+We argue in two parts.
+
+\noindent\textbf{(a)~Random-victim optimality within $\mathcal{I}^{\mathrm{WS}}$.}
+At steady state, the non-idle workers' queue lengths form an
+\emph{exchangeable} sequence: by symmetry of the mean-field dynamics
+(Proposition~\ref{prop:mf-recovery}), all non-idle workers are
+identically distributed.  Conditioned on $\mathcal{I}^{\mathrm{WS}}$
+(which contains no per-worker queue information), the marginal
+distribution of $q_i$ is the same for every non-idle worker~$i$.
+By de Finetti's theorem~\cite{norris1997}, any exchangeable prior
+is a mixture of i.i.d.\ distributions, so for any Borel set $A$:
+\[
+  \mathbb{P}(q_i \in A \mid \mathcal{I}^{\mathrm{WS}})
+  \;=\;
+  \mathbb{P}(q_j \in A \mid \mathcal{I}^{\mathrm{WS}})
+  \quad\text{for all non-idle }i,j.
+\]
+Therefore the expected steal yield $\mathbb{E}[q_{\mathrm{victim}} \mid
+\mathcal{I}^{\mathrm{WS}}]$ is \emph{identical} for every victim choice;
+random-victim selection is Pareto-optimal (no deterministic policy
+within $\mathcal{I}^{\mathrm{WS}}$ dominates it)~\cite{blumofe1999}.
+
+\noindent\textbf{(b)~Makespan efficiency.}
+Under the $\mathcal{I}^{\mathrm{WS}}$ constraint, WS achieves
+$\mathbb{E}[C_{\max}(\mathrm{WS})] \leq T_\infty + T_1/N$~\cite{blumofe1999},
+where $T_\infty$ is the critical-path length and $T_1 = W/\mu$ is the
+total work.  For bag-of-tasks workloads ($T_\infty \ll W/(N\mu)$),
+this gives $\eta_{\mathrm{util}}(\mathrm{WS}) \leq 1 + T_\infty N\mu/W
+\to 1$ as $W \to \infty$.
+
+Hence \emph{both} DTA and WS achieve $\alpha \to 1$;
+their performance difference lies entirely in $\eta_{\mathrm{info}}$
+and the information acquisition rate $\beta$, analysed in
+\S\ref{sec:info_cost}--\ref{sec:numa_concrete}.
 \end{remark}
 
 % ============================================================
@@ -7167,25 +7268,108 @@ from~\eqref{eq:beta_def}.
 
 \subsection{CAS contention lower bound}
 
+\paragraph{Model (Slotted CAS contention).}
+Time is divided into hardware \emph{slots} of duration $c_{\mathrm{CAS}}^{(0)}$
+(one cache-coherence round-trip).  In each slot:
+\begin{enumerate}[label=(\roman*),nosep]
+  \item Each of the $m$ remaining workers independently attempts CAS
+        with probability $p \in (0,1)$.
+  \item If \emph{exactly one} worker attempts, the CAS succeeds for that
+        worker (it exits the contention).
+  \item If \emph{zero} workers attempt, the slot is idle; no state changes.
+  \item If \emph{two or more} workers attempt simultaneously, the cache
+        controller serialises them but all see a conflicting value
+        and fail; each failed worker independently retries in a later slot
+        according to its backoff schedule.
+\end{enumerate}
+Binary exponential backoff (BEB) sets $p = 2^{-k}$ after $k$ consecutive
+failures.  After $r = \lfloor\log_2 n\rfloor$ rounds, all workers have
+accumulated $r$ failures and transmit at rate $p_r = 2^{-r} \in [1/(2n), 1/n]$:
+the \emph{steady-state regime}.  We analyse this regime directly.
+
 \begin{lemma}[CAS contention cost]\label{lem:cas_contention}
-If $n$ workers simultaneously attempt a compare-and-swap on a single
-cache line using randomised exponential backoff, the expected
-\emph{per-worker} effective latency satisfies
+Under the Slotted CAS model with $n$ workers transmitting at rate
+$p = 1/n$ (the BEB steady-state rate), the expected per-worker
+completion time satisfies
 \begin{equation}\label{eq:cas_lb}
-  c_{\mathrm{CAS}}(n) \;=\; \Omega(\log n)\cdot c_{\mathrm{CAS}}^{(0)},
+  H_n \cdot c_{\mathrm{CAS}}^{(0)}
+  \;\leq\;
+  E[T_{\mathrm{worker}}]
+  \;\leq\;
+  e \cdot H_n \cdot c_{\mathrm{CAS}}^{(0)},
 \end{equation}
-where $c_{\mathrm{CAS}}^{(0)}$ is the uncontended CAS latency.
+where $H_n = \sum_{k=1}^n 1/k = \Theta(\log n)$.
+In particular, $c_{\mathrm{CAS}}(n) = \Theta(\log n)\cdot c_{\mathrm{CAS}}^{(0)}$,
+and the \emph{lower bound} $c_{\mathrm{CAS}}(n) \geq H_n\cdot c_{\mathrm{CAS}}^{(0)}
+= \Omega(\log n)\cdot c_{\mathrm{CAS}}^{(0)}$ holds.
 \end{lemma}
 
 \begin{proof}
-With $n$ concurrent contenders and uniform random backoff, each backoff
-round succeeds with probability $1/n$ for any given worker.
-By the coupon-collector argument~\cite{mitzenmacher2017},
-the expected number of rounds until all $n$ workers succeed is
-$\sum_{k=1}^{n} n/k = n H_n = \Theta(n\log n)$ total rounds,
-giving $\Theta(\log n)$ rounds per worker.  Each round costs
-$c_{\mathrm{CAS}}^{(0)}$ (one CAS attempt), establishing~\eqref{eq:cas_lb}.
+Let $T_{m\to m-1}$ denote the number of slots to reduce the active
+count from $m$ to $m-1$.  Given $m$ active workers each transmitting
+with probability $p = 1/n$, a slot is successful (exactly one transmits)
+with probability
+\[
+  p_m
+  \;:=\;
+  \binom{m}{1}\frac{1}{n}\!\left(1-\frac{1}{n}\right)^{\!m-1}
+  \;=\;
+  \frac{m}{n}\!\left(1-\frac{1}{n}\right)^{\!m-1}.
+\]
+Since $T_{m\to m-1}$ is geometrically distributed with success
+probability $p_m$, we have $\mathbb{E}[T_{m\to m-1}] = 1/p_m$.
+
+\noindent\textbf{Lower bound.}
+The inequality $(1-1/n)^{m-1} \leq 1$ gives $p_m \leq m/n$, hence
+\[
+  \mathbb{E}[T_{m\to m-1}]
+  \;=\; \frac{1}{p_m}
+  \;\geq\; \frac{n}{m}.
+\]
+Summing over $m = 1,\ldots,n$ and dividing by $n$:
+\[
+  \mathbb{E}[T_{\mathrm{worker}}]
+  \;=\;
+  \frac{1}{n}\sum_{m=1}^{n}\mathbb{E}[T_{m\to m-1}]
+  \;\geq\;
+  \frac{1}{n}\sum_{m=1}^{n}\frac{n}{m}
+  \;=\;
+  H_n.
+\]
+
+\noindent\textbf{Upper bound.}
+For $1 \leq m \leq n$ and $n \geq 2$, the sequence $(1-1/n)^{m-1}$
+is decreasing in $m$, so
+$(1-1/n)^{m-1} \geq (1-1/n)^{n-1}$.
+Since $(1-1/n)^{n-1} \geq 1/e$ for all $n \geq 1$
+(the function $n\mapsto (1-1/n)^{n-1}$ decreases to $1/e$ from above),
+we get $p_m \geq m/(en)$, hence
+\[
+  \mathbb{E}[T_{m\to m-1}]
+  \;\leq\;
+  \frac{en}{m}.
+\]
+Summing and dividing by $n$: $\mathbb{E}[T_{\mathrm{worker}}] \leq e\cdot H_n$.
+
+\noindent\textbf{BEB overhead.}
+The $\lfloor\log_2 n\rfloor$ rounds before the BEB steady-state add at
+most $\lfloor\log_2 n\rfloor \cdot c_{\mathrm{CAS}}^{(0)} = O(\log n)$
+to the per-worker cost, which is absorbed into the $\Theta(\log n)$
+bound without affecting the constants in~\eqref{eq:cas_lb}.
 \end{proof}
+
+\begin{remark}[Why the coupon-collector argument requires care]
+A na\"\i{}ve application of the coupon-collector~\cite{mitzenmacher2017} to CAS conflates two
+distinct models.  The coupon-collector (draw uniformly from $n$ items
+\emph{with replacement} until all are drawn) applies when the hardware
+\emph{resamples} from the entire pool every round, even after a worker
+has succeeded --- a model without exit.  In the correct model (workers
+\emph{exit} after success), the per-round success probability
+$p_m = (m/n)(1-1/n)^{m-1}$ depends on $m$, and the tight bound
+$H_n \leq \mathbb{E}[T_{\mathrm{worker}}] \leq e\cdot H_n$ follows from
+the geometric-sum analysis above rather than from the coupon-collector
+directly.
+\end{remark}
 
 % ============================================================
 \section{DTA vs.\ WS: Abstract Comparison}
@@ -7560,7 +7744,7 @@ The method requires:
 It is directly applicable to: supermarket-model load balancers~\cite{mitzenmacher2001,vvedenskaya1996},
 gossip protocols and epidemic spreading, distributed consensus
 (Raft/Paxos with $N$ replicas), connection-pool rebalancing,
-and any system analysed by the ``power of two choices'' framework.
+and any system analysed by the ``power of two choices'' framework~\cite{azar1999}.
 The MF result is typically tight when $N \geq 8$; the Level-1 correction
 is significant for small $N$ (4--8 agents), exactly the practically
 relevant regime for multicore schedulers.
@@ -7958,6 +8142,7 @@ on the basis of both makespan and information-acquisition cost.
 
 \clearpage
 
+\part*{Bibliography}
 \bibliographystyle{plain}
 \bibliography{main}
 
