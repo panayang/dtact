@@ -1,0 +1,716 @@
+%% main.bib  —  DTA Formal Analysis bibliography
+
+%% ── Concurrency / Systems ────────────────────────────────────────────────────
+
+@article{herlihy1990,
+  author    = {Herlihy, Maurice P. and Wing, Jeannette M.},
+  title     = {Linearizability: {A} Correctness Condition for Concurrent Objects},
+  journal   = {ACM Transactions on Programming Languages and Systems},
+  volume    = {12},
+  number    = {3},
+  pages     = {463--492},
+  year      = {1990},
+  doi       = {10.1145/78969.78972},
+}
+
+@inproceedings{boehm2008,
+  author    = {Boehm, Hans-J. and Adve, Sarita V.},
+  title     = {Foundations of the {C++} Concurrency Memory Model},
+  booktitle = {Proceedings of the 29th ACM SIGPLAN Conference on Programming
+               Language Design and Implementation (PLDI)},
+  publisher = {ACM},
+  address   = {New York, NY},
+  pages     = {68--78},
+  year      = {2008},
+  doi       = {10.1145/1375581.1375591},
+}
+
+@misc{vyukov2010,
+  author       = {Vyukov, Dmitry},
+  title        = {Bounded {MPMC} Queue},
+  year         = {2010},
+  howpublished = {\url{https://www.1024cores.net/home/lock-free-algorithms/queues/bounded-mpmc-queue}},
+}
+
+@inproceedings{haas2015,
+  author    = {Haas, Andreas and H{\"u}tter, Thomas and Kirsch, Christoph M.
+               and Lippautz, Michael and Payer, Hannes and Sokolova, Ana
+               and Zwick, Andrea},
+  title     = {Distributed Queues in Shared Memory: Multicore Performance and
+               Scalability through Quantitative Relaxation},
+  booktitle = {Proceedings of the ACM International Conference on Computing
+               Frontiers (CF)},
+  publisher = {ACM},
+  address   = {New York, NY},
+  pages     = {1--9},
+  year      = {2015},
+  doi       = {10.1145/2742854.2742873},
+}
+
+@techreport{treiber1986,
+  author      = {Treiber, R. Kent},
+  title       = {Systems Programming: Coping with Parallelism},
+  institution = {IBM Almaden Research Center},
+  number      = {RJ 5118},
+  year        = {1986},
+}
+
+@article{herlihy_wing1990,
+  author    = {Herlihy, Maurice P. and Wing, Jeannette M.},
+  title     = {Linearizability: {A} Correctness Condition for Concurrent Objects},
+  journal   = {ACM Transactions on Programming Languages and Systems},
+  volume    = {12},
+  number    = {3},
+  pages     = {463--492},
+  year      = {1990},
+  doi       = {10.1145/78969.78972},
+}
+
+@book{herlihy_shavit2008,
+  address   = {Burlington, MA},
+  author    = {Herlihy, Maurice and Shavit, Nir},
+  title     = {The Art of Multiprocessor Programming},
+  publisher = {Morgan Kaufmann},
+  year      = {2008},
+}
+
+%% ── Work-Stealing / Scheduling ───────────────────────────────────────────────
+
+@article{blumofe1999,
+  author    = {Blumofe, Robert D. and Leiserson, Charles E.},
+  title     = {Scheduling Multithreaded Computations by Work Stealing},
+  journal   = {Journal of the ACM},
+  volume    = {46},
+  number    = {5},
+  pages     = {720--748},
+  year      = {1999},
+  doi       = {10.1145/324133.324234},
+}
+
+@article{arora2001,
+  author    = {Arora, Nimar S. and Blumofe, Robert D. and Plaxton, C. Greg},
+  title     = {Thread Scheduling for Multiprogrammed Multiprocessors},
+  journal   = {Theory of Computing Systems},
+  volume    = {34},
+  number    = {2},
+  pages     = {115--144},
+  year      = {2001},
+  doi       = {10.1007/s00224-001-0004-z},
+}
+
+@inproceedings{chase_lev2005,
+  publisher = {ACM},
+  address   = {New York, NY},
+  author    = {Chase, David and Lev, Yossi},
+  title     = {Dynamic Circular Work-Stealing Deque},
+  booktitle = {Proceedings of the 17th Annual ACM Symposium on Parallel
+               Algorithms and Architectures (SPAA)},
+  pages     = {21--28},
+  year      = {2005},
+  doi       = {10.1145/1073970.1073974},
+}
+
+@article{acar2002,
+  author    = {Acar, Umut A. and Blelloch, Guy E. and Blumofe, Robert D.},
+  title     = {The Data Locality of Work Stealing},
+  journal   = {Theory of Computing Systems},
+  volume    = {35},
+  number    = {3},
+  pages     = {321--347},
+  year      = {2002},
+  doi       = {10.1007/s00224-002-1057-3},
+}
+
+@article{graham1969,
+  author    = {Graham, Ronald L.},
+  title     = {Bounds on Multiprocessing Timing Anomalies},
+  journal   = {SIAM Journal on Applied Mathematics},
+  volume    = {17},
+  number    = {2},
+  pages     = {416--429},
+  year      = {1969},
+  doi       = {10.1137/0117039},
+}
+
+@article{graham1969b,
+  author    = {Graham, Ronald L.},
+  title     = {Bounds on Multiprocessing Timing Anomalies},
+  journal   = {SIAM Journal on Applied Mathematics},
+  volume    = {17},
+  number    = {2},
+  pages     = {416--429},
+  year      = {1969},
+  doi       = {10.1137/0117039},
+}
+
+@article{coffman_graham1972,
+  author    = {Coffman, Edward G. and Graham, Ronald L.},
+  title     = {Optimal Scheduling for Two-Processor Systems},
+  journal   = {Acta Informatica},
+  volume    = {1},
+  number    = {3},
+  pages     = {200--213},
+  year      = {1972},
+  doi       = {10.1007/BF00288685},
+}
+
+@article{lenstra1978,
+  author    = {Lenstra, Jan K. and Rinnooy Kan, Alexander H. G.},
+  title     = {Complexity of Machine Scheduling Problems},
+  journal   = {Annals of Discrete Mathematics},
+  volume    = {1},
+  pages     = {343--362},
+  year      = {1977},
+  doi       = {10.1016/S0167-5060(08)70743-X},
+  note      = {See also: Lenstra \& Rinnooy Kan, \emph{Oper.\ Res.} 26(1):22--35, 1978},
+}
+
+%% ── Online/Competitive Analysis ──────────────────────────────────────────────
+
+@book{borodin_elyaniv1998,
+  address   = {Cambridge, UK},
+  author    = {Borodin, Allan and El-Yaniv, Ran},
+  title     = {Online Computation and Competitive Analysis},
+  publisher = {Cambridge University Press},
+  year      = {1998},
+}
+
+@article{sleator_tarjan1985,
+  author    = {Sleator, Daniel D. and Tarjan, Robert E.},
+  title     = {Amortized Efficiency of List Update and Paging Rules},
+  journal   = {Communications of the ACM},
+  volume    = {28},
+  number    = {2},
+  pages     = {202--208},
+  year      = {1985},
+  doi       = {10.1145/2786.2793},
+}
+
+@inproceedings{borodin1996,
+  author    = {Borodin, Allan and Kleinberg, Jon and Raghavan, Prabhakar
+               and Sudan, Madhu and Williamson, David P.},
+  title     = {Adversarial Queuing Theory},
+  booktitle = {Proceedings of the 28th Annual ACM Symposium on Theory
+               of Computing (STOC)},
+  pages     = {376--385},
+  year      = {1996},
+  doi       = {10.1145/237814.237984},
+}
+
+%% ── Queueing Theory ──────────────────────────────────────────────────────────
+
+@book{kleinrock1975,
+  author    = {Kleinrock, Leonard},
+  title     = {Queueing Systems, Volume~1: Theory},
+  publisher = {Wiley-Interscience},
+  address   = {New York},
+  year      = {1975},
+}
+
+@book{kelly1979,
+  author    = {Kelly, Frank P.},
+  title     = {Reversibility and Stochastic Networks},
+  publisher = {Wiley},
+  address   = {Chichester},
+  year      = {1979},
+}
+
+@article{little1961,
+  author    = {Little, John D. C.},
+  title     = {A Proof for the Queuing Formula: {$L = \lambda W$}},
+  journal   = {Operations Research},
+  volume    = {9},
+  number    = {3},
+  pages     = {383--387},
+  year      = {1961},
+  doi       = {10.1287/opre.9.3.383},
+}
+
+@article{stidham1985,
+  author    = {Stidham, Shaler, Jr.},
+  title     = {Optimal Control of Admission to a Queueing System},
+  journal   = {IEEE Transactions on Automatic Control},
+  volume    = {30},
+  number    = {8},
+  pages     = {705--713},
+  year      = {1985},
+  doi       = {10.1109/TAC.1985.1104032},
+}
+
+@article{weber1990,
+  author    = {Weber, Richard R. and Weiss, Gideon},
+  title     = {On an Index Policy for Restless Bandits},
+  journal   = {Journal of Applied Probability},
+  volume    = {27},
+  number    = {3},
+  pages     = {637--648},
+  year      = {1990},
+  doi       = {10.2307/3214547},
+}
+
+@article{mitzenmacher2001,
+  author    = {Mitzenmacher, Michael},
+  title     = {The Power of Two Choices in Randomized Load Balancing},
+  journal   = {IEEE Transactions on Parallel and Distributed Systems},
+  volume    = {12},
+  number    = {10},
+  pages     = {1094--1104},
+  year      = {2001},
+  doi       = {10.1109/71.963420},
+}
+
+@article{vvedenskaya1996,
+  author    = {Vvedenskaya, Nikita D. and Dobrushin, Roland L.
+               and Karpelevich, Fridrikh I.},
+  title     = {Queueing System with Selection of the Shortest of Two Queues:
+               An Asymptotic Approach},
+  journal   = {Problems of Information Transmission},
+  volume    = {32},
+  number    = {1},
+  pages     = {15--27},
+  year      = {1996},
+}
+
+@article{azar1999,
+  author    = {Azar, Yossi and Broder, Andrei Z. and Karlin, Anna R.
+               and Upfal, Eli},
+  title     = {Balanced Allocations},
+  journal   = {SIAM Journal on Computing},
+  volume    = {29},
+  number    = {1},
+  pages     = {180--200},
+  year      = {1999},
+  doi       = {10.1137/S0097539795288490},
+}
+
+@book{mitzenmacher2017,
+  author    = {Mitzenmacher, Michael and Upfal, Eli},
+  title     = {Probability and Computing: Randomization and Probabilistic
+               Techniques in Algorithms and Data Analysis},
+  edition   = {2nd},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge, UK},
+  year      = {2017},
+  doi       = {10.1017/9781316651124},
+}
+
+%% ── Markov Chains / Stochastic Stability ─────────────────────────────────────
+
+@book{meyn2009,
+  author    = {Meyn, Sean P. and Tweedie, Richard L.},
+  title     = {Markov Chains and Stochastic Stability},
+  edition   = {2nd},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge, UK},
+  year      = {2009},
+  doi       = {10.1017/CBO9780511626630},
+}
+
+@article{fill1991,
+  author    = {Fill, James Allen},
+  title     = {Eigenvalue Bounds on Convergence to Stationarity for
+               Nonreversible {Markov} Chains, with an Application
+               to the Exclusion Process},
+  journal   = {Annals of Applied Probability},
+  volume    = {1},
+  number    = {1},
+  pages     = {62--87},
+  year      = {1991},
+  doi       = {10.1214/aoap/1177005981},
+}
+
+@article{foster1953,
+  author    = {Foster, Fredrick G.},
+  title     = {On the Stochastic Matrices Associated with Certain
+               Queuing Processes},
+  journal   = {Annals of Mathematical Statistics},
+  volume    = {24},
+  number    = {3},
+  pages     = {355--360},
+  year      = {1953},
+  doi       = {10.1214/aoms/1177728976},
+}
+
+@article{diaconis_stroock1991,
+  author    = {Diaconis, Persi and Stroock, Daniel},
+  title     = {Geometric Bounds for Eigenvalues of {Markov} Chains},
+  journal   = {Annals of Applied Probability},
+  volume    = {1},
+  number    = {1},
+  pages     = {36--61},
+  year      = {1991},
+  doi       = {10.1214/aoap/1177005980},
+}
+
+@inproceedings{cheeger1970,
+  author    = {Cheeger, Jeff},
+  title     = {A Lower Bound for the Smallest Eigenvalue of the {Laplacian}},
+  booktitle = {Problems in Analysis: A Symposium in Honor of {Salomon Bochner}},
+  editor    = {Gunning, Robert C.},
+  publisher = {Princeton University Press},
+  pages     = {195--199},
+  year      = {1970},
+}
+
+@book{norris1997,
+  author    = {Norris, James R.},
+  title     = {Markov Chains},
+  publisher = {Cambridge University Press},
+  address   = {Cambridge, UK},
+  year      = {1997},
+  doi       = {10.1017/CBO9780511810633},
+}
+
+@book{gardiner2004,
+  author    = {Gardiner, Crispin W.},
+  title     = {Handbook of Stochastic Methods},
+  edition   = {3rd},
+  publisher = {Springer-Verlag},
+  address   = {Berlin},
+  year      = {2004},
+}
+
+%% ── Kinetic Theory / Statistical Physics ─────────────────────────────────────
+
+@incollection{sznitman1991,
+  author    = {Sznitman, Alain-Sol},
+  title     = {Topics in Propagation of Chaos},
+  booktitle = {{\'E}cole d'{\'E}t{\'e} de Probabilit{\'e}s de Saint-Flour {XIX}},
+  series    = {Lecture Notes in Mathematics},
+  volume    = {1464},
+  publisher = {Springer},
+  address   = {Berlin},
+  year      = {1991},
+  doi       = {10.1007/BFb0085169},
+}
+
+@book{landau_fields,
+  author    = {Landau, Lev D. and Lifshitz, Evgeny M.},
+  title     = {The Classical Theory of Fields},
+  series    = {Course of Theoretical Physics},
+  volume    = {2},
+  edition   = {4th},
+  publisher = {Butterworth-Heinemann},
+  address   = {Oxford},
+  year      = {1975},
+}
+
+@book{landau_statphys,
+  author    = {Landau, Lev D. and Lifshitz, Evgeny M.},
+  title     = {Statistical Physics, Part~1},
+  series    = {Course of Theoretical Physics},
+  volume    = {5},
+  edition   = {3rd},
+  publisher = {Butterworth-Heinemann},
+  address   = {Oxford},
+  year      = {1980},
+}
+
+@book{lifshitz_kinetics,
+  author    = {Lifshitz, Evgeny M. and Pitaevskii, Lev P.},
+  title     = {Physical Kinetics},
+  series    = {Course of Theoretical Physics},
+  volume    = {10},
+  publisher = {Butterworth-Heinemann},
+  address   = {Oxford},
+  year      = {1981},
+}
+
+@article{boltzmann1872,
+  author  = {Boltzmann, Ludwig},
+  title   = {Weitere {Studien} {\"u}ber das {W\"armegleichgewicht} unter
+             {Gasmolek\"ulen}},
+  journal = {Wiener Berichte},
+  volume  = {66},
+  pages   = {275--370},
+  year    = {1872},
+}
+
+@book{cercignani1988,
+  author    = {Cercignani, Carlo},
+  title     = {The {Boltzmann} Equation and Its Applications},
+  publisher = {Springer-Verlag},
+  address   = {New York},
+  year      = {1988},
+  doi       = {10.1007/978-1-4612-1039-9},
+}
+
+@book{chapman_cowling,
+  address   = {Cambridge, UK},
+  author    = {Chapman, Sydney and Cowling, Thomas G.},
+  title     = {The Mathematical Theory of Non-Uniform Gases},
+  edition   = {3rd},
+  publisher = {Cambridge University Press},
+  year      = {1970},
+}
+
+@article{bogoliubov1946,
+  author  = {Bogoliubov, Nikolai N.},
+  title   = {Kinetic Equations},
+  journal = {Journal of Physics USSR},
+  volume  = {10},
+  pages   = {265--274},
+  year    = {1946},
+}
+
+@book{born_green1949,
+  address   = {Cambridge, UK},
+  author    = {Born, Max and Green, Herbert S.},
+  title     = {A General Kinetic Theory of Liquids},
+  publisher = {Cambridge University Press},
+  year      = {1949},
+}
+
+@article{kirkwood1946,
+  author  = {Kirkwood, John G.},
+  title   = {The Statistical Mechanical Theory of Transport Processes~{I}},
+  journal = {The Journal of Chemical Physics},
+  volume  = {14},
+  number  = {3},
+  pages   = {180--201},
+  year    = {1946},
+  doi     = {10.1063/1.1724117},
+}
+
+@book{yvon1935,
+  author    = {Yvon, Jacques},
+  title     = {La Th{\'e}orie Statistique des Fluides et l'{\'E}quation
+               d'{\'E}tat},
+  publisher = {Hermann},
+  address   = {Paris},
+  year      = {1935},
+}
+
+@inproceedings{kac1956,
+  author    = {Kac, Mark},
+  title     = {Foundations of Kinetic Theory},
+  booktitle = {Proceedings of the Third Berkeley Symposium on Mathematical
+               Statistics and Probability},
+  volume    = {3},
+  pages     = {171--197},
+  publisher = {University of California Press},
+  address   = {Berkeley, CA},
+  year      = {1956},
+}
+
+@incollection{mckean1967,
+  author    = {McKean, Henry P., Jr.},
+  title     = {Propagation of Chaos for a Class of Non-Linear
+               Parabolic Equations},
+  booktitle = {Stochastic Differential Equations},
+  series    = {Lecture Series in Differential Equations},
+  volume    = {7},
+  publisher = {Catholic University of America},
+  address   = {Washington, DC},
+  pages     = {41--57},
+  year      = {1967},
+}
+
+@article{derrida2007,
+  author  = {Derrida, Bernard},
+  title   = {Non-Equilibrium Steady States: Fluctuations and Large Deviations
+             of the Density and of the Current},
+  journal = {Journal of Statistical Mechanics: Theory and Experiment},
+  volume  = {2007},
+  number  = {07},
+  pages   = {P07023},
+  year    = {2007},
+  doi     = {10.1088/1742-5468/2007/07/P07023},
+}
+
+@incollection{schutz2001,
+  author    = {Sch{\"u}tz, Gunter M.},
+  title     = {Exactly Solvable Models for Many-Body Systems Far from
+               Equilibrium},
+  booktitle = {Phase Transitions and Critical Phenomena},
+  editor    = {Domb, Cyril and Lebowitz, Joel L.},
+  volume    = {19},
+  publisher = {Academic Press},
+  address   = {London},
+  pages     = {1--251},
+  year      = {2001},
+}
+
+@article{hinrichsen2000,
+  author  = {Hinrichsen, Haye},
+  title   = {Non-Equilibrium Critical Phenomena and Phase Transitions
+             into Absorbing States},
+  journal = {Advances in Physics},
+  volume  = {49},
+  number  = {7},
+  pages   = {815--958},
+  year    = {2000},
+  doi     = {10.1080/00018730050198152},
+}
+
+%% ── Extreme Value Theory ─────────────────────────────────────────────────────
+
+@article{fisher_tippett1928,
+  author  = {Fisher, Ronald A. and Tippett, Leonard H. C.},
+  title   = {Limiting Forms of the Frequency Distribution of the Largest
+             or Smallest Member of a Sample},
+  journal = {Mathematical Proceedings of the Cambridge Philosophical Society},
+  volume  = {24},
+  number  = {2},
+  pages   = {180--190},
+  year    = {1928},
+  doi     = {10.1017/S0305004100015681},
+}
+
+@book{gumbel1958,
+  author    = {Gumbel, Emil J.},
+  title     = {Statistics of Extremes},
+  publisher = {Columbia University Press},
+  address   = {New York},
+  year      = {1958},
+}
+
+@book{leadbetter1983,
+  author    = {Leadbetter, Malcolm R. and Lindgren, Georg
+               and Rootz{\'e}n, Holger},
+  title     = {Extremes and Related Properties of Random Sequences
+               and Processes},
+  publisher = {Springer-Verlag},
+  address   = {New York},
+  year      = {1983},
+  doi       = {10.1007/978-1-4612-5449-2},
+}
+
+%% ── Quantum / Second Quantisation ────────────────────────────────────────────
+
+@book{landau_qm,
+  author    = {Landau, Lev D. and Lifshitz, Evgeny M.},
+  title     = {Quantum Mechanics ({Non-Relativistic Theory})},
+  series    = {Course of Theoretical Physics},
+  volume    = {3},
+  edition   = {3rd},
+  publisher = {Butterworth-Heinemann},
+  address   = {Oxford},
+  year      = {1977},
+}
+
+@book{feynman_iii,
+  author    = {Feynman, Richard P. and Leighton, Robert B. and Sands, Matthew},
+  title     = {The {Feynman} Lectures on Physics, {Vol.~III}: Quantum Mechanics},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1965},
+}
+
+@book{feynman_ii,
+  author    = {Feynman, Richard P. and Leighton, Robert B. and Sands, Matthew},
+  title     = {The {Feynman} Lectures on Physics, {Vol.~II}: Mainly
+               Electromagnetism and Matter},
+  publisher = {Addison-Wesley},
+  address   = {Reading, MA},
+  year      = {1964},
+}
+
+@article{dirac1927,
+  author  = {Dirac, Paul A. M.},
+  title   = {The Quantum Theory of the Emission and Absorption of Radiation},
+  journal = {Proceedings of the Royal Society of London Series~A},
+  volume  = {114},
+  number  = {767},
+  pages   = {243--265},
+  year    = {1927},
+  doi     = {10.1098/rspa.1927.0039},
+}
+
+@article{jordan_wigner1928,
+  author  = {Jordan, Pascual and Wigner, Eugene P.},
+  title   = {{\"U}ber das {Paulische} {{\"A}quivalenzverbot}},
+  journal = {Zeitschrift f{\"u}r Physik},
+  volume  = {47},
+  number  = {9--10},
+  pages   = {631--651},
+  year    = {1928},
+  doi     = {10.1007/BF01331938},
+}
+
+@article{fock1932,
+  author  = {Fock, Vladimir A.},
+  title   = {Konfigurationsraum und zweite {Quantelung}},
+  journal = {Zeitschrift f{\"u}r Physik},
+  volume  = {75},
+  number  = {9--10},
+  pages   = {622--647},
+  year    = {1932},
+  doi     = {10.1007/BF01344458},
+}
+
+%% ── Information Theory ───────────────────────────────────────────────────────
+
+@article{shannon1948,
+  author  = {Shannon, Claude E.},
+  title   = {A Mathematical Theory of Communication},
+  journal = {The Bell System Technical Journal},
+  volume  = {27},
+  pages   = {379--423, 623--656},
+  year    = {1948},
+  doi     = {10.1002/j.1538-7305.1948.tb01338.x},
+}
+
+@book{cover_thomas2006,
+  address   = {Hoboken, NJ},
+  author    = {Cover, Thomas M. and Thomas, Joy A.},
+  title     = {Elements of Information Theory},
+  edition   = {2nd},
+  publisher = {Wiley-Interscience},
+  year      = {2006},
+  doi       = {10.1002/047174882X},
+}
+
+%% ── Software / Tools ─────────────────────────────────────────────────────────
+
+@misc{criterion,
+  author       = {Brook, Brook and Bogner, Jorge},
+  title        = {Criterion.rs: Statistics-Driven Micro-Benchmarking for {Rust}},
+  year         = {2025},
+  howpublished = {\url{https://github.com/bheisler/criterion.rs}},
+}
+
+@misc{dtact,
+  key          = {Apich-Organization},
+  author       = {{Apich-Organization}},
+  title        = {Dtact: {DTA} Distributed Task Scheduler},
+  year         = {2026},
+  howpublished = {\url{https://github.com/Apich-Organization/dtact/}},
+}
+
+@misc{dtact_ci,
+  key          = {Apich-Organization},
+  author       = {{Apich-Organization}},
+  title        = {{DTA} {GitHub} Actions Benchmark Run \#28292910228},
+  year         = {2026},
+  howpublished = {\url{https://github.com/Apich-Organization/dtact/actions/runs/28292910228}},
+}
+
+@misc{dtact_source,
+  key          = {Apich-Organization},
+  author       = {{Apich-Organization}},
+  title        = {{DTA} Distributed Task Scheduler --- Source Code},
+  year         = {2026},
+  howpublished = {\url{https://github.com/Apich-Organization/dtact/}},
+  note         = {Hash routing implementation in \texttt{src/dta\_scheduler.rs}},
+}
+
+@misc{tokio,
+  key          = {Tokio Contributors},
+  author       = {{Tokio Contributors}},
+  title        = {Tokio: An Asynchronous {Rust} Runtime},
+  year         = {2026},
+  howpublished = {\url{https://github.com/tokio-rs/tokio}},
+  note         = {Version~1.x; \texttt{multi\_thread} scheduler with work-stealing deque},
+}
+
+%% ── Concurrency tools (re-added after linter drop) ─────────────────────────
+
+@misc{loom2023,
+  key          = {Tokio Contributors},
+  author       = {{Tokio Contributors}},
+  title        = {Loom: Permutation Testing for Concurrent {Rust} Code},
+  year         = {2024},
+  howpublished = {\url{https://github.com/tokio-rs/loom}},
+  note         = {Concurrency model checker for lock-free data structures},
+}

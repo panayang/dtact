@@ -34,6 +34,8 @@ web/target
 
 **/*.aux
 **/*.log
+**/*.bbl
+**/*.blg
 **/*.out
 **/*.pdf
 **/*.toc
