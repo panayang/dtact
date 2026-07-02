@@ -1,7 +1,8 @@
 """
 simulate_competitive.py
 =======================
-Numerical validation for competitive_ratio.tex and stability_compare.tex.
+Numerical validation for the "Performance IV -- Stability" and
+competitive-ratio chapters of main.tex.
 
 Four strategies: DTA-V3, Central Queue (CQ), Random (Rand), Work-Stealing (WS).
 Analyses:
@@ -24,6 +25,10 @@ import matplotlib.pyplot as plt
 # Parameters
 # ---------------------------------------------------------------------------
 
+# All *_SIM constants below are scaled down from the production
+# configuration (N=256, H=114,688 -- see main.tex, "Formal
+# Mathematical Model") to keep Monte Carlo runs tractable in CI;
+# they are not measurements from a production deployment.
 MU          = 1.0
 H_SIM       = 100      # per-worker queue capacity
 L_SIM       = 110      # burst capacity limit per worker

@@ -20,7 +20,10 @@ import os, math
 
 RNG  = np.random.default_rng(42)
 MU   = 1.0       # service rate (normalised to 1)
-N    = 4         # DTA workers
+N    = 4         # DTA workers -- scaled down from the N=256 target
+                 # deployment scale (main.tex, "Formal Mathematical
+                 # Model") to keep this simulation fast; not a
+                 # production measurement.
 NREP = 10_000    # Monte Carlo repetitions per K value
 
 os.makedirs('figure', exist_ok=True)

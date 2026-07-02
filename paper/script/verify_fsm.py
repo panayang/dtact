@@ -9,7 +9,9 @@ Verifies three correctness properties on every reachable state:
   2. Deadlock Freedom — wait-for graph G_wf is always empty
   3. Livelock Freedom — no chunk reaches hop_count > max_hops
 
-Mathematical objects correspond to formal_model.tex:
+Mathematical objects correspond to the "Formal Mathematical Model"
+chapter of main.tex (formerly a standalone formal_model.tex before
+the paper was consolidated into a single file):
   τ  → task index (int)
   c  → chunk (tasks, count, hop_count)
   σ  → system state (dict: site_name → frozenset of task indices)
@@ -70,7 +72,7 @@ def successors(state: State, N: int, max_hops: int) -> List[Tuple[str, State]]:
     from `state` in a system with N workers and given max_hops.
 
     Each transition corresponds to one operator Ô_* from Definition 5.2
-    of formal_model.tex.
+    of the "Formal Mathematical Model" chapter of main.tex.
     """
     site = state.site
     h    = state.hop
@@ -354,7 +356,7 @@ def main():
     args = parser.parse_args()
 
     print("DTA-V3 Scheduler FSM Finite Verifier")
-    print("Formal model: paper/formal_model.tex")
+    print("Formal model: main.tex, chapter 'Formal Mathematical Model'")
     print("Properties checked:")
     print("  [1] No Task Loss     — Φ conserved on every live transition")
     print("  [2] Deadlock Freedom — every non-sink state has ≥1 successor")

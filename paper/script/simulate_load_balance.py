@@ -1,7 +1,9 @@
 """
 simulate_load_balance.py — Load Balance: Mean-Field vs. Simulation
 ==================================================================
-Implements two things from load_balance.tex:
+Implements two things from the "Performance I -- Load Balance" chapter
+of main.tex (formerly a standalone load_balance.tex before the paper
+was consolidated into a single file):
 
   1. ANALYTIC (mean-field):
      - Solves the self-consistency equation ρ* = F(ρ*) by iteration
@@ -378,7 +380,7 @@ def main():
 
     print("DTA-V3 — Load Balance: Mean-Field Analysis")
     print(f"Model: M/M/1/H with H={H}, L={L}")
-    print("Reference: load_balance.tex, Section 3--4")
+    print("Reference: main.tex, chapter 'Performance I -- Load Balance', Section 3--4")
 
     print("\n[1] Solving self-consistency equation (SC) and computing moments...")
     analytic_results = run_analytic_sweep()

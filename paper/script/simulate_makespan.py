@@ -1,7 +1,8 @@
 """
 simulate_makespan.py — Makespan Analysis for DTA-V3
 ====================================================
-Validates the two makespan bounds from paper/performance/makespan.tex:
+Validates the two makespan bounds from the "Performance III --
+Makespan Analysis" chapter of main.tex:
 
   Line 1 (deterministic):  C_max <= H*delta   (always)
   Line 2 (statistical):    E[C_max] from order statistics on M/M/1/H PMF
