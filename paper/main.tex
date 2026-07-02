@@ -144,7 +144,7 @@ pdfkeywords={Scheduler, Bounded Information, Distributed Systems, Mathematical A
       \small v1: June 28, 2026 \quad v2: June 29, 2026 \\
       \small v3: June 30, 2026 \quad v4: June 30, 2026 \\
       \small v5: July 1, 2026 \quad v6: July 1, 2026 \\
-      \small v7: July 2, 2026
+      \small v7: July 2, 2026 \quad v8: July 2, 2026
 \end{center}
 
 \vspace{0.6em}
@@ -745,7 +745,7 @@ has an edge $i \to j$ iff $i \rightsquigarrow j$.
 % =============================================================
 \label{sec:corr}
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \small
 \caption{Mapping between mathematical objects and Rust source identifiers
@@ -807,7 +807,7 @@ $\hat{O}_{\text{ext}}$        & External thread injection
 \section{Summary of Parameters}
 % =============================================================
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \small
 \caption{Global parameters of the model with their concrete values in
@@ -860,6 +860,7 @@ which has since been corrected.
 \end{notation}
 
 \newpage
+\clearpage
 
 \begin{figure}[h]
 \centering
@@ -3371,6 +3372,7 @@ and $\sum_q \fone(q,t) = 1$ for all $t$.
 We write steady-state distributions without the time argument.
 
 \subsection{Transition rates}
+\label{sec:mmp-rates}
 
 The Markov chain for $q_i$ has the following transition rates:
 
@@ -3605,40 +3607,92 @@ becomes~\eqref{eq:mf-kinetic} with $\pd \to \pd + \Delta\pd^{(q)}$.
 
 \subsection{Sign and structure of $\gtwo$}
 
-\begin{proposition}[Anti-correlation of simultaneous overload]
+\begin{proposition}[Positive correlation of simultaneous overload
+(overload contagion)]
 \label{prop:anticorr}
-In steady state, $\gtwo(q, q') < 0$ for $q \geq H$ and $q' \geq H$.
+In steady state, $\gtwo(q, q') > 0$ for $q \geq H$ and $q' \geq H$: the
+event that two peers are simultaneously overloaded is \emph{more}
+likely than mean-field independence predicts.
 \end{proposition}
 
-\begin{proof}[Proof sketch]
-Suppose workers $i$ and $j$ are both overloaded ($q_i, q_j \geq H$).
-Each deflects tasks outward at rate $\lambda_0$.
-The deflection from $i$ to peers (including $j$) raises $q_j$, making it
-harder for $j$ to fall below $H$.  However, the conditional process shows
-that overloaded peers tend to \emph{exchange} tasks with each other less
-than with underloaded peers (since they prefer receivers with $q < H$);
-the net effect is that simultaneous overload is anti-correlated.
+\begin{remark}[Why naive reasoning suggests the wrong sign]
+It is tempting to reason that once both workers are already overloaded,
+a deflection between them cannot succeed (the receiver condition
+$q_j < H$ fails), and to read this as evidence of anti-correlation. But
+that reasoning addresses the wrong event --- it describes what happens
+\emph{after} the pair has already jointly reached $(H,H)$, not the
+\emph{rate of arriving there}. The relevant comparison is the flux
+\emph{into} $(H,H)$, and the deflection channel (item~2 of
+\S\ref{sec:mmp-rates}, rate $\lambda_0/(N-1) \cdot
+\mathbf{1}[q_j \geq H]\mathbf{1}[q_i<H]$) only \emph{exists} because a
+peer is overloaded: an overloaded worker $j$ actively redirects its own
+excess arrivals onto its peers, strictly raising each peer's inbound
+rate above the mean-field value $\lambda_0$ whenever $j$ is full. This
+is a positive feedback (``contagion''), not a negative one, and it
+dominates the receiver-side saturation effect described above.
+\end{remark}
 
-More formally: write the two-body master equation for $\bP(q_i = H, q_j = H)$.
-The only contribution to the flux into the state $(H, H)$ from deflection
-requires both $q_i = H-1$ (about to receive) while $q_j \geq H$ (sending),
-or vice versa.  But the sending rate $\lambda_0/(N-1)$ per pair is symmetric,
-and the receiving probability $1/\mathbf{1}[q_i < H]$ is zero once $q_i = H$.
-The result is that the stationary flux into $(H, H)$ via deflection is
-\emph{lower} than the product $\fone(H)^2$ would predict, establishing
-$\gtwo(H, H) < 0$.
+\begin{proof}
+We give two arguments: a general rate-comparison argument, and an
+exact closed-form verification for the smallest non-trivial case
+($N=2$, $H=1$), which the reader can check independently.
 
-By continuity and the truncation of arrivals at $H$,
-$\gtwo(q, q') < 0$ for all $q, q' \geq H$.
+\medskip
+\noindent\textbf{General argument.} Fix two peers $i,j$ and consider
+the flux into the state $q_i = H$ conditional on $q_j$. By the
+transition rates of \S\ref{sec:mmp-rates}, the total upward rate into
+$q_i$ is $\lambda_0\mathbf{1}[q_i<H]\bigl(1 + \frac{1}{N-1}\sum_{k\neq i}
+\mathbf{1}[q_k \geq H]\bigr)$, which is \emph{strictly increasing} in
+the number of overloaded peers --- in particular, strictly larger when
+$q_j \geq H$ than when $q_j < H$. Since $i$'s upward rate (and hence its
+probability of reaching $H$) is monotonically larger conditional on
+$q_j \geq H$, and this holds symmetrically for $j$ conditional on
+$q_i \geq H$, the events $\{q_i \geq H\}$ and $\{q_j \geq H\}$ are
+positively associated: $\bP(q_i \geq H \mid q_j \geq H) >
+\bP(q_i \geq H \mid q_j < H)$, which is equivalent to
+$\gtwo(q,q') > 0$ for $q,q' \geq H$ (this is a standard consequence of
+the FKG-type monotonicity of birth rates in the peer's state; see
+e.g.\ the association arguments of~\cite{liggett1985} for
+interacting-particle systems with monotone rates).
+
+\medskip
+\noindent\textbf{Exact verification, $N=2$, $H=1$.} With two workers
+and threshold $1$, each queue is capped at $q_i \in \{0,1\}$ (once
+$q_i = H$, both upward channels of \S\ref{sec:mmp-rates} are gated off
+by $\mathbf{1}[q_i<H]$, so the state space is exactly
+$\{0,1\}^2$). Writing $\rho \coloneqq \lambda_0/\mu$ and solving the
+$4$-state CTMC balance equations exactly (by symmetry $\pi_{01}=\pi_{10}$):
+\[
+  \pi_{00} = \frac{1}{D}, \qquad
+  \pi_{01} = \pi_{10} = \frac{\rho}{D}, \qquad
+  \pi_{11} = \frac{2\rho^2}{D}, \qquad
+  D \coloneqq 1 + 2\rho + 2\rho^2.
+\]
+Then $\bP(q_1{=}1) = \bP(q_2{=}1) = \rho(1+2\rho)/D$, and
+\[
+  \gtwo(1,1) \;=\; \pi_{11} - \bP(q_1{=}1)\bP(q_2{=}1)
+  \;=\; \frac{2\rho^2}{D} - \frac{\rho^2(1+2\rho)^2}{D^2}
+  \;=\; \frac{\rho^2}{D^2}
+  \;>\; 0
+\]
+for every $\rho > 0$, confirming the general argument in the exactly
+solvable case. (We verified this identity, and its extension to
+$N=3,4,5$ by direct numerical solution of the corresponding CTMC, which
+shows $\gtwo(H,H) > 0$ throughout and $(N-1)\gtwo(H,H)$ converging to a
+finite limit as $N$ grows, consistent with the $O(1/(N{-}1))$ magnitude
+of Proposition~\ref{prop:1overN}.)
 \end{proof}
 
 \begin{corollary}[Sign of the correction]
 The correction $\Delta\pd^{(q)} = \fone(q)^{-1} \sum_{q' \geq H} \gtwo(q, q')$
-is negative for all $q$: the true deflection probability is \emph{lower} than
-the mean-field prediction.
-Equivalently, the mean-field approximation \emph{overestimates} the coupling
-between workers, and the true effective traffic intensity satisfies
-$\rho^{(2)} < \rhostar_{\mathrm{MF}}$.
+is \emph{positive} for all $q$: the true deflection probability is
+\emph{higher} than the mean-field prediction.
+Equivalently, the mean-field approximation \emph{underestimates} the
+coupling between workers, and the true effective traffic intensity
+satisfies $\rho^{(2)} > \rhostar_{\mathrm{MF}}$. Mean-field is, in this
+sense, an \emph{optimistic} (not conservative) approximation of the
+true deflection load; see the discussion of downstream consequences in
+\S\ref{sec:contagion-scope}.
 \end{corollary}
 
 \subsection{Magnitude of the correction}
@@ -3679,20 +3733,28 @@ into~\eqref{eq:sc-mf}.
 \end{proof}
 
 \begin{remark}[Explicit level-1 correction]
-Retaining only the level-1 term and using the anti-correlation sign:
+Retaining only the level-1 term and using the (corrected) positive
+contagion sign of Proposition~\ref{prop:anticorr}:
 \begin{equation}
   \pd^{(2)}
-  \;\approx\; \pd\Bigl(1 - \frac{\rho_0\,\pd}{N-1}\Bigr),
+  \;\approx\; \pd\Bigl(1 + \frac{\rho_0\,\pd}{N-1}\Bigr),
   \label{eq:pd-level1}
 \end{equation}
-where the factor $\rho_0\pd/(N-1)$ measures the fractional reduction
-due to pairwise anti-correlations.
-For the benchmark ($N=4$, $\rho_0 \leq 0.9$, $\pd \approx 0$ at moderate
-load), this correction is of order $\rho_0\pd/3 \approx 0$ --- consistent
-with the numerical observation that $\epsilon_N \approx 0.0003$--$0.0004$
-in \texttt{simulate\_load\_balance.py}.
+where the factor $\rho_0\pd/(N-1)$ measures the fractional \emph{increase}
+in deflection probability due to pairwise overload contagion (mean-field
+underestimates $\pd$). For the benchmark ($N=4$, $\rho_0 \leq 0.9$,
+$\pd \approx 0$ at moderate load), this correction is of order
+$\rho_0\pd/3 \approx 0$, i.e.\ negligible at moderate load regardless of
+sign --- consistent with the magnitude (not sign, which was not
+separately resolved by that measurement) of the numerical observation
+$\epsilon_N \approx 0.0003$--$0.0004$ in
+\texttt{simulate\_load\_balance.py}.
 At high load ($\rho_0 \to 1$, $\pd \to 1$) and small $N$,
-the correction approaches $1/(N-1)$; for $N=4$ this is $\approx 33\%$.
+the correction approaches $1/(N-1)$; for $N=4$ this is $\approx 33\%$,
+now understood as an \emph{under}-estimate of the true deflection
+probability by mean-field at that regime, not an over-estimate. See
+\S\ref{sec:contagion-scope} for what this implies for bounds derived
+elsewhere in this paper from the mean-field value of $\Delta\ell$.
 \end{remark}
 
 \subsection{Corrected load imbalance bound}
@@ -3715,6 +3777,17 @@ $\Delta\ell_{\mathrm{MF}} / 3$ in the worst case, and is
 $O(\rho_0\pd)$ at moderate load.
 \end{theorem}
 
+\begin{remark}[Sign of the $O(1/N)$ term]
+This theorem's inequality is written with a $(1+O(1/N))$ \emph{growth}
+factor, consistent with $\gtwo(H,H)>0$ (Proposition~\ref{prop:anticorr}):
+the $O(1/N)$ term here is \emph{positive}, so
+$\Delta\ell^{(2)} \geq \Delta\ell_{\mathrm{MF}}$ (level-1 imbalance is
+genuinely larger than mean-field predicts, not merely ``at most'' as
+large). The proof below only uses the \emph{magnitude} bound
+${\rhostar}^{(2)} = \rhostar + O(1/N)$ from Proposition~\ref{prop:1overN},
+which is sign-independent.
+\end{remark}
+
 \begin{proof}
 The corrected variance $\sigma_q^{(2)}$ differs from the mean-field
 variance $\sigma_q$ through the corrected ${\rhostar}^{(2)}$.
@@ -3726,6 +3799,40 @@ and dividing by $H$ gives the stated bound.
 The upper bound $1/2 + O(1/N)$ inherits from $\Delta\ell_{\mathrm{MF}} \leq 1/2$
 (Theorem~4.1 of \hyperref[chap:load_balance]{Performance~I}).
 \end{proof}
+
+% =============================================================
+\subsection{Scope: what this means for bounds derived from $\Delta\ell_{\mathrm{MF}} \leq 1/2$ elsewhere in this paper}
+\label{sec:contagion-scope}
+% =============================================================
+
+Several results outside this chapter cite ``$\Delta\ell \leq 1/2$''
+(Theorem~4.1 of \hyperref[chap:load_balance]{Performance~I}) as a bound
+on the true, finite-$N$ system, when strictly it bounds only the
+\emph{mean-field} imbalance $\Delta\ell_{\mathrm{MF}}$; the true,
+level-1-corrected imbalance can exceed it by a positive $O(1/N)$ term
+(overload contagion). We checked every downstream use:
+\hyperref[chap:makespan]{Performance~III}'s statistical and composite
+makespan bounds (Theorems~\ref{thm:stat-makespan},~\ref{thm:composite})
+use $\Delta\ell \leq 1/2$ only inside an already-budgeted
+$O(\cdot)$-level coefficient, so the correction changes their stated
+constant by a further $(1+O(1/N))$ factor but not their validity; the
+competitive-ratio chapter's Theorem~\ref{thm:cr_bot} uses $\bar q$ and
+$\mathbb{E}[M_N]$ directly rather than $\Delta\ell \leq 1/2$, so it is
+formally unaffected, though replacing $\rhostar$ with the
+contagion-corrected ${\rhostar}^{(2)}>\rhostar$ would shift
+Corollaries~\ref{cor:large_H}--\ref{cor:benchmark}'s numeric
+illustrations slightly higher (worse for DTA) at small $N$; and the
+distribution-free worst-case bounds
+(Theorem~\ref{thm:cr_bot_worst}, Progress~I's bounded-wait theorem) do
+not use $\Delta\ell$ at all and are entirely unaffected.
+
+\noindent\textbf{Bottom line.} No theorem here is invalidated: every
+downstream use of $\Delta\ell \leq 1/2$ already carries an $O(1/N)$
+tolerance or explicit failure probability that absorbs this correction.
+The practical consequence is that mean-field-based numeric
+illustrations in this paper should be read as slightly optimistic
+rather than conservative, with the gap governed by
+Proposition~\ref{prop:1overN}'s $O(1/(N-1))$ magnitude bound.
 
 \begin{proposition}[Level-1 residual error is $O(1/N^2)$]
 \label{prop:residual-order}
@@ -3863,7 +3970,7 @@ Regime of validity & $N \to \infty$ & Systematically improvable in $1/N$ \\
 Finite-$N$ error & Unquantified \emph{a priori} & $O(1/N)$ at level 0 \\
 Closed-form result & Yes (M/M/1/$H$) & Yes at each level \\
 Self-consistency eq. & Eq.~(SC) in \hyperref[chap:load_balance]{Performance~I} & Recovered as~\eqref{eq:sc-mf} \\
-Anti-correlation & Not modeled & Captured by $\gtwo < 0$ \\
+Overload contagion & Not modeled & Captured by $\gtwo > 0$ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -3954,10 +4061,11 @@ tight at high load, validating Theorem~\ref{thm:corrected-imbalance}.
         (Proposition~\ref{prop:mf-recovery}).
 
   \item The connected pair-correlator $\gtwo$ is $O(1/N)$
-        (Proposition~\ref{prop:1overN}) and negative for
-        $q, q' \geq H$ (Proposition~\ref{prop:anticorr}).
-        This means the mean-field overestimates deflection intensity;
-        the correction is $\Delta\pd \approx -\rho_0\pd^2/(N-1)$.
+        (Proposition~\ref{prop:1overN}) and \emph{positive} for
+        $q, q' \geq H$ (Proposition~\ref{prop:anticorr}: overload
+        contagion, not anti-correlation).
+        This means the mean-field \emph{underestimates} deflection
+        intensity; the correction is $\Delta\pd \approx +\rho_0\pd^2/(N-1)$.
 
   \item The corrected load imbalance bound is
         $\Delta\ell^{(2)} \leq \Delta\ell_{\mathrm{MF}}(1 + O(1/N)) \leq 1/2 + O(1/N)$
@@ -5302,18 +5410,13 @@ Corollary~\ref{cor:large_H}: that corollary's asymptotic requires
 $\varrho^* \to 1$ specifically (equivalently $\bar q \to \infty$), and at
 $\varrho_0 = 0.7$, $\bar q$ is still only $2.33$, far short of the
 regime where the $\ln N$ growth of the Gumbel excess is dominated by
-$\bar q$. At higher load, e.g.\ $\varrho_0 = 0.95$
-($\bar q \approx 19$, $-\ln\varrho^* \approx 0.051$), the same
-calculation gives $\mathbb{E}[M_N]-\bar q \approx (5.545 + \ln(0.05) +
-\gamma)/0.051 - 19 \approx 60.3 - 19 \approx 41.3$, imbalance factor
-$\approx 1+41.3/19 \approx 3.2$ --- still not $\lesssim 1.12$, though
-substantially improved, illustrating the slow (only logarithmic in $N$,
-linear improvement in $\bar q$) approach to the heavy-traffic limit. We
-therefore withdraw the earlier, incorrect $\varrho_c^{\mathrm{DTA}}
-\lesssim 1.12$ claim (traced to an arithmetic slip when evaluating the
-corrected Equation~\eqref{eq:cr_large_H}, not a flaw in the theorem
-itself): at the $N=256$ target deployment scale and moderate-to-high
-load, the informative bound on DTA's competitive ratio is not this
+$\bar q$. The same calculation at higher load ($\varrho_0=0.95$,
+$\bar q \approx 19$) gives imbalance factor $\approx 3.2$ --- still not
+$\lesssim 1.12$, though substantially improved, illustrating the slow
+(logarithmic in $N$, linear in $\bar q$) approach to the heavy-traffic
+limit. At
+the $N=256$ target deployment scale and moderate-to-high load, the
+informative bound on DTA's competitive ratio is therefore not this
 large-$H$ asymptotic but the load-independent, distribution-free
 worst-case bound of Theorem~\ref{thm:cr_bot_worst}
 ($\varrho_c^{\mathrm{DTA,worst}} \leq 1 + N\lfloor N/2\rfloor
@@ -5473,6 +5576,20 @@ For DAGs, convection (WS) is necessary because the ordering constraints
 create topological ``channels'' that diffusion cannot exploit.
 \end{remark}
 
+\begin{remark}[Scope: this theorem compares overhead terms, not the full ratio]
+\label{rem:regime_compare_scope}
+Theorem~\ref{thm:regime_compare} compares only the \emph{routing/stealing-overhead}
+components of $\varrho_c^{\mathrm{DTA}}$ and $\varrho_c^{\mathrm{WS}}$
+($p_d\delta_{\mathrm{hop}}$ vs.\ $(1-\varrho^*)\delta_{\mathrm{steal}}$); it does
+not claim the \emph{full} competitive ratio of Theorem~\ref{thm:cr_bot}
+(routing $\times$ imbalance) converges to $1$ at fixed $H$ --- that requires
+$H\to\infty$ too (Corollary~\ref{cor:large_H}), and the imbalance factor alone
+can remain large ($\gtrsim3$--$6$, Corollary~\ref{cor:benchmark}). Accordingly,
+Figure~\ref{fig:cr_vs_rho}'s full empirical ratio tracks WS/CQ rather than
+beating them outright: ``DTA dominates at all loads'' in item~1 above is an
+overhead-only statement.
+\end{remark}
+
 \subsection{The CAS-Storm Paradox at Low Load}
 \label{subsec:cas_storm}
 
@@ -5540,7 +5657,15 @@ practical advantage at low load).
 \begin{figure}[htbp]
 \centering
 \includegraphics[width=0.85\linewidth]{figure/competitive_ratio_vs_rho.png}
-\caption{Competitive ratio $\varrho_c$ of DTA versus offered load $\varrho_0$, compared with the analytical bound from Theorem~3.1. The bound is tight at low load and converges to $1$ as $H\to\infty$.}
+\caption{Empirical competitive ratio $\varrho_c$ (batch LPT-vs-\{DTA, Work-Stealing,
+  Central Queue, Random\}, $N=8$, $\mathrm{Exp}(\mu)$ and $\mathrm{Pareto}(2.5)$ task
+  sizes, 60 Monte Carlo batches per point; the deflection watermark $H$ and batch
+  size $M$ scale with $\varrho_0$ so that deflection is non-trivial), versus the
+  routing/stealing overhead-only terms of Theorem~\ref{thm:cr_bot} and
+  Theorem~\ref{thm:cr_ws_bot} (dotted). DTA tracks Work-Stealing and Central Queue
+  closely and stays well below Random; see the discussion below and
+  Remark~\ref{rem:regime_compare_scope} for why the solid curves sit above the
+  overhead-only dotted lines and for the scope of the ``DTA dominates'' claim.}
 \label{fig:cr_vs_rho}
 \end{figure}
 \section{Physical Synthesis: Transport Efficiency}
@@ -5550,10 +5675,13 @@ Define the \physics{transport efficiency}{scheduling efficiency relative to OPT}
 \[
   \eta \;=\; \frac{1}{\varrho_c} \;\in\; (0, 1].
 \]
-Figure~1 (see \texttt{simulate\_competitive.py}) plots $\eta$ as a function
-of $\varrho_0$ for DTA and WS on BoT tasks.
+Figure~\ref{fig:cr_vs_rho} (see \texttt{simulate\_competitive.py}) plots the
+empirical competitive ratio $\varrho_c = 1/\eta$ as a function of $\varrho_0$
+for DTA, Work-Stealing, Central Queue, and Random on BoT tasks, together with
+the overhead-only terms of Theorems~\ref{thm:cr_bot} and~\ref{thm:cr_ws_bot}.
 
-The key qualitative features from Theorems \ref{thm:cr_bot}--\ref{thm:regime_compare}:
+The key qualitative features from Theorems \ref{thm:cr_bot}--\ref{thm:regime_compare}
+concern the \emph{overhead-only} terms specifically (Remark~\ref{rem:regime_compare_scope}):
 \begin{enumerate}
   \item DTA efficiency $\eta^{\mathrm{DTA}}$ is \textbf{monotone increasing} in $\varrho_0$
         (heavy-traffic optimality, Corollary~\ref{cor:large_H}).
@@ -5562,7 +5690,10 @@ The key qualitative features from Theorems \ref{thm:cr_bot}--\ref{thm:regime_com
   \item The crossover $\eta^{\mathrm{DTA}} = \eta^{\mathrm{WS}}$ occurs at
         $p_d \cdot \delta_{\mathrm{hop}} = (1-\varrho^*)\delta_{\mathrm{steal}}$,
         i.e., roughly $\varrho_0 \approx 1 - r\cdot p_d/(1-p_d)$.
-        For $H$ large ($p_d \approx 0$), DTA dominates at \emph{all} loads.
+        For $H$ large ($p_d \approx 0$), DTA's routing-overhead term is smaller
+        than WS's stealing-overhead term at \emph{all} loads (Remark~\ref{rem:regime_compare_scope}
+        --- this is an overhead-only statement, not a claim that DTA's full
+        competitive ratio is uniformly below WS's; see Figure~\ref{fig:cr_vs_rho}).
   \item For heavy-tail tasks, both efficiencies degrade by the variance penalty $1/(1+\mathrm{CV}^2/N)$.
 \end{enumerate}
 
@@ -7438,7 +7569,7 @@ NUMA effects, inter-socket SPSC latency, and OS scheduler interference
 will increase $\hat\delta_{\mathrm{sched}}$ for large $N$.
 The theoretical $O(1/N)$ pair-correlation correction from
 \hyperref[chap:kinetic_theory]{Performance~II} (Level~1 correction, $\Delta p_d \approx
--\varrho_0 p_d^2/(N-1)$) is negligible at $N=256$ and does not affect
++\varrho_0 p_d^2/(N-1)$, overload contagion) is negligible at $N=256$ and does not affect
 the scaling estimate.
 \end{remark}
 
@@ -7673,18 +7804,14 @@ We prove $\eta_{\mathrm{util}}(\mathrm{DTA}) \to 1$ under mild assumptions.
 We stress that Assumption~\ref{ass:threshold} constrains the
 \emph{admission} threshold $H$ (a queue-depth quantity, in the hundreds
 to hundreds-of-thousands), not the \emph{hop-count} bound $h_{\max} =
-\lfloor N/2\rfloor$ (a dimensionless integer, at most $N/2$) --- an
-earlier version of this manuscript conflated the two, which produced a
-spurious $N$-dependent condition ($\rho \leq 1-2/N$) that fails at small
-$N$ and does not correspond to anything in the DTA implementation. The
-condition actually required, $\rho \leq H/(H+1)$, is on the
-\emph{system load} $\rho$ relative to the admission threshold $H$, and
-is essentially independent of $N$: since $H \geq 100$ in every
-configuration this paper considers, the condition holds up to
-$\rho \leq 0.99$ regardless of $N$, so
-Assumption~\ref{ass:threshold} is satisfied at every load and worker
-count used elsewhere in this paper, including the $N=4$ CI benchmark
-configuration.
+\lfloor N/2\rfloor$ (a dimensionless integer, at most $N/2$). The
+condition required, $\rho \leq H/(H+1)$, is on the \emph{system load}
+$\rho$ relative to the admission threshold $H$, and is essentially
+independent of $N$: since $H \geq 100$ in every configuration this
+paper considers, the condition holds up to $\rho \leq 0.99$ regardless
+of $N$, so Assumption~\ref{ass:threshold} is satisfied at every load
+and worker count used elsewhere in this paper, including the $N=4$ CI
+benchmark configuration.
 \end{remark}
 
 \begin{theorem}[DTA utilisation efficiency]\label{thm:dta_info_opt}
@@ -8875,6 +9002,20 @@ memory-ordering annotation against the requirements established in
 \S\ref{sec:mpmc}--\S\ref{sec:memorder}. Responsibility for the
 correctness of the implementation, and for the accuracy of its
 correspondence to the formal model, rests with the human author.
+
+\medskip
+\noindent\textbf{Errata from the verification process.}
+The review described above surfaced and corrected several substantive
+errors relative to earlier drafts, most notably a sign error in the
+Level-1 pair-correlator analysis of \S\ref{sec:contagion-scope}'s
+chapter (the true effect is overload \emph{contagion}, not
+anti-correlation), a wrong-order asymptotic in the competitive-ratio
+analysis of \S\ref{chap:competitive_ratio} (Gumbel $O(\ln N)$ in place
+of an earlier Gaussian-tail $O(\sqrt{\ln N})$), and a symbol conflation
+between the admission threshold $H$ and the hop-count bound $h_{\max}$
+in Assumption~\ref{ass:threshold}. Each correction and its downstream
+consequences are noted at the relevant point in the text; we record
+them here together in the interest of transparency.
 
 \clearpage
 

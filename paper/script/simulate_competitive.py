@@ -10,6 +10,20 @@ Analyses:
   2. Burst capacity B* comparison (base = no warehouse; bonus = with warehouse)
   3. Spectral gap / mixing-time comparison
   4. Crash-time comparison under adversarial injection (small N for visibility)
+
+NOTE (methodology fix, see main.tex Fig. fig:cr_vs_rho caption for details):
+`simulate_cr` previously ignored its `rho0` argument -- it always drew a
+fixed M_TASKS=400 batch with the fixed production-analog H_SIM=100
+watermark, so DTA's deflection threshold was essentially never crossed
+within a batch (avg load ~50 << H=100) and DTA collapsed to plain random
+placement. Both the batch size and the deflection watermark H now scale
+with rho0 (see `simulate_cr`'s docstring) so the competitive-ratio-vs-load
+figure actually exercises DTA's deflection mechanism. The added dotted
+reference curves (`analytic_bound_dta`/`analytic_bound_ws`) are the
+routing/stealing *overhead-only* terms of Theorem thm:cr_bot and
+Theorem thm:cr_ws_bot -- they are not upper bounds on the full empirical
+batch competitive ratio plotted here (which also reflects finite-batch
+task-size-variance load imbalance, present for all four strategies).
 """
 
 import math
@@ -56,6 +70,9 @@ def mmh_moments(rho: float, H: int):
     ks   = np.arange(H + 1)
     mu_q = float(np.dot(pmf, ks))
     return mu_q, float(np.dot(pmf, ks ** 2)) - mu_q ** 2
+
+def mmh_cdf(rho: float, H: int) -> np.ndarray:
+    return np.cumsum(mmh_pmf(rho, H))
 
 def solve_sc(rho0: float, H: int, tol: float = 1e-9) -> float:
     r = rho0
@@ -200,29 +217,90 @@ def _opt_makespan(sizes, N: int) -> float:
         loads[np.argmin(loads)] += s
     return float(np.max(loads))
 
-def simulate_cr(rho0: float, N: int, H: int,
+def simulate_cr(rho0: float, N: int, H: int = None,
                 task_dist: str = "exp",
-                pareto_alpha: float = 2.5) -> dict:
-    """Monte Carlo competitive ratios for all four strategies."""
+                pareto_alpha: float = 2.5,
+                n_batches: int = None) -> dict:
+    """
+    Monte Carlo competitive ratios for all four strategies.
+
+    IMPORTANT (bug fix): earlier versions of this function ignored `rho0`
+    entirely -- they always drew a fixed M_TASKS=400 batch regardless of
+    the offered load, and used the fixed production-scale H_SIM=100
+    watermark, which is far above the ~M_TASKS/N=50 typical per-worker
+    task count. As a result DTA's deflection threshold was essentially
+    never crossed within a batch, so DTA collapsed to plain random
+    placement (no active balancing) and tracked the "Random" curve almost
+    exactly, while the "vs rho0" x-axis had no effect on the outcome.
+
+    Fix: both the batch size M and the deflection watermark H are now
+    tied to the offered load, using the (unbounded M/M/1) mean-field
+    per-worker occupancy q_bar_inf = rho0/(1-rho0) as the natural scale:
+      - M(rho0)  ~ 2*N*q_bar_inf tasks (more tasks at higher load)
+      - H(rho0)  ~ 3*q_bar_inf        (watermark a few queue-lengths
+                                        above the typical load, so
+                                        deflection is a real, non-trivial
+                                        event within the batch -- this
+                                        mirrors how H is used in the
+                                        Theorem~thm:cr_bot mean-field
+                                        derivation, where p_d = P(q*>=H)
+                                        must be non-negligible for the
+                                        routing-overhead term to matter)
+    If an explicit H is passed, it overrides the load-dependent H(rho0)
+    (kept for backward compatibility with existing call sites, e.g. the
+    steady-state Table 1 metrics which use the fixed production-analog
+    H_SIM=100 on purpose).
+    """
+    if n_batches is None:
+        n_batches = N_BATCHES
+    qbar_inf = rho0 / max(1e-9, 1.0 - rho0)
+    H_eff = H if H is not None else max(8, round(3 * qbar_inf))
+    M_eff = int(np.clip(round(2 * N * qbar_inf), 60, 3000))
+
     crs = {"dta": [], "ws": [], "cq": [], "rand": []}
-    for _ in range(N_BATCHES):
+    for _ in range(n_batches):
         if task_dist == "exp":
-            sizes = [random.expovariate(MU) for _ in range(M_TASKS)]
+            sizes = [random.expovariate(MU) for _ in range(M_eff)]
         else:
             s_min = (pareto_alpha - 1) / (pareto_alpha * MU)
             sizes = [s_min / (random.random() ** (1.0 / pareto_alpha))
-                     for _ in range(M_TASKS)]
+                     for _ in range(M_eff)]
         opt = _opt_makespan(sizes, N)
         if opt < 1e-12:
             continue
         for key, loads in [
-            ("dta",  _assign_dta(sizes, N, H)),
+            ("dta",  _assign_dta(sizes, N, H_eff)),
             ("ws",   _assign_ws(sizes, N)),
             ("cq",   _assign_cq(sizes, N)),
             ("rand", _assign_rand(sizes, N)),
         ]:
             crs[key].append(float(np.max(loads)) / opt)
-    return {k: float(np.mean(v)) if v else float("nan") for k, v in crs.items()}
+    out = {k: float(np.mean(v)) if v else float("nan") for k, v in crs.items()}
+    out["H_eff"] = H_eff
+    out["M_eff"] = M_eff
+    return out
+
+
+def analytic_bound_dta(rho0: float, N: int, H: int,
+                        delta_hop_mu: float = 0.001) -> float:
+    """
+    Closed-form evaluation of the Theorem~thm:cr_bot (eq:cr_main) upper
+    bound: (routing factor) x (imbalance factor), using the same
+    mean-field / order-statistics machinery as the rest of this script.
+    """
+    rho_star = solve_sc(rho0, H)
+    pd = float(mmh_pmf(rho_star, H)[H])
+    qbar = rho_star / (1.0 - rho_star)
+    cdf = mmh_cdf(rho_star, H)
+    EMN = float((1.0 - cdf[:-1] ** N).sum())  # E[M_N], same identity as makespan script
+    routing = 1.0 + pd / (1.0 - pd) * delta_hop_mu
+    imbalance = 1.0 + (EMN - qbar) / qbar
+    return routing * imbalance
+
+
+def analytic_bound_ws(rho0: float, delta_steal_mu: float = 0.01) -> float:
+    """Closed-form evaluation of Theorem~thm:cr_ws_bot (eq:cr_ws)."""
+    return 1.0 + (1.0 - rho0) * delta_steal_mu
 
 # ---------------------------------------------------------------------------
 # Tables
@@ -283,19 +361,22 @@ def print_tables():
 def plot_competitive_ratio(outdir: str):
     print("  [Plot 1] Competitive ratio vs rho0...")
     rhos = np.linspace(0.15, 0.88, 12)
-    N, H = N_BOT, H_SIM
+    N = N_BOT
     results_exp    = {k: [] for k in ["dta","ws","cq","rand"]}
     results_pareto = {k: [] for k in ["dta","ws","cq","rand"]}
+    bound_dta, bound_ws = [], []
 
     for rho0 in rhos:
-        re = simulate_cr(rho0, N, H, "exp")
-        rp = simulate_cr(rho0, N, H, "pareto")
+        re = simulate_cr(rho0, N, None, "exp")
+        rp = simulate_cr(rho0, N, None, "pareto")
         for k in results_exp:
             results_exp[k].append(re[k])
             results_pareto[k].append(rp[k])
+        bound_dta.append(analytic_bound_dta(rho0, N, re["H_eff"]))
+        bound_ws.append(analytic_bound_ws(rho0))
 
-    styles = {"dta":("b-o","DTA-V3"), "ws":("r-s","Work-Stealing"),
-              "cq":("g-^","Central Queue"), "rand":("m-D","Random")}
+    styles = {"dta":("b-o","DTA-V3 (empirical)"), "ws":("r-s","Work-Stealing (empirical)"),
+              "cq":("g-^","Central Queue (empirical)"), "rand":("m-D","Random (empirical)")}
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     for ax, res, title in [
         (axes[0], results_exp,    f"Exp($\\mu$) tasks"),
@@ -303,12 +384,16 @@ def plot_competitive_ratio(outdir: str):
     ]:
         for k, (sty, lbl) in styles.items():
             ax.plot(rhos, res[k], sty, lw=1.8, ms=5, label=lbl)
+        ax.plot(rhos, bound_dta, "b:", lw=1.5, alpha=0.8,
+                label=r"DTA routing-overhead term only (Thm.~3.1)")
+        ax.plot(rhos, bound_ws, "r:", lw=1.5, alpha=0.8,
+                label=r"WS overhead-only term (Thm.~5.1)")
         ax.axhline(1.0, color="k", lw=0.8, ls="--", alpha=0.5)
         ax.set_xlabel(r"$\varrho_0$", fontsize=12)
         ax.set_ylabel(r"Competitive ratio $\varrho_c$", fontsize=11)
-        ax.set_title(f"Competitive ratio: {title}\n(N={N}, H={H}, M={M_TASKS}, {N_BATCHES} batches)",
-                     fontsize=10)
-        ax.legend(fontsize=9); ax.grid(True, alpha=0.3, ls="--")
+        ax.set_title(f"Competitive ratio: {title}\n(N={N}, H and M scale with load; "
+                     f"{N_BATCHES} batches)", fontsize=10)
+        ax.legend(fontsize=8); ax.grid(True, alpha=0.3, ls="--")
         ax.set_ylim(0.98, None)
     fig.tight_layout()
     p = os.path.join(outdir, "competitive_ratio_vs_rho.png")

@@ -166,7 +166,10 @@ n_rep_sim = 2000
 d_range   = np.arange(1, 11)
 
 # Theory curves
-theory_1st = np.array([M_level / (N * MU) + d * H(K_fj) / MU
+# T_1 = sum_ell M_ell/mu = d * M_level/mu (constant M_level per level,
+# matching main.tex's definition T_1 = sum_ell M_ell/mu); the first-order
+# bound is T_1/N + d*H_K/mu (main.tex eq. for E[C_max], "first order" term).
+theory_1st = np.array([d * M_level / (N * MU) + d * H(K_fj) / MU
                         for d in d_range])
 theory_2nd = theory_1st + math.pi * np.sqrt(d_range) / (math.sqrt(6) * MU)
 
