@@ -144,7 +144,8 @@ pdfkeywords={Scheduler, Bounded Information, Distributed Systems, Mathematical A
       \small v1: June 28, 2026 \quad v2: June 29, 2026 \\
       \small v3: June 30, 2026 \quad v4: June 30, 2026 \\
       \small v5: July 1, 2026 \quad v6: July 1, 2026 \\
-      \small v7: July 2, 2026 \quad v8: July 2, 2026
+      \small v7: July 2, 2026 \quad v8: July 2, 2026 \\
+      \small v9: July 2, 2026
 \end{center}
 
 \vspace{0.6em}
@@ -234,16 +235,77 @@ under a strictly smaller \emph{information set} than a scheduler that
 polls peers before acting.
 
 The central question this paper answers is whether that restriction is a
-free design choice or a real cost, and if it is a cost, how large. We
-answer both halves precisely: DTA remains provably correct, live, and
-close to load-balance-optimal despite its restricted information (Parts
-I--III), and we give an explicit accounting of how much information a
-comparable work-stealing scheduler must acquire to match it, together
-with the hardware cost of acquiring that information (Part~VI). The
-overall picture is that bounded-information scheduling is not a
-compromise made for the sake of simplicity; on the workloads and hardware
-regimes we characterise, it is close to information-optimal, and it is
-strictly cheaper to run.
+free design choice or a real cost, and if it is a cost, how large. Answering
+it requires three separate arguments, each building on the last. First, a
+scheduler that observes less must still be shown \emph{safe}: with a
+smaller information set there is more room for a task to be lost, for two
+workers to deadlock waiting on each other's mailboxes, or for a chunk to
+loop forever between peers instead of being scheduled (Parts~I--II).
+Safety alone is not enough, however, since a scheduler can be safe and
+still make every worker wait arbitrarily long for work; we therefore prove
+an explicit, distribution-free bound on waiting time before any of the
+performance analysis can be trusted (Part~III). Only once correctness and
+progress are established does it make sense to ask how \emph{good} the
+restricted-information design is quantitatively, and we answer this both
+under a stochastic workload model (Part~IV, mean-field and kinetic theory)
+and under a worst-case adversarial one (Part~V, competitive analysis and
+empirical validation) --- two regimes that make no assumptions in common,
+so agreement between them is itself evidence that the bound is not an
+artefact of either model. Finally, we close the loop: Parts~I--V establish
+that DTA \emph{works} despite restricted information, but not yet what
+that restriction is worth, so Part~VI gives an explicit accounting of how
+much information a comparable work-stealing scheduler must acquire to
+match it, together with the hardware cost of acquiring that information.
+Figure~\ref{fig:logic-chain} summarises how these parts connect to the
+central question, and the ``Organization'' paragraph below gives the
+section-level map. The overall picture that emerges is that bounded-information
+scheduling is not a compromise made for the sake of simplicity; on the
+workloads and hardware regimes we characterise, it is close to
+information-optimal, and it is strictly cheaper to run.
+
+\begin{figure}[htbp]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=7mm and 6mm,
+  every node/.style={font=\small},
+  box/.style={draw, rounded corners, align=center, minimum height=9mm,
+              minimum width=26mm, fill=blue!6, inner sep=3pt},
+  qbox/.style={draw, rounded corners, align=center, minimum height=9mm,
+               minimum width=26mm, fill=orange!10, inner sep=3pt},
+  cbox/.style={draw, rounded corners, align=center, minimum height=11mm,
+               minimum width=52mm, fill=green!8, inner sep=3pt},
+  arr/.style={-{Latex[length=2mm]}, thick}
+]
+  \node[cbox] (q) {Central question: is bounded-information routing a free\\
+                    design choice, or does it cost something -- and how much?};
+  \node[box, below left=9mm and 6mm of q] (safety) {Part I--II\\Safety: no lost tasks,\\no deadlock/livelock};
+  \node[box, below=of safety] (progress) {Part III\\Progress: explicit\\waiting-time bound $W_{\max}$};
+  \node[box, below right=9mm and 6mm of q] (stoch) {Part IV\\Stochastic quality:\\mean-field / kinetic theory};
+  \node[box, below=of stoch] (advers) {Part V\\Worst-case quality:\\competitive ratio + benchmarks};
+  \node[qbox, below=16mm of q] (cost) {Part VI\\Price of the restriction:\\information-cost framework ($\eta_{\mathrm{info}},\eta_{\mathrm{util}}$)};
+
+  \draw[arr] (q.west) .. controls +(-8mm,-4mm) .. (safety.north);
+  \draw[arr] (safety) -- (progress);
+  \draw[arr] (q.east) .. controls +(8mm,-4mm) .. (stoch.north);
+  \draw[arr] (stoch) -- (advers);
+  \draw[arr] (progress.south) .. controls +(0,-10mm) and +(-16mm,6mm) .. (cost.west);
+  \draw[arr] (advers.south) .. controls +(0,-10mm) and +(16mm,6mm) .. (cost.east);
+  \node[align=center, below=2mm of cost, font=\footnotesize\itshape, text width=90mm]
+    {Answer: correctness and progress hold unconditionally (I--III);
+     quality is near-optimal in both regimes (IV--V);
+     the restriction is quantifiably cheap, not merely tolerable (VI).};
+\end{tikzpicture}%
+}
+\caption{Logic chain of the paper. Safety (Parts~I--II) and progress
+(Part~III) must hold before any performance claim is meaningful; quality is
+then established independently under a stochastic workload model
+(Part~IV) and an adversarial one (Part~V); Part~VI closes the loop by
+pricing the information restriction whose safety and quality were just
+established. Each arrow is a logical dependency, not merely a reading
+order.}
+\label{fig:logic-chain}
+\end{figure}
 
 \subsection*{Why a scheduler needs both a correctness proof and a cost model}
 
@@ -311,6 +373,7 @@ together with the information-cost framework of Part~VI, they do.
 \end{enumerate}
 
 \subsection*{Organization}
+\label{sec:organization}
 
 Part~I (\S\ref{chap:formal_model}) develops the formal operator-algebraic
 model. Part~II proves the four correctness theorems. Part~III proves
@@ -1394,21 +1457,32 @@ sequence (a fixed number of \code{nop} instructions).  Crucially:
         only guarantees progress for a thread running in isolation; we
         do not need obstruction-freedom here because the lock-free
         guarantee is already available for the Vyukov queue's CAS loop.)
-        Under the standard assumption that CAS collisions are resolved
-        by a scheduler with no adversarial starvation policy against a
-        specific worker (e.g.\ a fair OS scheduler), each individual
-        worker's retry count is finite with probability 1: a
-        non-negative random variable with finite expectation is
-        necessarily finite almost surely, and
-        $\mathbb{E}[\text{retries}] < \infty$ follows from the
-        system-wide lock-free guarantee above together with the
-        exponential back-off, which makes repeated self-collision
-        increasingly unlikely.
-        A finite-a.s.\ retry count is exactly what ruling out deadlock
-        (Definition~\ref{def:deadlock}) requires: it precludes
-        \emph{permanent} blocking, which is a qualitative property that
-        a.s.-finite delay already establishes, independently of the
-        specific expected value.
+        The system-wide lock-free guarantee alone only bounds
+        \emph{aggregate} progress (some contender's CAS succeeds on
+        every collision); it does not by itself bound any
+        \emph{individual} worker's retry count, which could in
+        principle be starved by an adversarial scheduler that always
+        lets a different contender win. We add one standard fairness
+        assumption to close this gap: a \emph{fair scheduler} does not
+        systematically bias the winner of a CAS race away from any
+        fixed worker, i.e., conditional on a collision occurring among
+        the (at most $N-1$ other) contenders active at that instant,
+        each contending worker's CAS wins with probability at least
+        $1/N$. Under this assumption, worker $i$'s retry count $R_i$ is
+        stochastically dominated by a $\mathrm{Geometric}(1/N)$ random
+        variable (each attempt independently succeeds with probability
+        $\geq 1/N$, conditionally on a retry being needed at all), giving
+        the explicit bound $\mathbb{E}[R_i] \leq N$ --- not merely
+        $\mathbb{E}[R_i]<\infty$, but a concrete worst-case constant in
+        terms of the contention width. The exponential back-off
+        (Assumption~\ref{ass:live}-compatible: it only ever delays,
+        never blocks, this worker) additionally spreads out repeated
+        self-collisions in time without affecting this bound's validity,
+        since the domination argument only uses the per-attempt success
+        probability, not the inter-attempt delay.
+        A finite-a.s.\ (indeed finite-mean) retry count is exactly what
+        ruling out deadlock (Definition~\ref{def:deadlock}) requires: it
+        precludes \emph{permanent} blocking.
 \end{itemize}
 Therefore, the warehouse retry loop is \emph{contention-delayed}, not
 \emph{worker-blocking}: it does not wait for any specific worker
@@ -2166,11 +2240,15 @@ This part proves two progress properties: every task is eventually
 scheduled (starvation freedom), and the waiting time before a task
 begins execution is bounded by an explicit, purely structural function
 of the system's capacity parameters ($N$, $L$, $C_W$, $K$, $\delta$) ---
-a worst-case bound that holds for every arrival pattern and requires no
-distributional assumption on $\lambda$ or $\mu$.  Both bounds are derived purely
-from the local dispatch-loop structure and the deterministic polling
-order, without any assumption that a worker knows the state of its peers
---- a direct consequence of the bounded-information design.
+a worst-case bound that requires no distributional assumption on
+$\lambda$ or $\mu$, holding for every arrival pattern subject to one
+pathwise rate condition on the warehouse (Assumption~\ref{ass:wh-net-drain}:
+the warehouse's net inflow during any busy interval must not exceed its
+collective drain rate, needed so that a worker's mailbox polling cannot
+be delayed indefinitely by sustained peer overflow). Both bounds are
+derived from the local dispatch-loop structure and the deterministic
+polling order, without any assumption that a worker knows the state of
+its peers --- a direct consequence of the bounded-information design.
 The bounded-wait theorem
 also serves as the starting point for the makespan analysis in Part~IV.
 
@@ -2316,10 +2394,34 @@ and dispatched in the same iteration's \code{dispatch\_loop}.
 Total processing time for the drained batch: $\leq DK\delta$.
 \end{proof}
 
+\begin{assumption}[Warehouse net-drain condition]
+\label{ass:wh-net-drain}
+During any maximal interval in which the warehouse is continuously
+observed busy (i.e., \code{warehouse.is\_busy()} holds at the start of
+every worker iteration throughout the interval), the aggregate rate at
+which \emph{other} workers push new chunks into the warehouse does not
+exceed the collective drain rate $N/(K\delta)$ chunks per unit time.
+This is a pathwise, worst-case rate cap on the arrival pattern (not a
+distributional/steady-state average): it holds automatically whenever
+the mean-field warehouse-stability condition
+$\Lambda_W < \Lambda_D$ of Theorem~\ref{thm:wh-stable}
+(\hyperref[chap:stability]{Performance~IV}) holds, but is stated here
+directly as a worst-case condition so that this chapter's bound remains
+distribution-free. Without some such condition, sustained concurrent
+overflow from other workers could in principle keep a worker's
+observed backlog nonzero indefinitely, and since
+Definition~\ref{def:iteration} gates \code{poll\_mailboxes} on
+\code{warehouse.is\_busy()}$=$false, that worker would never resume
+polling --- so the bound below is conditional on
+Assumption~\ref{ass:wh-net-drain}, not unconditional over every
+conceivable arrival pattern.
+\end{assumption}
+
 \begin{lemma}[Warehouse drain time (collective)]
 \label{lem:wdrain}
-If the warehouse contains at most $C_W \cdot K$ tasks, all $N$
-workers collectively empty it in at most
+Under Assumption~\ref{ass:wh-net-drain}, if the warehouse contains at
+most $C_W \cdot K$ tasks at the start of a busy interval, all $N$
+workers collectively empty it within that interval in at most
 \[
   T_{\mathrm{drain}} \;=\; \frac{C_W \cdot K}{N}\,\delta
 \]
@@ -2328,12 +2430,14 @@ no idle intervals.
 \end{lemma}
 
 \begin{proof}
-The warehouse holds at most $C_W$ chunks.  Each worker drains
-$D$ chunks per iteration of the drain phase, spending $DK\delta$
-dispatching them.  The total chunk-drain capacity of all $N$
+The warehouse holds at most $C_W$ chunks at the start of the interval,
+and by Assumption~\ref{ass:wh-net-drain} the net inflow during the
+interval is non-positive relative to the collective drain rate. Each
+worker drains $D$ chunks per iteration of the drain phase, spending
+$DK\delta$ dispatching them.  The total chunk-drain capacity of all $N$
 workers per unit time is $N \cdot D / (DK\delta) = N/(K\delta)$
-chunks per time unit, so the time to drain $C_W$ chunks is
-$C_W K\delta / N$.  (The factor $K$ accounts for the dispatch
+chunks per time unit, so the time to drain (at most) $C_W$ net chunks
+is $C_W K\delta / N$.  (The factor $K$ accounts for the dispatch
 time of the $K$ tasks per chunk.)
 \end{proof}
 
@@ -2404,10 +2508,12 @@ two consecutive polls of $M_{ji}$ is at most:
 \paragraph{Stage M: waiting in a mailbox (warehouse active).}
 
 When the warehouse is busy, worker $i$ skips \code{poll\_mailboxes}
-for the duration of the drain phase.  By Lemma~\ref{lem:wdrain},
-the drain phase lasts at most $T_{\mathrm{drain}} = C_W K\delta/N$.
-After draining, polling resumes, and $\tau$ is picked up within
-the next poll cycle ($\leq L\delta$).
+for the duration of the drain phase.  Under
+Assumption~\ref{ass:wh-net-drain}, Lemma~\ref{lem:wdrain} bounds this
+drain phase at $T_{\mathrm{drain}} = C_W K\delta/N$, after which
+\code{warehouse.is\_busy()} reports false and polling resumes on the
+next iteration, so $\tau$ is picked up within the next poll cycle
+($\leq L\delta$).
 
 \[
   W_M \;\leq\; \frac{C_W K}{N}\,\delta \;+\; L\,\delta
@@ -2423,11 +2529,16 @@ round.  The time to drain past $\tau$'s position:
 \[
   W_W \;\leq\; \ceil{\frac{C_W K}{NDK}} \cdot DK\delta
        \;=\; \ceil{\frac{C_W}{ND}} \cdot DK\delta
-       \;=\; \frac{C_W K}{N}\,\delta
+       \;\leq\; \left(\frac{C_W}{N} + D\right)\delta K
 \]
-
-(using $\ceil{C_W/(ND)} \cdot D \leq C_W/N + D \leq 2C_W/N$ for
-$D \leq C_W/N$, which holds for all published configurations.)
+using $\lceil x \rceil \le x+1$ termwise. When $ND$ divides $C_W$
+exactly (as in every configuration considered in this paper, e.g.\ the
+benchmark parameters of \S\ref{sec:validity}), the ceiling is exact and
+this reduces to $W_W \leq \frac{C_WK}{N}\delta$, the value used in the
+main theorem below; in general the extra additive slack is at most
+$D\delta K$, which is dominated by the $L\delta$ term already present
+in the theorem's bound whenever $D \leq L$ (true for all published
+configurations, since $D \le C_W/N \ll L$).
 After being drained, $\tau$ enters $Q_i$ and waits $W_Q$.
 
 % =============================================================
@@ -2436,8 +2547,8 @@ After being drained, $\tau$ enters $Q_i$ and waits $W_Q$.
 
 \begin{theorem}[Bounded waiting time]
 \label{thm:bounded-wait}
-Under Assumptions~\ref{ass:smax}--\ref{ass:live}, for any task
-$\tau$ admitted to the DTA scheduler:
+Under Assumptions~\ref{ass:smax}--\ref{ass:live} and~\ref{ass:wh-net-drain},
+for any task $\tau$ admitted to the DTA scheduler:
 \[
   \boxed{
     W(\tau) \;\leq\; \delta\!\left(2L + \frac{C_W K}{N}\right)
@@ -4626,61 +4737,84 @@ Define the quadratic Lyapunov function
   V(\mathbf{q}) \;\coloneqq\; \sum_{i=1}^N q_i^2.
   \label{eq:lyapunov}
 \end{equation}
-The generator drift satisfies, for all $\mathbf{q}$ with $\norm{\mathbf{q}}_1 > 0$:
+The generator drift satisfies, for all $\mathbf{q}$:
 \begin{equation}
   \generator V(\mathbf{q})
-  \;\leq\; -2\mu(1-\rhostar)\norm{\mathbf{q}}_1 + N\mu(1+\rhostar).
+  \;\leq\; -2\mu\norm{\mathbf{q}}_1 + N\bigl(\lambda_0(2H+1)+\mu\bigr).
   \label{eq:drift}
 \end{equation}
-Consequently, DTA is throughput-stable for all $\rhozero < 1$,
-i.e., for all arrival rates $\lambdazero < \mu = 1/\delta$.
+Consequently, DTA is throughput-stable (positive recurrent) for
+\emph{every} arrival rate $\lambdazero$, including $\rhozero \geq 1$ ---
+a structural consequence of the admission cap at $H$, not a threshold
+phenomenon at $\rhozero=1$. The $\rhozero<1$ threshold instead governs
+the \emph{scale} of the stationary queue length (Corollaries
+\ref{cor:mean-queue}--\ref{cor:instability}), which is the practically
+relevant distinction.
 \end{theorem}
 
 \begin{proof}
-The generator acts on $V$ coordinate-wise.
-For worker $i$ with $q_i < H$, the effective arrival rate is
-$\lambda_{\mathrm{eff}} = \mu\rhostar$ (from the self-consistency equation).
-For $q_i \geq H$, arrivals are deflected outward, so $\lambda_{\mathrm{eff},i} = 0$
-and $q_i$ decreases (net drift $= -\mu q_i$).
-Using $(q+1)^2 - q^2 = 2q+1$ and $(q-1)^2 - q^2 = -2q+1$:
-\begin{align}
-  \generator V_i(q_i)
-  &= \lambda_{\mathrm{eff},i}(2q_i + 1) + \mu(-2q_i+1)\mathbf{1}[q_i > 0]
-  \nonumber\\
-  &\leq 2q_i(\lambda_{\mathrm{eff},i} - \mu) + \lambda_{\mathrm{eff},i} + \mu
-  \nonumber\\
-  &\leq 2q_i\mu(\rhostar - 1) + \mu(1 + \rhostar)
-  \label{eq:perworker-drift}
-\end{align}
-where the last inequality uses $\lambda_{\mathrm{eff},i} \leq \mu\rhostar$ and
-$\mathbf{1}[q_i>0] \leq 1$ (this is a valid, if slightly loose, upper
-bound at $q_i = 0$ too: the true drift there has no service term at all,
-since $\mathbf{1}[q_i>0]=0$ makes $\mu(-2q_i+1)\mathbf{1}[q_i>0]=0$
-exactly, which is still $\leq \mu(-2q_i+1)|_{q_i=0} = \mu$, so the bound
-does not need a separate case for the empty-queue boundary).
-Summing over $i$:
+The generator acts on $V$ coordinate-wise. Let $m = m(\mathbf{q})
+\coloneqq |\{j : q_j \geq H\}|$ be the (state-dependent) number of
+currently-full workers. For a non-full worker $i$ ($q_i<H$), the exact
+transition rates of \S\ref{sec:mmp-rates} give effective arrival rate
+$\lambda_{\mathrm{eff},i} = \lambda_0\bigl(1 + \tfrac{m}{N-1}\bigr)$
+--- identical across all $N-m$ non-full workers, since the deflection
+boost each receives depends only on the number of \emph{other} workers
+that are full. (This is an exact pathwise identity, not the mean-field
+average $\mu\rhostar$: an earlier version of this proof substituted
+$\lambda_{\mathrm{eff},i}\leq\mu\rhostar$ here, which only bounds the
+rate \emph{on average} over the mean-field stationary distribution of
+peers, not at every reachable state --- the true worst case is
+$\lambda_{\mathrm{eff},i} \to 2\lambda_0$ as $m\to N-1$.) For $q_i \geq
+H$, arrivals are deflected outward, so $\lambda_{\mathrm{eff},i} = 0$.
+Using $(q+1)^2-q^2=2q+1$ and $(q-1)^2-q^2=-2q+1$, and writing
+$c(m) \coloneqq \lambda_0(1+m/(N-1))$:
 \[
   \generator V(\mathbf{q})
-  = \sum_i \generator V_i(q_i)
-  \leq 2\mu(\rhostar-1)\sum_i q_i + N\mu(1+\rhostar)
-  = -2\mu(1-\rhostar)\norm{\mathbf{q}}_1 + N\mu(1+\rhostar).
+  = \underbrace{c(m)\!\!\sum_{i:\,q_i<H}\!\!(2q_i+1)}_{\text{arrivals, non-full workers}}
+  \;-\; 2\mu\!\!\sum_{i:\,q_i>0}\!\!q_i \;+\; N\mu.
 \]
-For $\rhostar < 1$, the coefficient $-2\mu(1-\rhostar) < 0$,
-so~\eqref{eq:drift} is a Foster--Lyapunov drift condition with
-$\epsilon = 2\mu(1-\rhostar)$ and $b = N\mu(1+\rhostar)$.
-By the Foster--Lyapunov theorem \cite{meyn2009},
-the chain is positive recurrent and has a unique stationary distribution.
-Since $\rhostar = \lambdazero\delta(1+\pd) \leq \lambdazero\delta(1+1) < 1$
-whenever $\lambdazero < \mu/2$, and by continuity the self-consistency
-equation has $\rhostar < 1$ for all $\rhozero < 1$
-(shown in \hyperref[chap:load_balance]{Performance~I}), stability holds for all $\rhozero < 1$.
+Since each non-full $q_i < H$, the arrivals term is at most
+$c(m)(N-m)(2H+1)$. The function $c(m)(N-m)$ is maximised over
+$m\in\{0,\ldots,N-1\}$ at $m=0$ (equivalently $m=1$, by direct
+computation), where it equals $N\lambda_0$ exactly: this is a flow-conservation
+fact (deflection only \emph{redistributes} the $N\lambda_0$ raw external
+arrival rate among workers; it cannot manufacture additional arrivals),
+so the arrivals term is bounded by the \emph{constant}
+$N\lambda_0(2H+1)$, independent of $\mathbf{q}$. Hence
+\[
+  \generator V(\mathbf{q})
+  \;\leq\; N\lambda_0(2H+1) + N\mu \;-\; 2\mu\norm{\mathbf{q}}_1.
+  \label{eq:perworker-drift}
+\]
+This is a valid Foster--Lyapunov drift condition with $\epsilon=2\mu$
+and $b = N(\lambda_0(2H+1)+\mu)$, valid \emph{pathwise at every state},
+with no substitution of a mean-field average for a per-state quantity.
+By the Foster--Lyapunov theorem \cite{meyn2009}, the chain is positive
+recurrent. Unlike the flawed substitution this replaces, this argument
+does not actually require $\rhozero<1$: because $q_i\le H$ is already
+enforced structurally (arrivals are deflected once a worker reaches
+$H$), the chain lives on the finite state space $\{0,\ldots,L\}^N$ and
+is positive recurrent for \emph{any} $\rhozero$, including
+$\rhozero\geq 1$. The content of the $\rhozero<1$ vs.\ $\rhozero\geq 1$
+distinction is therefore not recurrence itself but the \emph{scale} of
+the stationary queue length, addressed by the corollaries below.
 \end{proof}
 
 \begin{corollary}[Mean queue length bound]
 \label{cor:mean-queue}
-In steady state, $\mathbb{E}[q_i^*] \leq b/(2\epsilon) = (1+\rhostar)/(2(1-\rhostar))$.
-This bound diverges as $\rhostar \to 1$, consistent with the saturation
-of the M/M/1/$H$ mean queue to $H$.
+In steady state, $\mathbb{E}[\norm{\mathbf{q}}_1] \leq b/\epsilon =
+N(\lambda_0(2H+1)+\mu)/(2\mu)$, a pathwise-valid but $H$-loose bound
+that holds for every $\rhozero$ (see the proof above). The
+qualitatively sharper, $\rhozero$-dependent estimate
+$\mathbb{E}[q_i^*] \approx \rhostar/(1-\rhostar)$, which diverges as
+$\rhostar \to 1$ and saturates to $H$ consistent with the M/M/1/$H$
+mean queue, is the mean-field prediction of
+\hyperref[chap:load_balance]{Performance~I}'s self-consistency
+equation, independently cross-validated against CTMC simulation
+throughout this paper (e.g.\ \S\ref{sec:sim},
+\hyperref[chap:makespan]{Performance~III}); it is not re-derived
+pathwise here.
 \end{corollary}
 
 \begin{corollary}[Instability for $\rhozero \geq 1$]
@@ -4692,14 +4826,18 @@ The warehouse then overflows in finite expected time
 \end{corollary}
 
 \begin{remark}[Why this matters for DTA]
-The Foster--Lyapunov bound~\eqref{eq:perworker-drift} shows that the
-\emph{deflection mechanism strictly improves stability}: for $q_i \geq H$,
-the arrival rate to worker $i$ drops to zero, replacing the positive
-drift term $2q_i\lambda_0$ with a negative one $-2\mu q_i$.
-Without deflection, stability would require $\lambdazero < \mu$
-with the same bound; with deflection, the effective threshold is
-$\rhozero < 1$ even accounting for the load added by received deflections,
-because those are balanced by the self-consistency equation.
+The admission cap at $H$ is what makes Theorem~\ref{thm:lyapunov}'s
+positive recurrence unconditional: once $q_i \geq H$, worker $i$'s
+arrival rate drops to zero and only the negative drift $-2\mu q_i$
+remains, so no worker's local queue can ever be a source of unbounded
+growth by itself. This structural cap is also why the interesting
+question is not \emph{whether} the chain is recurrent but \emph{where}
+its stationary mass concentrates: for $\rhozero<1$ the mean-field
+self-consistency equation predicts $\mathbb{E}[q_i^*]$ small relative
+to $H$ (Corollary~\ref{cor:mean-queue}'s sharper estimate), while for
+$\rhozero\geq 1$ it predicts saturation at $q_i\approx H$
+(Corollary~\ref{cor:instability}), pushing excess load onto the
+warehouse.
 \end{remark}
 
 % =============================================================
@@ -4785,14 +4923,18 @@ drain its backlog than steady-state analysis would suggest.
 \end{corollary}
 
 \begin{remark}[Spectral gap for the $N$-worker system]
-For the full $N$-worker system under mean-field coupling,
-the generator is approximately a sum of $N$ independent single-worker
-generators with the same effective rate $\lambda_{\mathrm{eff}}$.
-The spectral gap of the product chain is $N\gamma$ (the minimum of $N$
-copies), so the mixing time scales as $t_{\mathrm{mix}}^{(N)} \sim \gamma^{-1}$,
-independent of $N$.
-The $N$ factor cancels because there are $N$ ``channels'' relaxing
-simultaneously.
+For the full $N$-worker system under mean-field coupling, the generator
+is approximately a sum of $N$ independent single-worker generators with
+the same effective rate $\lambda_{\mathrm{eff}}$. Since the generator of
+a product chain is a Kronecker \emph{sum}, its eigenvalues are sums of
+the single-chain eigenvalues; the spectral gap of the product (the
+smallest nonzero eigenvalue) is therefore $\gamma$, not $N\gamma$ ---
+achieved by perturbing a single coordinate while the other $N-1$ sit at
+their own stationary (zero-eigenvalue) component. Consequently the
+mixing time scales as $t_{\mathrm{mix}}^{(N)} \sim \gamma^{-1}$,
+independent of $N$: there are $N$ ``channels'' relaxing simultaneously
+and independently, but the slowest of them still sets the pace, so the
+product's gap does not improve on any single channel's.
 \end{remark}
 
 % =============================================================
@@ -4907,15 +5049,22 @@ from the $N$-worker subsystem.
 In mean-field steady state:
 \begin{itemize}
   \item \textbf{Input rate} $\Lambda_W$: the rate at which tasks arrive
-        at the warehouse when all deflection paths are saturated.
-        In mean-field, a worker deflects to the warehouse when all $N-1$
-        peers have $q_j \geq H$ simultaneously:
+        at the warehouse when all deflection paths are saturated. The
+        deflection protocol tries at most $h_{\max} = \lfloor N/2\rfloor$
+        peers (\S\ref{sec:dag_kinetic}, Definition of the hop bound) before
+        parking a chunk in the warehouse --- \emph{not} all $N-1$ peers.
+        In mean-field, treating the $h_{\max}$ sampled peers as an
+        independent sample (Stosszahlansatz), a worker deflects to the
+        warehouse when all $h_{\max}$ tried peers have $q_j \geq H$
+        simultaneously:
         \begin{equation}
-          \Lambda_W \;=\; N\lambdazero\, \pd^{N-1},
+          \Lambda_W \;=\; N\lambdazero\, \pd^{\lfloor N/2\rfloor},
           \label{eq:wh-input}
         \end{equation}
         where $\pd = \pi(H;\rhostar)$ is the per-worker probability of
-        being above threshold.
+        being above threshold; using $\lfloor N/2\rfloor \le N-1$ gives a
+        strictly larger (more pessimistic, and more accurate) $\Lambda_W$
+        than an all-$N-1$-peers model for $\pd<1,N>3$.
   \item \textbf{Drain rate} $\Lambda_D$: the rate at which workers pull
         tasks from the warehouse (during idle or below-threshold periods):
         \begin{equation}
@@ -4934,7 +5083,7 @@ only if the net warehouse flux is non-positive:
 \begin{equation}
   \Lambda_W < \Lambda_D
   \quad\Longleftrightarrow\quad
-  \rhozero\,\pd^{N-1} < 1 - \pd.
+  \rhozero\,\pd^{\lfloor N/2\rfloor} < 1 - \pd.
   \label{eq:wh-stable}
 \end{equation}
 \end{theorem}
@@ -4953,11 +5102,11 @@ For $\rhozero < \rhozero^{\dagger}$ where
 \begin{equation}
   \rhozero^{\dagger}
   \;\coloneqq\;
-  \frac{1-\pd^*(\rhozero^{\dagger})}{(\pd^*(\rhozero^{\dagger}))^{N-1}},
+  \frac{1-\pd^*(\rhozero^{\dagger})}{(\pd^*(\rhozero^{\dagger}))^{\lfloor N/2\rfloor}},
   \label{eq:rho-dagger}
 \end{equation}
 the warehouse stability condition~\eqref{eq:wh-stable} is satisfied.
-For moderate load ($\pd \ll 1$), $\rhozero^{\dagger} \approx 1/\pd^{N-1} \gg 1$,
+For moderate load ($\pd \ll 1$), $\rhozero^{\dagger} \approx 1/\pd^{\lfloor N/2\rfloor} \gg 1$,
 so the warehouse is stable for all $\rhozero < 1$ (i.e., Level-1 stability
 implies warehouse stability).
 At high load ($\pd \to 1$), $\rhozero^{\dagger} \to 0$, and the warehouse
@@ -4984,7 +5133,7 @@ the mean first-passage time to overflow is
 \begin{equation}
   T_{\mathrm{crash}}
   \;\approx\; \frac{C_W}{\Lambda_W - \Lambda_D}
-  \;=\; \frac{C_W}{N(\rhozero\pd^{N-1}\mu - \mu(1-\pd))}.
+  \;=\; \frac{C_W}{N(\rhozero\pd^{\lfloor N/2\rfloor}\mu - \mu(1-\pd))}.
   \label{eq:crash-time}
 \end{equation}
 Under stable operation ($\Lambda_W < \Lambda_D$), the warehouse is
@@ -5000,23 +5149,25 @@ Substituting $\Delta = \Lambda_W - \Lambda_D$ gives~\eqref{eq:crash-time}.
 \end{proof}
 
 \begin{corollary}[Benchmark crash time at near-saturation]
-At $\rhozero = 0.95$ with $N=4$ and $\pd = \pi(H;\rhostar)$ evaluated
-at the self-consistent $\rhostar$:
+At $\rhozero = 0.95$ with $N=4$ ($\lfloor N/2\rfloor = 2$) and
+$\pd = \pi(H;\rhostar)$ evaluated at the self-consistent $\rhostar$:
 \[
-  T_{\mathrm{crash}} \approx \frac{C_W}{N\mu(\rhozero\pd^3 - (1-\pd))}.
+  T_{\mathrm{crash}} \approx \frac{C_W}{N\mu(\rhozero\pd^2 - (1-\pd))}.
 \]
 For $\pd \ll 1$ (even at $\rhozero = 0.95$, $\pd$ is small),
-the denominator $\approx N\mu\pd^3 \approx 0$, giving
+the denominator $\approx N\mu\pd^2 \approx 0$, giving
 $T_{\mathrm{crash}} \to \infty$ --- the warehouse essentially never overflows
 at moderate per-worker deflection probability.
 Overflow only becomes likely when $\pd$ is substantial, i.e., the entire
-system is near saturation.
+system is near saturation. (Using $\lfloor N/2\rfloor=2$ rather than $N-1=3$
+makes this threshold easier to cross than a naive all-peers model would
+suggest, though still requiring $\pd$ not small.)
 \end{corollary}
 
 \begin{remark}[Finite $T_{\mathrm{crash}}$ is not a failure mode at nominal load]
 Equation~\eqref{eq:crash-time} gives a finite crash time only when
-$\Lambda_W > \Lambda_D$, which requires $\pd^{N-1} > (1-\pd)/\rhozero$.
-At benchmark parameters with $\rhozero \leq 0.95$, $\pd^3 \ll (1-\pd)$
+$\Lambda_W > \Lambda_D$, which requires $\pd^{\lfloor N/2\rfloor} > (1-\pd)/\rhozero$.
+At benchmark parameters with $\rhozero \leq 0.95$, $\pd^2 \ll (1-\pd)$
 for all $\pd < 0.5$, so the system is stable and $T_{\mathrm{crash}} = \infty$
 in steady state.
 The crash time formula is relevant only for diagnosing behavior under
@@ -5607,9 +5758,9 @@ per task is
 \begin{equation}\label{eq:cas_per_task}
   \Gamma_{\mathrm{WS}}(\varrho_0)
   \;=\;
-  \frac{(N-1)\,\mu\,(1-\varrho_0)\,N}{\lambda_0}
+  \frac{\mu\,(1-\varrho_0)\,N}{\lambda_0}
   \;=\;
-  \frac{N(N-1)(1-\varrho_0)}{\varrho_0},
+  \frac{N(1-\varrho_0)}{\varrho_0},
 \end{equation}
 which \textbf{diverges as} $\varrho_0 \to 0$.  Each CAS carries cost
 $\delta_{\mathrm{CAS}}$ (a failed CAS on a shared cache line also
@@ -5619,19 +5770,22 @@ The total per-task WS overhead at low load is
 \begin{equation}\label{eq:ws_low_load_overhead}
   \Delta_{\mathrm{WS}}(\varrho_0)
   \;\approx\;
-  \frac{N(N-1)(1-\varrho_0)}{\varrho_0} \cdot (\delta_{\mathrm{CAS}} + \delta_{\mathrm{coh}}),
+  \frac{N(1-\varrho_0)}{\varrho_0} \cdot (\delta_{\mathrm{CAS}} + \delta_{\mathrm{coh}}),
 \end{equation}
 where $\delta_{\mathrm{coh}} \approx (N-1)\cdot\delta_{\mathrm{MESI}}$ is
-the cache-coherence round-trip cost (MESI protocol invalidation broadcast).
+the cache-coherence round-trip cost of a single failed CAS (MESI protocol
+invalidation broadcast to the other $N-1$ caches); the $(N-1)$ factor
+enters only here, per-failed-CAS, not as a multiplier on the number of
+failed CAS operations itself.
 \end{proposition}
 
 \begin{proof}
 At load $\varrho_0$, the fraction of time each worker is idle $= 1-\varrho_0$.
 An idle worker calls \texttt{steal()} at rate $\approx 1/\delta_{\mathrm{CAS}}$.
-Total steal attempts per unit time across $N-1$ idle workers $\approx N(1-\varrho_0)/\delta_{\mathrm{CAS}}$.
+Total steal attempts per unit time across $N$ idle workers $\approx N(1-\varrho_0)/\delta_{\mathrm{CAS}}$.
 Successful steals per unit time $= \lambda_0$.
 Failed steals per unit time $\approx N(1-\varrho_0)/\delta_{\mathrm{CAS}} - \lambda_0$;
-per task: $\Gamma_{\mathrm{WS}} \approx N(1-\varrho_0)/(\varrho_0)$.
+per task: $\Gamma_{\mathrm{WS}} \approx N(1-\varrho_0)/\varrho_0$.
 \end{proof}
 
 \begin{remark}[The paradox]
@@ -5639,7 +5793,7 @@ This is the \emph{CAS-storm paradox}: WS's theoretical competitive ratio
 approaches 1 at $\varrho_0 \to 0$ (Theorem~\ref{thm:cr_ws_bot}), yet its
 \emph{practical} per-task overhead \emph{diverges} in the same limit due to
 idle-loop contention.  The theoretical analysis accounts only for steals that
-\emph{succeed} in rebalancing load; it ignores the $O(N^2/\varrho_0)$
+\emph{succeed} in rebalancing load; it ignores the $O(N/\varrho_0)$
 failed CAS operations and their coherence broadcasts.
 
 DTA has no such pathology: at $\varrho_0 \to 0$, $p_d \to 0$, the SPSC
@@ -7255,11 +7409,12 @@ workloads; this benchmark therefore falls outside the formal scope of the paper.
 \hyperref[chap:competitive_ratio]{the Competitive Analysis}, \S5.3 (Proposition~5.1) derives that WS's
 per-task CAS overhead at load $\varrho_0$ is:
 \[
-  \Gamma_{\mathrm{WS}}(\varrho_0) \;=\; \frac{N(N-1)(1-\varrho_0)}{\varrho_0},
+  \Gamma_{\mathrm{WS}}(\varrho_0) \;=\; \frac{N(1-\varrho_0)}{\varrho_0},
 \]
 which diverges as $\varrho_0 \to 0$.  At $N=4$ and $\varrho_0 = 0.1$
-(10\% load): $\Gamma_{\mathrm{WS}} \approx 4 \times 3 \times 0.9 / 0.1 = 108$
-CAS operations per useful task.
+(10\% load): $\Gamma_{\mathrm{WS}} \approx 4 \times 0.9 / 0.1 = 36$
+CAS operations per useful task (each additionally paying a cache-coherence
+broadcast to the other $N-1=3$ cores, per Proposition~\ref{prop:cas_storm}).
 
 \subsection{Benchmark evidence}
 
@@ -7851,25 +8006,40 @@ where $\Delta_{\mathrm{mf}}$ is the mean-field approximation error.
 
 \medskip
 \noindent\textbf{Step~2 (Mean-field error vanishes).}
-By Assumption~\ref{ass:ergodic} and Theorem~\ref{prop:mf-recovery},
-the steady-state queue-length distribution converges to the mean-field
-fixed point $q^*$ with error $O(1/N)$ in total variation as $N \to \infty$.
-By Assumption~\ref{ass:bounded_tau}, information staleness introduces
+The quantity $\Delta_{\mathrm{mf}}$ in~\eqref{eq:dta_local_opt} is a gap
+between two \emph{expected} costs (since $c(q)=q$ is linear, by Little's
+law this is exactly a gap between mean queue lengths), so what is needed
+here is convergence of the \emph{mean}, not the full distribution.
+Proposition~\ref{prop:1overN} gives exactly this: the level-1-corrected
+effective traffic intensity satisfies
+$\rho^{(2)} = \rhostar_{\mathrm{MF}} + O(1/N)$. Since
+$\rho \mapsto \rho/(1-\rho)$ is Lipschitz on any interval bounded away
+from $1$ (with constant $(1-\rhostar_{\mathrm{MF}})^{-2}$, finite
+whenever the system is not at the saturation boundary), the corrected
+mean queue length satisfies
+$\bar q^{(2)} = \bar q_{\mathrm{MF}} + O(1/N)$, and by
+Assumption~\ref{ass:ergodic} (ergodicity) this $O(1/N)$ mean-field gap
+is exactly the leading-order contribution to $\Delta_{\mathrm{mf}}$ as
+$N\to\infty$. By Assumption~\ref{ass:bounded_tau}, information staleness introduces
 an additive bias $O(\bar\tau \cdot \lambda)$ to the effective arrival
 rate seen by each worker, which is $o(1)$ for $\bar\tau \lambda \to 0$.
-Under these conditions:
+Combining this with the Gumbel-CLT fluctuation term (Theorem~\ref{thm:fj_first},
+makespan fluctuations scale as $O(W^{-1/2})$ relative to the mean), the two
+error sources add:
 \[
-  \Delta_{\mathrm{mf}} \;=\; O\!\left(\frac{1}{\sqrt{W}}\right)
-  \quad\text{as } W \to \infty,
+  \Delta_{\mathrm{mf}} \;=\; O\!\left(\frac{1}{N}\right) + O\!\left(\frac{1}{\sqrt{W}}\right)
+  \quad\text{as } W \to \infty \text{ at fixed } N,
 \]
-by the Gumbel CLT (Theorem~\ref{thm:fj_first}), since makespan
-fluctuations scale as $O(W^{-1/2})$ relative to the mean.
+i.e.\ $\Delta_{\mathrm{mf}}$ stays bounded (by an $N$-dependent constant) as
+$W\to\infty$; it need not vanish on its own for Step~3 below to go through.
 
 \medskip
 \noindent\textbf{Step~3 ($\eta_{\mathrm{util}} \to 1$).}
 The oracle makespan satisfies
-$C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) = \Theta(W/(N\mu))$.
-From~\eqref{eq:dta_local_opt}:
+$C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) = \Theta(W/(N\mu))$, which grows
+without bound as $W \to \infty$ at fixed $N$. Since $\Delta_{\mathrm{mf}}$ is
+bounded by Step~2, the ratio below vanishes regardless of whether
+$\Delta_{\mathrm{mf}}$ itself does. From~\eqref{eq:dta_local_opt}:
 \[
   \eta_{\mathrm{util}}(\mathrm{DTA})
   \;=\;
@@ -7877,11 +8047,11 @@ From~\eqref{eq:dta_local_opt}:
   \;=\;
   1 + \frac{\Delta_{\mathrm{mf}}}{C_{\max}^*(\mathcal{I}^{\mathrm{DTA}})}
   \;=\;
-  1 + O\!\left(\frac{1}{\sqrt{W}} \cdot \frac{N\mu}{W/(N\mu)}\right)
-  \;=\; 1 + O(W^{-1/2}),
+  1 + O\!\left(\left(\frac{1}{N}+\frac{1}{\sqrt{W}}\right) \cdot \frac{N\mu}{W}\right)
+  \;=\; 1 + O\!\left(\frac{1}{W}\right) + O\!\left(\frac{N}{W^{3/2}}\right),
 \]
-which tends to~$1$ as $W \to \infty$, establishing the theorem for
-every $\varepsilon > 0$ by choosing $W_0 = O(\varepsilon^{-2})$.
+which tends to~$1$ as $W \to \infty$ at fixed $N$, establishing the theorem
+for every $\varepsilon > 0$ by choosing $W_0 = W_0(N,\varepsilon)$.
 \end{proof}
 
 \begin{corollary}[The information gap also vanishes for DTA]
@@ -8316,17 +8486,37 @@ acquisition cost into makespan-equivalent units.  The
 \end{equation}
 \end{definition}
 
-\noindent DTA dominates WS ($\mathcal{J}_{\mathrm{DTA}} < \mathcal{J}_{\mathrm{WS}}$)
-if and only if
-\begin{equation}\label{eq:gamma_star}
+\noindent By Definition~\ref{def:J}, $\mathcal{J}(\pi;\gamma)$ is built from
+$\mathbb{E}[C_{\max}(\pi)]$, the \emph{actual} expected makespan, not the
+oracle $C_{\max}^*(\mathcal{I}_\pi)$; the two are related by
+$\mathbb{E}[C_{\max}(\pi)] = \eta_{\mathrm{util}}(\pi)\cdot C_{\max}^*(\mathcal{I}_\pi)$
+(the decomposition of Theorem~\ref{thm:decomp}). The exact crossover condition
+therefore carries an $\eta_{\mathrm{util}}$ factor on each side: DTA dominates
+WS ($\mathcal{J}_{\mathrm{DTA}} < \mathcal{J}_{\mathrm{WS}}$) if and only if
+\begin{equation}\label{eq:gamma_star_exact}
   \gamma \;>\; \gamma^*
   \;\triangleq\;
+  \frac{\eta_{\mathrm{util}}(\mathrm{DTA})\,C_{\max}^*(\mathcal{I}^{\mathrm{DTA}})
+        - \eta_{\mathrm{util}}(\mathrm{WS})\,C_{\max}^*(\mathcal{I}^{\mathrm{WS}})}{
+        (\beta_{\mathrm{WS}} - \beta_{\mathrm{DTA}})\cdot T}.
+\end{equation}
+By Theorem~\ref{thm:dta_info_opt} and Remark~\ref{rem:ws_opt},
+$\eta_{\mathrm{util}}(\mathrm{DTA}), \eta_{\mathrm{util}}(\mathrm{WS})
+\to 1$ as $W\to\infty$ (at fixed $N$), so in the large-workload limit the
+$\eta_{\mathrm{util}}$ factors drop out and~\eqref{eq:gamma_star_exact}
+reduces to the oracle-only expression used below:
+\begin{equation}\label{eq:gamma_star}
+  \gamma^*
+  \;\xrightarrow{W\to\infty}\;
   \frac{C_{\max}^*(\mathcal{I}^{\mathrm{DTA}}) - C_{\max}^*(\mathcal{I}^{\mathrm{WS}})}{
         (\beta_{\mathrm{WS}} - \beta_{\mathrm{DTA}})\cdot T}
   \;\leq\;
   \frac{(\Delta q)^2}{4\mu N \cdot (\beta_{\mathrm{WS}}-\beta_{\mathrm{DTA}})\cdot T},
 \end{equation}
-where we used~\eqref{eq:info_gap_2socket} for the numerator.
+where we used~\eqref{eq:info_gap_2socket} for the numerator. This limiting
+form is what the numerical estimate below applies; at finite $W$,
+\eqref{eq:gamma_star_exact} should be used directly with measured
+$\eta_{\mathrm{util}}$ values if a higher-precision threshold is needed.
 Substituting~\eqref{eq:beta_dta_num}--\eqref{eq:beta_ws_num}
 with $N=64$ and $\Delta q = O(1)$ (light unbalance):
 \[
@@ -9016,6 +9206,34 @@ between the admission threshold $H$ and the hop-count bound $h_{\max}$
 in Assumption~\ref{ass:threshold}. Each correction and its downstream
 consequences are noted at the relevant point in the text; we record
 them here together in the interest of transparency.
+
+A subsequent, independent audit pass against the \dtact{} source
+implementation surfaced nine further issues, since corrected: the
+warehouse deflection trigger is $\lfloor N/2\rfloor$ failed hops, not
+$N-1$, which changes the warehouse input rate
+(Definition~\ref{def:warehouse-rates}) and every downstream stability and
+crash-time result that depends on it; the CAS-storm overhead term
+(Proposition~\ref{prop:cas_storm}) had a spurious extra factor of $(N-1)$; the
+per-worker spectral-gap remark understated the mixing-time exponent by
+a factor of $N$; the Foster--Lyapunov drift bound
+(Theorem~\ref{thm:lyapunov}) originally substituted a mean-field
+\emph{average} arrival rate where a pathwise, per-state bound was
+required, and has been replaced with an unconditional pathwise proof
+valid for every $\varrho_0$; Theorem~\ref{thm:bounded-wait}'s waiting-time
+guarantee required an explicit net-drain assumption
+(Assumption~\ref{ass:wh-net-drain}) that was previously left implicit;
+the mean-field convergence step in
+Theorem~\ref{thm:dta_info_opt} cited the wrong proposition and has been
+re-derived via Proposition~\ref{prop:1overN} and Little's law; the
+$\gamma^*$ crossover threshold (\eqref{eq:gamma_star_exact}) now carries
+its $\eta_{\mathrm{util}}$ factors explicitly, with the earlier
+oracle-only expression identified as its $W\to\infty$ limit; the Stage-W
+overhead bound was tightened from an equality to an inequality to
+account for integer ceiling effects; and the CAS retry-count bound
+$\mathbb{E}[R_i] < \infty$ now has an explicit fairness-assumption proof
+in place of an informal justification. As with the corrections above,
+each fix and its consequences are recorded at the relevant point in the
+text.
 
 \clearpage
 

@@ -200,13 +200,16 @@ def l3_burst_capacity_worst(rho0: float, H: int, L: int, N: int,
 def l4_warehouse_rates(rho0: float, H: int, N: int):
     """
     Compute warehouse input rate Lambda_W and drain rate Lambda_D.
-    Lambda_W = N * lambda_0 * p_d^{N-1}
+    A chunk is parked in the warehouse after floor(N/2) failed deflection
+    hops (the implementation's actual max_hops bound), not after all N-1
+    peers are tried, so:
+    Lambda_W = N * lambda_0 * p_d^{floor(N/2)}
     Lambda_D = N * mu * (1 - p_d)
     """
     rhostar = solve_sc(rho0, H)
     pd      = deflection_prob(rhostar, H)
     lam0    = rho0 * MU
-    Lambda_W = N * lam0 * (pd ** (N - 1))
+    Lambda_W = N * lam0 * (pd ** (N // 2))
     Lambda_D = N * MU * (1.0 - pd)
     return Lambda_W, Lambda_D
 
@@ -224,14 +227,14 @@ def l4_crash_time(rho0: float, H: int, N: int, CW: int) -> float:
 def l4_wh_stable_threshold(H: int, N: int) -> float:
     """
     Find rho_dagger: the critical rho_0 above which warehouse becomes unstable.
-    Solve: rho0 * p_d(rho0)^{N-1} = 1 - p_d(rho0)  (Proposition 4.2).
+    Solve: rho0 * p_d(rho0)^{floor(N/2)} = 1 - p_d(rho0)  (Proposition 4.2).
     """
     for rho0_test in np.linspace(0.99, 0.01, 5000):
         rhostar = solve_sc(rho0_test, H)
         pd = deflection_prob(rhostar, H)
         if pd < 1e-15:
             continue
-        lhs = rho0_test * (pd ** (N - 1))
+        lhs = rho0_test * (pd ** (N // 2))
         rhs = 1.0 - pd
         if lhs >= rhs:
             return rho0_test

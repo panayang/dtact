@@ -138,9 +138,14 @@ def mixing_time(gap: float, eps: float = 0.01) -> float:
 
 # Crash time
 def l4_warehouse_rates(rho0: float, H: int, N: int):
+    # Theorem thm:crash-time: warehouse is entered after floor(N/2) failed
+    # hops (the implementation's actual max_hops bound), not after all N-1
+    # peers are tried -- see eq:wh-input in main.tex for the corrected
+    # exponent (previously this used N-1, which understates Lambda_W and
+    # gives an overly optimistic, i.e. too-large, crash time).
     rhostar = solve_sc(rho0, H)
     pd = float(mmh_pmf(rhostar, H)[H])
-    LW = N * MU * rho0 * (pd ** max(N - 1, 0))   # Theorem 4.2: uses offered load rho0
+    LW = N * MU * rho0 * (pd ** max(N // 2, 0))   # Theorem 4.2: uses offered load rho0
     LD = N * MU * (1.0 - pd)
     return LW, LD
 
@@ -486,7 +491,7 @@ def plot_spectral_gap(outdir: str):
 
 def plot_crash_time(outdir: str):
     print("  [Plot 4] Crash time comparison...")
-    # Use small N so Λ_W = N*mu*rho*pd^(N-1) is non-negligible
+    # Use small N so Λ_W = N*mu*rho*pd^floor(N/2) is non-negligible
     H_l4 = 10
     rhos  = np.linspace(0.3, 0.95, 30)
     eps   = 0.05
@@ -526,7 +531,7 @@ def plot_crash_time(outdir: str):
     plot_finite(ax, rhos_ov, Tc_ov, color="b", lw=2.0, marker="o", ms=4,
                 label="DTA-V3 (N=2, H=5)")
     # Annotate threshold
-    rho_thresh = 5.0  # H*(H+1)^(N-2) = 5*1 = 5
+    rho_thresh = 5.0  # at N=2, floor(N/2)=1, so this coincides with the old N-1 exponent
     ax.axvline(rho_thresh, color="r", ls="--", lw=1.2, label=r"$\varrho_0^\dagger = H=5$")
     ax.set_xlabel(r"$\varrho_0$", fontsize=12)
     ax.set_ylabel(r"$T_{\mathrm{crash}}$", fontsize=11)
