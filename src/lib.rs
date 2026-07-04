@@ -377,6 +377,7 @@ fn backpressure_yield() {
 #[allow(unused_imports)]
 pub(crate) mod sync {
     pub(crate) mod atomic {
+        pub(crate) use loom::sync::atomic::fence;
         pub(crate) use loom::sync::atomic::{
             AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
         };
@@ -392,6 +393,7 @@ pub(crate) mod sync {
         pub use core::sync::atomic::{
             AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering,
         };
+        pub use std::sync::atomic::fence;
     }
     pub use std::sync::Arc;
     pub use std::thread;
