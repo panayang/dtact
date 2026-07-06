@@ -6,3 +6,6 @@ rustflags = ["-C", "link-arg=-zstack-size=2097152"]
 
 [target.'cfg(not(target_os = "windows"))']
 rustflags = ["-C", "force-unwind-tables=no"]
+
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

@@ -1,9 +1,9 @@
 [workspace]
-members = ["dtact-macros", "fuzz", "web"]
+members = ["dtact-io", "dtact-macros", "fuzz", "web"]
 
 [package]
 name = "dtact"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
@@ -19,7 +19,7 @@ description = "Dtact: A non-preemptive, stackful coroutine runtime featuring a l
 rust-version = "1.90.0"
 
 [dependencies]
-dtact-macros = { path = "./dtact-macros", version = "0.1.1" }
+dtact-macros = { path = "./dtact-macros", version = "0.1" }
 libc = "0.2"
 
 [target.'cfg(loom)'.dependencies]
@@ -40,6 +40,7 @@ proptest = "1.6"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1.52", features = ["full"] }
 serial_test = "3.0"
+dtact-io = { path = "./dtact-io", version = "0.1" }
 
 [build-dependencies]
 cbindgen = "0.29"
@@ -96,4 +97,8 @@ dtact-macros = { path = "dtact-macros" }
 
 [[bench]]
 name = "scheduler_efficiency"
+harness = false
+
+[[bench]]
+name = "io_performance"
 harness = false

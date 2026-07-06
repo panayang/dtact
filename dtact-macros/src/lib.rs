@@ -332,3 +332,106 @@ pub fn dtact_init(args: TokenStream, item: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+struct IoInitArgs {
+    workers: usize,
+    buffer_pool_size: usize,
+    chunk_size: usize,
+    pin_cpus: Vec<usize>,
+    ring_depth: u32,
+}
+
+impl Parse for IoInitArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let vars = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
+        let mut workers = 1;
+        let mut buffer_pool_size = 65536;
+        let mut chunk_size = 4096;
+        let mut pin_cpus = Vec::new();
+        let mut ring_depth = 256;
+
+        for var in vars {
+            if let Meta::NameValue(nv) = var {
+                if nv.path.is_ident("workers") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: Lit::Int(i), ..
+                    }) = &nv.value
+                    {
+                        workers = i.base10_parse()?;
+                    }
+                } else if nv.path.is_ident("buffer_pool_size") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: Lit::Int(i), ..
+                    }) = &nv.value
+                    {
+                        buffer_pool_size = i.base10_parse()?;
+                    }
+                } else if nv.path.is_ident("chunk_size") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: Lit::Int(i), ..
+                    }) = &nv.value
+                    {
+                        chunk_size = i.base10_parse()?;
+                    }
+                } else if nv.path.is_ident("ring_depth") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: Lit::Int(i), ..
+                    }) = &nv.value
+                    {
+                        ring_depth = i.base10_parse()?;
+                    }
+                } else if nv.path.is_ident("pin_cpus")
+                    && let syn::Expr::Array(syn::ExprArray { elems, .. }) = &nv.value
+                {
+                    for elem in elems {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: Lit::Int(i), ..
+                        }) = elem
+                        {
+                            pin_cpus.push(i.base10_parse()?);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(IoInitArgs {
+            workers,
+            buffer_pool_size,
+            chunk_size,
+            pin_cpus,
+            ring_depth,
+        })
+    }
+}
+
+#[proc_macro_attribute]
+pub fn dtact_io_init(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(args as IoInitArgs);
+    let input = parse_macro_input!(item as ItemFn);
+
+    let workers = args.workers;
+    let buffer_pool_size = args.buffer_pool_size;
+    let chunk_size = args.chunk_size;
+    let ring_depth = args.ring_depth;
+    let pin_cpus = &args.pin_cpus;
+
+    let attrs = &input.attrs;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let block = &input.block;
+
+    let expanded = quote! {
+        #(#attrs)* #vis #sig {
+            dtact_io::init_runtime(
+                #workers,
+                #buffer_pool_size,
+                #chunk_size,
+                &[#(#pin_cpus),*],
+                #ring_depth,
+            );
+            #block
+        }
+    };
+
+    TokenStream::from(expanded)
+}
