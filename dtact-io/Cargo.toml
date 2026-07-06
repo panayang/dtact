@@ -1,6 +1,6 @@
 [package]
 name = "dtact-io"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
@@ -25,7 +25,7 @@ experimental = [
     "dep:libc",
     "dep:io-uring",
 ]
-compat = ["dep:tokio", "dep:futures-io"]
+compat = ["dep:tokio", "dep:futures-io", "dep:libc"]
 
 [dependencies]
 mio = { version = "1.2", features = [
@@ -45,3 +45,6 @@ tokio = { version = "1.52", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { version = "0.7", features = ["direct-syscall"], optional = true }
+
+[dev-dependencies]
+libc = "0.2"
