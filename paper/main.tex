@@ -195,11 +195,6 @@ information window in the heavy-traffic limit, while paying a strictly
 lower and asymptotically smaller acquisition cost at any fixed scale.
 \end{abstract}
 
-\newpage
-
-\tableofcontents
-\clearpage
-
 % ========================================================================
 \section*{Introduction}
 \addcontentsline{toc}{section}{Introduction}
@@ -390,7 +385,6 @@ preparing this manuscript's figures, tables, and the accompanying
 
 \partbreak
 \part{Formal Framework}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -703,7 +697,7 @@ machine} $\mathcal{F}_\tau$ has
 
 Figure~\ref{fig:fsm-task} renders $\mathcal{F}_\tau$.
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
   every state/.style={draw, rounded rectangle, minimum width=2.2cm,
@@ -922,10 +916,7 @@ in the information-theoretic cost framework (\S\ref{sec:info_optimality_proof}),
 which has since been corrected.
 \end{notation}
 
-\newpage
-\clearpage
-
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
   worker/.style={circle, draw, minimum size=1.5cm, font=\small, line width=0.8pt, align=center},
@@ -965,7 +956,7 @@ which has since been corrected.
 \label{fig:mesh}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
   box/.style={draw, rectangle, rounded corners=2pt, minimum width=3.5cm, minimum height=1.1cm, align=center, font=\small, inner sep=4pt},
@@ -991,7 +982,7 @@ which has since been corrected.
 \label{fig:backpressureA}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
   box/.style={draw, rectangle, rounded corners=2pt, minimum width=3.6cm, minimum height=1.1cm, align=center, font=\small, inner sep=4pt},
@@ -1020,7 +1011,7 @@ which has since been corrected.
 \label{fig:backpressureB}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[
   state/.style={draw, rectangle, rounded corners=2pt, minimum width=2.6cm, minimum height=1cm, align=center, font=\small},
@@ -1059,12 +1050,8 @@ bounded-information restriction at the formal level, so every downstream
 correctness and performance result inherits it automatically rather than
 needing to re-assume it.
 
-
-\clearpage
-
 \partbreak
 \part{Correctness}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -1343,9 +1330,6 @@ $\hat{O}_{\text{dispatch}} \circ \hat{O}_{\text{requeue}}$ decreases
 $|Q_i|$ by 1 and then increases it by 1, never exceeding the
 pre-dispatch length.
 
-
-\clearpage
-
 % ========================================================================
 % Correctness II --- Deadlock Freedom
 % ========================================================================
@@ -1613,9 +1597,6 @@ The distinction matters: deadlock is a state where the system is
 The warehouse overflow scenario is analysed in the \hyperref[chap:bounded_wait]{Progress~I}.
 \end{remark}
 
-
-\clearpage
-
 % ========================================================================
 % Correctness III --- Livelock Freedom
 % ========================================================================
@@ -1869,9 +1850,6 @@ for a single chunk} terminates.  It does not prove:
         bounded wall-clock time --- this requires a makespan bound and
         is addressed in \hyperref[chap:makespan]{Performance~III}.
 \end{itemize}
-
-
-\clearpage
 
 % ========================================================================
 % Correctness IV --- Atomicity and Linearizability
@@ -2212,8 +2190,6 @@ preemption bound configured for those tests.
 %  References (inline for standalone compilation)
 % =============================================================
 
-
-
 \bigskip
 \noindent\textbf{Summary.}
 The four correctness theorems collectively guarantee that DTA is a
@@ -2227,12 +2203,8 @@ the four proofs required strengthening a worker's information set beyond
 its own local state and single-hop mailbox traffic: bounded information
 is a safe restriction, not merely a fast one.
 
-
-\clearpage
-
 \partbreak
 \part{Progress}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -2682,9 +2654,6 @@ where $W_{\max} = \delta(2L + C_W K/N)$ is the per-task scheduling
 overhead term derived here.  The precise statement requires a
 task-DAG model and is the subject of the performance sub-module.
 
-
-\clearpage
-
 % ========================================================================
 % Progress II --- Starvation Freedom and $k$-Bounded Fairness
 % ========================================================================
@@ -2906,12 +2875,8 @@ guarantee over any window of $k$ consecutive scheduling decisions.
 Both results will be invoked in Performance~III to convert per-task
 latency bounds into whole-batch makespan bounds.
 
-
-\clearpage
-
 \partbreak
 \part{Performance Analysis}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -3426,10 +3391,6 @@ numerically to arbitrary precision using \texttt{mpmath} or
 standard \texttt{numpy} floating point.
 
 % =============================================================
-
-
-
-\clearpage
 
 % ========================================================================
 % Performance II --- Kinetic Theory of Load Balance
@@ -4191,9 +4152,6 @@ tight at high load, validating Theorem~\ref{thm:corrected-imbalance}.
         the level-1 correction~\eqref{eq:pd-level1}.
 \end{enumerate}
 
-
-\clearpage
-
 % ========================================================================
 % Performance III --- Makespan Analysis
 % ========================================================================
@@ -4618,9 +4576,6 @@ Key results (see plots generated by \texttt{simulate\_makespan.py}):
         $+$ $(\text{extreme value statistics})$,
         certified to $O(1/N)$ by \hyperref[chap:kinetic_theory]{Performance~II}.
 \end{enumerate}
-
-
-\clearpage
 
 % ========================================================================
 % Performance IV --- Stability Analysis
@@ -5299,12 +5254,8 @@ deflection; the recurring $O(1/\sqrt{N})$-with-$O(1/N)$-correction
 pattern is the quantitative signature of bounded-information scheduling
 losing nothing at leading order.
 
-
-\clearpage
-
 \partbreak
 \part{Competitive and Empirical Analysis}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -6011,7 +5962,6 @@ DTA & Fork-join DAG & \textit{N/A} (no dep.\ tracking; ratio unbounded) & Sectio
 
 
 % ============================================================
-\clearpage
 \section{DAG Scheduling via Sequential-Nucleation Kinetic Theory}
 \label{sec:dag_kinetic}
 % ============================================================
@@ -6483,8 +6433,6 @@ $g_3^{(\ell)}(v,v',v'')$ and is expected to yield the first
 fluctuation correction to the DP mean-field exponents.
 \end{openq}
 
-\clearpage
-
 % ========================================================================
 % Adversarial Stability Comparison
 % ========================================================================
@@ -6898,11 +6846,6 @@ DTA is justified when (i) the deployment environment is distributed
 and (iii) load is heavy ($\varrho_0 \to 1$), where DTA's mean-field
 optimality (Corollary~3.3 of \hyperref[chap:competitive_ratio]{the Competitive Analysis}) closes the
 gap with CQ.
-
-
-
-
-\clearpage
 
 % ========================================================================
 % Theory--Practice Correspondence: Empirical Validation
@@ -7753,10 +7696,8 @@ empirical puzzle Part~VI's information-cost framework sets out to
 explain.
 
 % ============================================================
-\clearpage
 \partbreak
 \part{Information-Theoretic Analysis of Scheduler Cost}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -8621,10 +8562,8 @@ in acquisition cost per task, growing to $11\times$ at 128 cores;
 (vi)~$\gamma^* \to 0$ as $W \to \infty$: DTA dominates total cost at any
 positive information-cost weight for large workloads.
 
-\clearpage
 \partbreak
 \part{Conclusions and Outlook}
-\clearpage
 
 \bigskip
 \noindent\textbf{Overview.}
@@ -9150,8 +9089,6 @@ reusable methodology for deciding, on any target hardware, whether a
 bounded-information scheduler like DTA or a wider-information scheduler
 like work-stealing is the better choice.
 
-\clearpage
-
 % ============================================================
 \section{Method}
 \label{sec:ai-method}
@@ -9234,8 +9171,6 @@ $\mathbb{E}[R_i] < \infty$ now has an explicit fairness-assumption proof
 in place of an informal justification. As with the corrections above,
 each fix and its consequences are recorded at the relevant point in the
 text.
-
-\clearpage
 
 \part*{Bibliography}
 \bibliographystyle{plain}

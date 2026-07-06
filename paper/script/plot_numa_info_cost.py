@@ -19,8 +19,8 @@ J(π; γ) = E[C_max] + γ · β_π · W   (all in ns; γ dimensionless)
 γ* = (C*_DTA − C*_WS) / [(β_WS − β_DTA) · W]
 
 Run from repo root:
-    python scripts/plot_numa_info_cost.py
-Output: paper/figure/numa_info_cost.png
+    python script/plot_numa_info_cost.py
+Output: figure/numa_info_cost.png
 """
 
 import matplotlib
@@ -262,7 +262,7 @@ ax.legend(loc="upper right", fontsize=8)
 ax.grid(True, which="both", alpha=0.3)
 
 # ── save ──────────────────────────────────────────────────────────────────────
-out = Path(__file__).parent / "paper" / "figure" / "numa_info_cost.png"
+out = Path(__file__).parent.parent / "figure" / "numa_info_cost.png"
 out.parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Saved: {out}")
