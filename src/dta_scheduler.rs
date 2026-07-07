@@ -1590,7 +1590,22 @@ impl DtaScheduler {
                 #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
                 crate::sync::atomic::fence(Ordering::Acquire);
 
-                #[cfg(not(feature = "hw-acceleration"))]
+                // Without hw-acceleration there is no hardware block/monitor
+                // primitive available, so this tier would otherwise just be
+                // more `pause` — pure CPU-hogging with no way for the OS to
+                // know this thread has nothing to do. Under
+                // `cooperative-yield`, hand the core back voluntarily
+                // (`sched_yield`/`SwitchToThread`) once we're deep enough
+                // into backoff that low-latency spinning has already failed;
+                // this is what lets other runnable threads (a benchmark
+                // harness's own thread pool, an async runtime running
+                // alongside dtact, etc.) actually get scheduled promptly
+                // instead of waiting for involuntary OS preemption, which
+                // can stack up to 100ms+ under heavy thread oversubscription.
+                #[cfg(all(not(feature = "hw-acceleration"), feature = "cooperative-yield"))]
+                std::thread::yield_now();
+
+                #[cfg(all(not(feature = "hw-acceleration"), not(feature = "cooperative-yield")))]
                 for _ in 0..16 {
                     core::hint::spin_loop();
                 }

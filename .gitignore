@@ -46,3 +46,10 @@ paper/template
 **/template/**
 **/template/
 **/template
+HANDOFF-dtact-io-deadlock.md
+dtact-final-overhaul.patch
+output.txt
+perf.data
+perf.data.old
+strace01.tmp
+report.tmp

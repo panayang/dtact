@@ -1,3 +1,11 @@
+//! Exercises the `tokio` backend's raw-fd `DtactIoFuture`/`OpCode`, awaited
+//! via `.compat()` (`DtactCompatExt`) — both are `tokio`-backend-specific
+//! (`.compat()` doesn't exist on the `experimental` backend's `DtactIoFuture`
+//! at all), and Unix-only (wraps `AsyncFd<RawFd>`). Windows support for the
+//! `tokio` backend is provided at the higher `DtactTcpStream`/
+//! `DtactTcpListener` level instead.
+#![cfg(all(unix, not(feature = "experimental")))]
+
 use dtact_io::{DtactCompatExt, DtactIoFuture, OpCode, init_runtime, shutdown_runtime};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;

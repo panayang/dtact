@@ -21,10 +21,12 @@ static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 fn ensure_runtimes() {
     INIT.get_or_init(|| {
-        // Dtact scheduler: 4 workers
+        // Dtact scheduler: 2 workers (diagnostic: reduced from 4 to cut
+        // thread oversubscription on an 8-logical-core box while
+        // investigating scheduler wake latency)
         let _ = dtact::GLOBAL_RUNTIME.get_or_init(|| {
             let sched = dtact::dta_scheduler::DtaScheduler::new(
-                4,
+                2,
                 dtact::dta_scheduler::TopologyMode::P2PMesh,
             );
             let pool = dtact::memory_management::ContextPool::new(
@@ -45,9 +47,9 @@ fn ensure_runtimes() {
             rt.start();
         }
 
-        // dtact-io: 4 IO workers, 16 384 pool buffers × 4 KB = 64 MB arena,
+        // dtact-io: 1 IO workers, 16 384 pool buffers × 4 KB = 64 MB arena,
         // ring_depth = 4096.
-        init_runtime(4, 16_384, 4096, &[], 4096);
+        init_runtime(1, 16_384, 4096, &[], 4096);
     });
 }
 
@@ -172,7 +174,7 @@ fn bench_echo(c: &mut Criterion) {
 
     let tokio_rt = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
+            .worker_threads(2)
             .enable_io()
             .build()
             .unwrap(),
@@ -295,12 +297,21 @@ fn bench_echo(c: &mut Criterion) {
         group.finish();
     }
 
-    shutdown_runtime();
+    // NOTE: deliberately no `shutdown_runtime()` here — `bench_concurrent`
+    // runs next in the same process (see `criterion_group!` below) and
+    // still needs the dtact-io driver alive. Calling it here used to kill
+    // the io-worker thread while `ensure_runtimes()`'s `OnceLock` silently
+    // no-ops on the next call, leaving every later dtact-io op parked
+    // forever waiting on a driver that no longer exists — the "hangs
+    // without a debugger" bug (a debugger session was just too slow to
+    // ever reach `bench_concurrent` and observe it). Teardown happens once,
+    // for real, at the end of `bench_concurrent` instead.
 }
 
 fn bench_concurrent(c: &mut Criterion) {
     ensure_runtimes();
 
+    #[cfg(unix)]
     unsafe {
         let mut limit = libc::rlimit {
             rlim_cur: 0,
@@ -314,7 +325,7 @@ fn bench_concurrent(c: &mut Criterion) {
 
     let tokio_rt = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
+            .worker_threads(2)
             .enable_io()
             .build()
             .unwrap(),
