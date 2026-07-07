@@ -28,7 +28,7 @@ mod experimental_impl {
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
     use std::sync::OnceLock;
     use std::sync::atomic::{
-        AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+        AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence,
     };
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
@@ -913,14 +913,34 @@ mod experimental_impl {
             if pushed_sqe || eventfd_submitted {
                 ring.submission().sync();
                 if pushed_sqe && !any_pending {
-                    state.is_sleeping.store(true, Ordering::Release);
-                    let sr = ring.submit_and_wait(1);
-                    state.is_sleeping.store(false, Ordering::Release);
-                    io_trace!(
-                        "[dtact-io] t={} loop submit_and_wait(folded) result={:?}",
-                        trace_now_us(),
-                        sr
-                    );
+                    state.is_sleeping.store(true, Ordering::SeqCst);
+                    // Dekker-style re-check: a producer that pushed to a queue
+                    // and observed `is_sleeping == false` just before our store
+                    // above (a StoreLoad reorder is otherwise legal even on
+                    // x86-TSO) would skip the eventfd wakeup, leaving us to
+                    // block forever on a request nobody drained. Re-scan the
+                    // queues now that `is_sleeping` is published; if anything
+                    // landed, bail out of the blocking wait and let the top of
+                    // the loop drain it next iteration instead.
+                    fence(Ordering::SeqCst);
+                    let missed = state.queues.iter().any(|q| !q.is_empty());
+                    if missed {
+                        state.is_sleeping.store(false, Ordering::SeqCst);
+                        let sr = ring.submit();
+                        io_trace!(
+                            "[dtact-io] t={} loop submit(folded-missed) result={:?}",
+                            trace_now_us(),
+                            sr
+                        );
+                    } else {
+                        let sr = ring.submit_and_wait(1);
+                        state.is_sleeping.store(false, Ordering::Release);
+                        io_trace!(
+                            "[dtact-io] t={} loop submit_and_wait(folded) result={:?}",
+                            trace_now_us(),
+                            sr
+                        );
+                    }
                     folded_wait = true;
                 } else {
                     let should_enter = if state.sqpoll_enabled {
@@ -961,11 +981,26 @@ mod experimental_impl {
             }
 
             if !folded_wait && !pushed_sqe && !has_completions {
-                state.is_sleeping.store(true, Ordering::Release);
-                if !any_pending {
+                state.is_sleeping.store(true, Ordering::SeqCst);
+                // Same Dekker-style re-check as the folded-wait path above:
+                // `any_pending` was computed earlier in this iteration and may
+                // be stale by now. Without this re-scan + fence, a producer's
+                // push-then-check-is_sleeping (also StoreLoad-ordered) can
+                // race with our store-then-block here and neither side sends
+                // a wakeup — the classic lost-wakeup deadlock.
+                fence(Ordering::SeqCst);
+                let missed = state.queues.iter().any(|q| !q.is_empty());
+                if !any_pending && !missed {
                     let sr = ring.submit_and_wait(1);
                     io_trace!(
                         "[dtact-io] t={} loop submit_and_wait(idle) result={:?}",
+                        trace_now_us(),
+                        sr
+                    );
+                } else if missed {
+                    let sr = ring.submit();
+                    io_trace!(
+                        "[dtact-io] t={} loop submit(idle-missed) result={:?}",
                         trace_now_us(),
                         sr
                     );
@@ -1769,7 +1804,17 @@ mod experimental_impl {
                             return Poll::Pending;
                         }
 
-                        if state.is_sleeping.load(Ordering::Acquire) {
+                        // Paired with the io-worker's Dekker-style re-check
+                        // (see `run_linux_worker_loop`): this must be a
+                        // SeqCst load with a fence between the queue push
+                        // above and this load, otherwise the push and this
+                        // load can be observed out of order (StoreLoad
+                        // reorder) and we could skip the wakeup right as the
+                        // io-worker is about to go to sleep without ever
+                        // seeing the new queue entry — a permanent lost
+                        // wakeup / deadlock.
+                        fence(Ordering::SeqCst);
+                        if state.is_sleeping.load(Ordering::SeqCst) {
                             unsafe {
                                 let _ = libc::write(
                                     state.wake_eventfd,
