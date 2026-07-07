@@ -82,17 +82,6 @@ hypervisor = []
 windows-root = []
 security-hardened = []
 kernel = []
-# Adds a real CPU-yielding fallback to the scheduler's idle backoff (see
-# `dta_scheduler::run_worker_static`). Without it, an idle worker spins
-# purely on `pause`/hardware-standby forever and never voluntarily gives up
-# its core — fine when worker count <= physical cores, but under thread
-# oversubscription (e.g. a benchmark harness's own thread pool sharing the
-# box) every idle worker holds its core hostage until the OS's involuntary
-# preemption gets around to it, which can stack up to 100ms+ per wakeup.
-# Off by default to keep the scheduler's pure-spin behavior available for
-# its intended low-oversubscription use — `dtact-io` opts into it because
-# it's specifically meant to coexist with other thread pools (async
-# runtimes, benchmark harnesses, etc.) on the same box.
 cooperative-yield = []
 
 [lib]
