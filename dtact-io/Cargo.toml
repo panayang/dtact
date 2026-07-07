@@ -1,6 +1,6 @@
 [package]
 name = "dtact-io"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
@@ -16,17 +16,18 @@ description = "I/O utilities for Dtact: A non-preemptive, stackful coroutine run
 rust-version = "1.90.0"
 
 [features]
-# Default backend: thin wrapper over `tokio::net`. Safe, well-tested,
-# cross-platform (uses tokio's own epoll/kqueue/IOCP reactor under the hood).
-default = ["tokio", "dtact"]
+# Default backend: a from-scratch lock-free driver with a native OS backend
+# per platform — io_uring on Linux, IOCP on Windows, kqueue (via mio) on
+# macOS/BSD. Selects its actual OS backend purely via `cfg(target_os/windows)`,
+# not a sub-feature — there's nothing else to pick once `native` is on.
+default = ["native", "dtact"]
+
+# Alternate backend: thin wrapper over `tokio::net`, for callers who'd rather
+# lean on tokio's own epoll/kqueue/IOCP reactor (e.g. to share a runtime with
+# other tokio-based code) than the native driver above.
 tokio = ["compat"]
 
-# Alternate backend: a from-scratch lock-free driver with a native OS backend
-# per platform — io_uring on Linux, IOCP on Windows, kqueue (via mio) on
-# macOS/BSD. Higher ceiling, far less battle-tested; not the default while it
-# matures. Selects its actual OS backend purely via `cfg(target_os/windows)`,
-# not a sub-feature — there's nothing else to pick once `experimental` is on.
-experimental = [
+native = [
     "dep:mio",
     "dtact",
     "dep:dtact-macros",

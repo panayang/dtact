@@ -3,7 +3,7 @@ members = ["dtact-io", "dtact-macros", "fuzz", "web"]
 
 [package]
 name = "dtact"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]

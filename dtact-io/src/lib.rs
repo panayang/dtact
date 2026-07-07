@@ -5,24 +5,24 @@
 
 use std::future::Future;
 use std::pin::Pin;
-#[cfg(all(feature = "tokio", not(feature = "experimental")))]
+#[cfg(all(feature = "tokio", not(feature = "native")))]
 use std::task::{Context, Poll};
 
-#[cfg(feature = "experimental")]
+#[cfg(feature = "native")]
 pub use dtact_macros::dtact_io_init as init;
 
 // The Unix backend (io_uring on Linux, kqueue/mio elsewhere) is fd-based and
 // cannot compile on Windows; the Windows backend (`windows_impl`, below) is
 // IOCP-based and cannot compile on Unix. Anything that's neither (e.g. wasm)
 // gets a clear build-time error instead of failing deep inside fd/handle code.
-#[cfg(all(feature = "experimental", not(any(unix, windows))))]
+#[cfg(all(feature = "native", not(any(unix, windows))))]
 compile_error!(
-    "dtact-io's `experimental` feature supports Unix (io_uring/kqueue) and \
+    "dtact-io's `native` feature supports Unix (io_uring/kqueue) and \
      Windows (IOCP) only. On other platforms, use the default `tokio` feature instead."
 );
 
-#[cfg(all(feature = "experimental", unix))]
-mod experimental_impl {
+#[cfg(all(feature = "native", unix))]
+mod native_impl {
     use super::*;
     use std::cell::RefCell;
     use std::os::fd::{AsRawFd, FromRawFd, RawFd};
@@ -1412,7 +1412,8 @@ mod experimental_impl {
                 cancel_mio_slot(state, &mut fd_states, slot_idx as usize);
             }
 
-            state.is_sleeping.store(true, Ordering::Release);
+            state.is_sleeping.store(true, Ordering::SeqCst);
+            fence(Ordering::SeqCst);
             let mut any_pending = false;
             for q in state.queues.iter() {
                 if !q.is_empty() {
@@ -1967,7 +1968,8 @@ mod experimental_impl {
                                     return Poll::Pending;
                                 }
 
-                                if state.is_sleeping.load(Ordering::Acquire) {
+                                fence(Ordering::SeqCst);
+                                if state.is_sleeping.load(Ordering::SeqCst) {
                                     state.waker.wake();
                                 }
                                 self.slot_idx = Some(idx);
@@ -1996,7 +1998,8 @@ mod experimental_impl {
                             let req = self.create_io_request(slot_idx);
                             let q_idx = get_or_init_local_allocator().unwrap_or(0);
                             let _ = state.queues[q_idx].push(req);
-                            if state.is_sleeping.load(Ordering::Acquire) {
+                            fence(Ordering::SeqCst);
+                            if state.is_sleeping.load(Ordering::SeqCst) {
                                 state.waker.wake();
                             }
                         }
@@ -2044,10 +2047,11 @@ mod experimental_impl {
             // SPSC `queues` — is safe to push to from any thread.
             slot.dropped.store(true, Ordering::Release);
             state.cancel_queue.push(idx as u32);
+            fence(Ordering::SeqCst);
 
             #[cfg(target_os = "linux")]
             {
-                if state.is_sleeping.load(Ordering::Acquire) {
+                if state.is_sleeping.load(Ordering::SeqCst) {
                     unsafe {
                         let _ = libc::write(
                             state.wake_eventfd,
@@ -2059,7 +2063,7 @@ mod experimental_impl {
             }
             #[cfg(not(target_os = "linux"))]
             {
-                if state.is_sleeping.load(Ordering::Acquire) {
+                if state.is_sleeping.load(Ordering::SeqCst) {
                     state.waker.wake();
                 }
             }
@@ -2543,16 +2547,16 @@ mod experimental_impl {
     }
 }
 
-#[cfg(all(feature = "experimental", unix))]
-pub use experimental_impl::*;
+#[cfg(all(feature = "native", unix))]
+pub use native_impl::*;
 
-#[cfg(all(feature = "experimental", windows))]
+#[cfg(all(feature = "native", windows))]
 mod windows_impl {
     use super::*;
     use std::net::SocketAddr;
     use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
     use std::sync::OnceLock;
-    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicUsize, Ordering, fence};
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
     use windows_sys::Win32::Foundation::HANDLE;
@@ -2564,7 +2568,7 @@ mod windows_impl {
 
     // =========================================================================
     // Shared lock-free primitives — deliberately duplicated from
-    // `experimental_impl` rather than hoisted into a common module: this
+    // `native_impl` rather than hoisted into a common module: this
     // keeps the already-verified Unix backend completely untouched while
     // this Windows backend is developed and iterated on independently.
     // =========================================================================
@@ -2880,7 +2884,20 @@ mod windows_impl {
             let any_pending = state.queues.iter().any(|q| !q.is_empty());
             let timeout_ms = if pushed || any_pending { 0 } else { u32::MAX };
 
-            state.is_sleeping.store(true, Ordering::Release);
+            state.is_sleeping.store(true, Ordering::SeqCst);
+            // Dekker-style re-check (mirrors the Linux io_uring worker loop's
+            // fix for the same class of bug): `any_pending` above was read
+            // before we published `is_sleeping`. A producer that pushed to a
+            // queue and observed `is_sleeping == false` right before our
+            // store (a StoreLoad reorder is legal even on x86) would skip
+            // its `PostQueuedCompletionStatus` wakeup, leaving us to block
+            // on `GetQueuedCompletionStatusEx` with `timeout_ms = INFINITE`
+            // forever with a request nobody drained. Re-scan now that
+            // `is_sleeping` is published and fall back to a non-blocking
+            // poll if anything landed.
+            fence(Ordering::SeqCst);
+            let missed = state.queues.iter().any(|q| !q.is_empty());
+            let effective_timeout = if missed { 0 } else { timeout_ms };
             let mut removed: u32 = 0;
             let ok = unsafe {
                 GetQueuedCompletionStatusEx(
@@ -2888,7 +2905,7 @@ mod windows_impl {
                     entries.as_mut_ptr(),
                     entries.len() as u32,
                     &mut removed,
-                    timeout_ms,
+                    effective_timeout,
                     0,
                 )
             };
@@ -3366,7 +3383,14 @@ mod windows_impl {
                         return Poll::Pending;
                     }
 
-                    if state.is_sleeping.load(Ordering::Acquire) {
+                    // Paired with the Dekker-style re-check in
+                    // `run_windows_worker_loop` — must be SeqCst with a fence
+                    // after the queue push above so this load can't be
+                    // reordered ahead of it, or we could miss waking a
+                    // worker that's about to block on
+                    // `GetQueuedCompletionStatusEx` with an infinite timeout.
+                    fence(Ordering::SeqCst);
+                    if state.is_sleeping.load(Ordering::SeqCst) {
                         unsafe {
                             PostQueuedCompletionStatus(
                                 state.iocp,
@@ -3452,7 +3476,8 @@ mod windows_impl {
             let _ = state.queues[q_idx].push(IoRequest::Cancel { slot_idx: idx });
             state.cancel_queue.push(idx as u32);
 
-            if state.is_sleeping.load(Ordering::Acquire) {
+            fence(Ordering::SeqCst);
+            if state.is_sleeping.load(Ordering::SeqCst) {
                 unsafe {
                     PostQueuedCompletionStatus(state.iocp, 0, WAKE_KEY, std::ptr::null_mut());
                 }
@@ -3729,10 +3754,10 @@ mod windows_impl {
     }
 }
 
-#[cfg(all(feature = "experimental", windows))]
+#[cfg(all(feature = "native", windows))]
 pub use windows_impl::*;
 
-#[cfg(all(feature = "tokio", not(feature = "experimental")))]
+#[cfg(all(feature = "tokio", not(feature = "native")))]
 mod tokio_impl {
     use super::*;
 
@@ -3759,7 +3784,7 @@ mod tokio_impl {
 
     /// Initialise the backing Tokio runtime.
     ///
-    /// Matches the signature of the experimental driver so call-sites can
+    /// Matches the signature of the native driver so call-sites can
     /// switch drivers with a single feature flag.  The extra parameters
     /// (`buffer_pool_size`, `chunk_size`, `pin_cpus`, `ring_depth`) are
     /// accepted for API compatibility but are ignored by the Tokio backend.
@@ -3844,9 +3869,9 @@ mod tokio_impl {
         Connect,
     }
 
-    /// Tokio-backend equivalent of the experimental `DtactIoFuture`.
+    /// Tokio-backend equivalent of the native `DtactIoFuture`.
     ///
-    /// Accepts the same public fields as the experimental variant so
+    /// Accepts the same public fields as the native variant so
     /// call-sites compile without change when switching backends.
     /// Internally it wraps the raw fd in a `tokio::io::unix::AsyncFd`
     /// (registered with the tokio reactor) and issues direct `libc`
@@ -4054,7 +4079,7 @@ mod tokio_impl {
     impl DtactTcpStream {
         pub fn from_std(stream: std::net::TcpStream) -> std::io::Result<Self> {
             stream.set_nonblocking(true)?;
-            // See the equivalent comment on the experimental backend's
+            // See the equivalent comment on the native backend's
             // `from_std` — Nagle + delayed ACK stalls small request/response
             // traffic by tens to hundreds of milliseconds.
             stream.set_nodelay(true)?;
@@ -4299,5 +4324,5 @@ mod tokio_impl {
     }
 }
 
-#[cfg(all(feature = "tokio", not(feature = "experimental")))]
+#[cfg(all(feature = "tokio", not(feature = "native")))]
 pub use tokio_impl::*;

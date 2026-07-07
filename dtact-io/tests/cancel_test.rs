@@ -1,4 +1,4 @@
-#![cfg(all(feature = "experimental", windows))]
+#![cfg(all(feature = "native", windows))]
 
 use dtact_io::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
 use std::sync::Arc;
