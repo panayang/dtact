@@ -1,11 +1,12 @@
-//! Criterion bench for the dtact-timer backends: measures registration +
-//! firing overhead of a single `sleep` for a short duration, native vs
-//! tokio, mirroring `fs_performance.rs`'s structure.
+//! Criterion bench for dtact-timer vs tokio::time: registration + firing
+//! overhead of a single `sleep` for a few durations, run side by side.
+//!
+//! Run:  cargo bench --bench timer_performance
+//! Test: cargo bench --bench timer_performance -- --test
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 
-#[cfg(feature = "native")]
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc;
@@ -26,34 +27,35 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
-#[cfg(feature = "native")]
-fn bench_timer_native(c: &mut Criterion) {
+fn bench_timer_sleep(c: &mut Criterion) {
     use dtact_util::timer::sleep;
-    let mut group = c.benchmark_group("dtact_timer_sleep");
-    group.bench_function("native_1ms", |b| {
-        b.iter(|| {
-            block_on(sleep(Duration::from_millis(1)));
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("timer_sleep");
+
+    for millis in [1u64, 10, 50] {
+        let label = format!("{millis}ms");
+
+        group.bench_with_input(
+            BenchmarkId::new("dtact-timer", &label),
+            &millis,
+            |b, &ms| {
+                b.iter(|| {
+                    block_on(sleep(Duration::from_millis(ms)));
+                });
+            },
+        );
+
+        group.bench_with_input(BenchmarkId::new("tokio", &label), &millis, |b, &ms| {
+            b.iter(|| {
+                tokio_rt.block_on(async move {
+                    tokio::time::sleep(Duration::from_millis(ms)).await;
+                });
+            });
         });
-    });
+    }
+
     group.finish();
 }
 
-#[cfg(all(feature = "tokio", not(feature = "native")))]
-fn bench_timer_tokio(c: &mut Criterion) {
-    use dtact_util::timer::sleep;
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let mut group = c.benchmark_group("dtact_timer_sleep");
-    group.bench_function("tokio_1ms", |b| {
-        b.iter(|| {
-            rt.block_on(sleep(Duration::from_millis(1)));
-        });
-    });
-    group.finish();
-}
-
-#[cfg(feature = "native")]
-criterion_group!(benches, bench_timer_native);
-#[cfg(all(feature = "tokio", not(feature = "native")))]
-criterion_group!(benches, bench_timer_tokio);
-
+criterion_group!(benches, bench_timer_sleep);
 criterion_main!(benches);

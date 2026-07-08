@@ -113,6 +113,38 @@ fn ctrl_c_registration_and_drop_do_not_panic() {
     let _d = ctrl_c();
 }
 
+/// With no console-control event actually delivered, `recv()` must stay
+/// `Pending` — no spurious wakeup, and polling it must not panic even
+/// though the real signal-delivery path (a separate OS-level handler
+/// thread) is never exercised here.
+#[cfg(all(feature = "native", windows))]
+#[test]
+fn recv_is_pending_without_a_real_delivery() {
+    use dtact_util::signal::ctrl_c;
+    use std::future::Future;
+    use std::pin::pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake};
+
+    struct NoopWaker;
+    impl Wake for NoopWaker {
+        fn wake(self: Arc<Self>) {}
+    }
+    let waker = Arc::new(NoopWaker).into();
+    let mut cx = Context::from_waker(&waker);
+
+    let stream = ctrl_c();
+    let mut fut = pin!(stream.recv());
+    // Poll a handful of times in a tight loop: without a real Ctrl+C this
+    // must never resolve, and must never panic.
+    for _ in 0..5 {
+        assert!(
+            matches!(fut.as_mut().poll(&mut cx), Poll::Pending),
+            "recv() must stay Pending without an actual delivery"
+        );
+    }
+}
+
 #[cfg(all(feature = "tokio", not(feature = "native")))]
 #[tokio::test]
 async fn tokio_backend_registers_without_panicking() {

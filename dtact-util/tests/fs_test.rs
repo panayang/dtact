@@ -134,6 +134,86 @@ fn test_fs_init_macro() {
     fs_init_macro_smoke();
 }
 
+/// Opening a file that does not exist must surface an error rather than
+/// panicking or hanging — the most basic failure mode for `DtactFile::open`.
+#[test]
+fn test_fs_open_nonexistent_file_errors() {
+    dtact_util::fs::init(2);
+
+    let dir = std::env::temp_dir().join(format!("dtact-fs-test-missing-{}", std::process::id()));
+    // Deliberately do NOT create `dir`/the file inside it.
+    let path = dir.join("does-not-exist.txt");
+
+    let result = block_on(DtactFile::open(&path));
+    match result {
+        Ok(_) => panic!("opening a nonexistent file must return Err"),
+        Err(e) => assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::NotFound,
+            "expected NotFound for a missing path, got {e:?}"
+        ),
+    }
+}
+
+/// Reading again after already having consumed the whole file must report
+/// EOF (`Ok(0)`), not an error and not the same bytes twice.
+#[test]
+fn test_fs_read_past_eof_returns_zero() {
+    dtact_util::fs::init(2);
+
+    let dir = std::env::temp_dir().join(format!("dtact-fs-test-eof-{}", std::process::id()));
+    block_on(dtact_util::fs::create_dir_all(&dir)).unwrap();
+    let path = dir.join("eof.txt");
+
+    block_on(async {
+        let file = DtactFile::create(&path).await.unwrap();
+        file.write(b"abc".to_vec()).await.unwrap();
+        file.close().await.unwrap();
+
+        let file = DtactFile::open(&path).await.unwrap();
+        let (n, _buf) = file.read(vec![0u8; 32]).await.unwrap();
+        assert_eq!(n, 3, "first read should return the full 3-byte file");
+
+        // The shared cursor is now past the end of the file — reading
+        // again must report EOF (0 bytes), not error or repeat data.
+        let (n, _buf) = file.read(vec![0u8; 32]).await.unwrap();
+        assert_eq!(n, 0, "reading past EOF must return Ok(0)");
+    });
+
+    block_on(dtact_util::fs::remove_file(&path)).unwrap();
+}
+
+/// Zero-length reads/writes are a common edge case (e.g. a caller handing
+/// an empty buffer through generic code) and must be handled as a trivial
+/// no-op success rather than erroring or blocking.
+#[test]
+fn test_fs_zero_length_read_write() {
+    dtact_util::fs::init(2);
+
+    let dir = std::env::temp_dir().join(format!("dtact-fs-test-zero-{}", std::process::id()));
+    block_on(dtact_util::fs::create_dir_all(&dir)).unwrap();
+    let path = dir.join("zero.bin");
+
+    block_on(async {
+        let file = DtactFile::create(&path).await.unwrap();
+        let (n, buf) = file.write(Vec::new()).await.unwrap();
+        assert_eq!(n, 0, "writing an empty buffer must report 0 bytes written");
+        assert!(buf.is_empty());
+
+        // Put some real content in via write_at, then confirm a
+        // zero-length read reports 0 bytes without disturbing anything.
+        file.write_at(b"data".to_vec(), 0).await.unwrap();
+        let (n, buf) = file.read_at(Vec::new(), 0).await.unwrap();
+        assert_eq!(
+            n, 0,
+            "reading into an empty buffer must report 0 bytes read"
+        );
+        assert!(buf.is_empty());
+    });
+
+    block_on(dtact_util::fs::remove_file(&path)).unwrap();
+}
+
 /// `ring_depth = 4` deliberately undersizes the preallocated op-slot pool
 /// relative to how many concurrent ops this test issues, forcing some ops
 /// down the heap-fallback path in `acquire_slot` — both paths (pooled and

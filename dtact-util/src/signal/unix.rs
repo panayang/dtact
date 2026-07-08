@@ -146,26 +146,32 @@ impl DtactSignalStream {
     }
 }
 
+/// A stream of `SIGINT` deliveries.
 pub fn sigint() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGINT)
 }
 
+/// A stream of `SIGTERM` deliveries.
 pub fn sigterm() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGTERM)
 }
 
+/// A stream of `SIGHUP` deliveries.
 pub fn sighup() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGHUP)
 }
 
+/// A stream of `SIGUSR1` deliveries.
 pub fn sigusr1() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGUSR1)
 }
 
+/// A stream of `SIGUSR2` deliveries.
 pub fn sigusr2() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGUSR2)
 }
 
+/// A stream of `SIGCHLD` deliveries.
 pub fn sigchld() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGCHLD)
 }

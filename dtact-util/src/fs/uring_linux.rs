@@ -342,16 +342,22 @@ async fn open_impl(path: &Path, flags: i32, mode: u32) -> io::Result<DtactFile> 
 }
 
 impl DtactFile {
+    /// Open an existing file for reading via a ring-submitted `Openat`.
     pub async fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         open_impl(&path, libc::O_RDONLY, 0).await
     }
 
+    /// Create (truncating if it already exists) a file for reading and
+    /// writing via a ring-submitted `Openat`.
     pub async fn create(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         open_impl(&path, libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC, 0o644).await
     }
 
+    /// Generic open honoring an arbitrary [`std::fs::OpenOptions`]. See
+    /// the doc comment inline below for why this falls back to a
+    /// synchronous `open()` rather than a pure-uring one.
     pub async fn open_with(
         path: impl Into<PathBuf>,
         opts: std::fs::OpenOptions,
@@ -373,6 +379,9 @@ impl DtactFile {
         })
     }
 
+    /// Read at the file's shared cursor, advancing it by the number of
+    /// bytes actually read. `buf` is handed back (resized to what was
+    /// filled) so the caller can reuse its allocation.
     pub async fn read(&self, mut buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
         let entry = opcode::Read::new(types::Fd(self.fd), buf.as_mut_ptr(), buf.len() as u32)
@@ -383,6 +392,9 @@ impl DtactFile {
         Ok((n as usize, buf))
     }
 
+    /// Write at the file's shared cursor, advancing it by the number of
+    /// bytes actually written. `buf` is handed back so the caller can
+    /// reuse its allocation.
     pub async fn write(&self, buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
         let entry = opcode::Write::new(types::Fd(self.fd), buf.as_ptr(), buf.len() as u32)
@@ -404,6 +416,8 @@ impl DtactFile {
         Ok((n as usize, buf))
     }
 
+    /// Positional write: submits its own SQE with an explicit offset, so
+    /// concurrent `read_at`/`write_at` calls on the same handle are safe.
     pub async fn write_at(&self, buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
         let entry = opcode::Write::new(types::Fd(self.fd), buf.as_ptr(), buf.len() as u32)
             .offset(offset)
@@ -412,12 +426,14 @@ impl DtactFile {
         Ok((n as usize, buf))
     }
 
+    /// Flush all buffered writes to disk via a ring-submitted `Fsync`.
     pub async fn sync_all(&self) -> io::Result<()> {
         let entry = opcode::Fsync::new(types::Fd(self.fd)).build();
         submit(entry).await?;
         Ok(())
     }
 
+    /// File metadata (size, timestamps, permissions, ...).
     pub async fn metadata(&self) -> io::Result<std::fs::Metadata> {
         // `Statx` needs a scratch `statx` buffer plus a conversion to
         // `std::fs::Metadata`, which has no public constructor from raw
@@ -433,6 +449,8 @@ impl DtactFile {
         meta
     }
 
+    /// Explicitly close this file via a ring-submitted `Close`, rather
+    /// than waiting for `Drop` (which closes synchronously instead).
     pub async fn close(self) -> io::Result<()> {
         let entry = opcode::Close::new(types::Fd(self.fd)).build();
         submit(entry).await?;
@@ -449,21 +467,29 @@ impl Drop for DtactFile {
     }
 }
 
+/// Metadata for the file/directory at `path`. Delegates to
+/// `std::fs::metadata` (a single synchronous syscall — not worth
+/// dispatching through the ring).
 pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
     let path = path.into();
     std::fs::metadata(&path)
 }
 
+/// List the entries of directory `path`. Delegates to
+/// `std::fs::read_dir`, eagerly collecting all entries.
 pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<std::fs::DirEntry>> {
     let path: PathBuf = path.into();
     std::fs::read_dir(&path)?.collect()
 }
 
+/// Recursively create `path` and any missing parent directories.
+/// Delegates to `std::fs::create_dir_all`.
 pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     std::fs::create_dir_all(&path)
 }
 
+/// Remove the file at `path`. Delegates to `std::fs::remove_file`.
 pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     std::fs::remove_file(&path)

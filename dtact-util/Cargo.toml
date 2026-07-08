@@ -15,6 +15,13 @@ license = "MIT or Apache-2.0"
 description = "Async utilities for Dtact: I/O, filesystem, process, signal, stream and timer primitives with lock-free native (io_uring/IOCP/kqueue) and tokio backends. Designed for hardware-level control and non-blocking heterogeneous orchestration."
 rust-version = "1.90.0"
 
+[lib]
+# `rlib` keeps `dtact-util` usable as a normal Rust dependency (root `dtact`
+# depends on it as an rlib dev-dependency); `cdylib`/`staticlib` produce the
+# shared/static C-ABI artifacts the `ffi` feature's `extern "C"` surface is
+# meant to be linked against.
+crate-type = ["cdylib", "rlib", "staticlib"]
+
 [features]
 # Default backend: a from-scratch lock-free driver with a native OS backend
 # per platform — io_uring on Linux, IOCP on Windows, kqueue (via mio) on
@@ -36,6 +43,11 @@ native = [
     "dep:windows-sys",
 ]
 compat = ["dep:tokio", "dep:futures-io", "dep:libc"]
+
+# C FFI layer: a blocking/synchronous `extern "C"` surface over all six
+# native primitives (io/fs/process/signal/stream/timer), raw-pointer-handle
+# style. Off by default; implies `native` since it wraps the native backends.
+ffi = ["native"]
 
 [dependencies]
 mio = { version = "1.2", features = [
@@ -75,6 +87,16 @@ libc = "0.2"
 criterion = "0.8"
 tokio = { version = "1.52", features = ["full"] }
 
+[build-dependencies]
+# Used by build.rs to emit `dtact_util.h`/`dtact_util.hpp` from the `ffi`
+# feature's `extern "C"` surface. Header generation only runs when DEV=1 is
+# set (see build.rs), so ordinary builds don't invoke it.
+cbindgen = "0.29"
+
+[[test]]
+name = "ffi_test"
+required-features = ["ffi"]
+
 [[bench]]
 name = "fs_performance"
 harness = false
@@ -83,19 +105,29 @@ required-features = ["native"]
 [[bench]]
 name = "timer_performance"
 harness = false
+required-features = ["native"]
 
 [[bench]]
 name = "stream_performance"
 harness = false
+required-features = ["native"]
 
 [[bench]]
 name = "signal_performance"
 harness = false
+required-features = ["native"]
 
 [[bench]]
 name = "process_performance"
 harness = false
+required-features = ["native"]
 
 [[bench]]
 name = "io_performance"
 harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "udp_performance"
+harness = false
+required-features = ["native"]

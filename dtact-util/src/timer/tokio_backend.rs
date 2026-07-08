@@ -15,12 +15,17 @@ pub struct DtactSleep {
 }
 
 impl DtactSleep {
+    /// Create a sleep future that fires after `duration` elapses, measured
+    /// from now.
+    #[must_use]
     pub fn new(duration: Duration) -> Self {
         Self {
             inner: Box::pin(tokio::time::sleep(duration)),
         }
     }
 
+    /// Create a sleep future that fires once `deadline` is reached.
+    #[must_use]
     pub fn until(deadline: Instant) -> Self {
         Self {
             inner: Box::pin(tokio::time::sleep_until(deadline.into())),
@@ -37,6 +42,7 @@ impl Future for DtactSleep {
 }
 
 /// Convenience free function mirroring `tokio::time::sleep`.
+#[must_use]
 pub fn sleep(duration: Duration) -> DtactSleep {
     DtactSleep::new(duration)
 }
@@ -47,6 +53,11 @@ pub struct DtactInterval {
 }
 
 impl DtactInterval {
+    /// Create a repeating timer that ticks every `period`, starting one
+    /// `period` from now (matches `tokio::time::interval` semantics: the
+    /// first `tick()` fires immediately, subsequent ticks are spaced by
+    /// `period`).
+    #[must_use]
     pub fn new(period: Duration) -> Self {
         Self {
             inner: tokio::time::interval(period),
@@ -60,6 +71,7 @@ impl DtactInterval {
 }
 
 /// Convenience free function mirroring `tokio::time::interval`.
+#[must_use]
 pub fn interval(period: Duration) -> DtactInterval {
     DtactInterval::new(period)
 }
@@ -82,7 +94,7 @@ impl std::error::Error for TimeoutError {}
 
 impl From<tokio::time::error::Elapsed> for TimeoutError {
     fn from(_: tokio::time::error::Elapsed) -> Self {
-        TimeoutError
+        Self
     }
 }
 
@@ -94,6 +106,7 @@ pub struct DtactTimeout<F> {
 }
 
 impl<F: Future> DtactTimeout<F> {
+    /// Wrap `inner` with a `duration` deadline, measured from now.
     pub fn new(duration: Duration, inner: F) -> Self {
         Self {
             inner: Box::pin(tokio::time::timeout(duration, inner)),

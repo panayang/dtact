@@ -1,13 +1,13 @@
 #![cfg(all(feature = "native", windows))]
 
-use dtact_util::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
+use dtact_util::io::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[dtact::dtact_init(workers = 2, capacity = 2048, safety = "Safety1")]
 #[test]
 fn test_drop_pending_read_does_not_corrupt() {
-    init_runtime(2, 1024, 4096, &[], 128);
+    init_runtime(2, 128, 1024, 4096, &[]);
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let local_addr = listener.local_addr().unwrap();

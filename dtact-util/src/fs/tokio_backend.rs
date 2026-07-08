@@ -22,19 +22,23 @@ pub use tokio::fs::File as DtactFile;
 pub struct DtactCompat<T>(T);
 
 impl<T> DtactCompat<T> {
-    pub fn new(inner: T) -> Self {
+    /// Wrap `inner`.
+    pub const fn new(inner: T) -> Self {
         Self(inner)
     }
 
+    /// Unwrap back to the inner value.
     pub fn into_inner(self) -> T {
         self.0
     }
 
-    pub fn get_ref(&self) -> &T {
+    /// Borrow the inner value.
+    pub const fn get_ref(&self) -> &T {
         &self.0
     }
 
-    pub fn get_mut(&mut self) -> &mut T {
+    /// Mutably borrow the inner value.
+    pub const fn get_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
@@ -42,6 +46,7 @@ impl<T> DtactCompat<T> {
 /// Extension trait: call `.compat()` on a [`DtactFile`] to obtain a
 /// [`DtactCompat`] adapter that implements `futures_io::AsyncRead`/`AsyncWrite`.
 pub trait DtactCompatExt: Sized {
+    /// Wrap `self` in a [`DtactCompat`] adapter.
     fn compat(self) -> DtactCompat<Self>;
 }
 
@@ -97,10 +102,23 @@ impl futures_io::AsyncWrite for DtactCompat<DtactFile> {
     }
 }
 
+/// Query a path's metadata.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::metadata` returns: `NotFound` if `path`
+/// doesn't exist, `PermissionDenied` if it can't be traversed, etc.
 pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
     tokio::fs::metadata(path.into()).await
 }
 
+/// List a directory's entries.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::read_dir` (to open the directory) or
+/// `next_entry` (per-entry, while draining it into a `Vec`) returns —
+/// `NotFound`/`NotADirectory`/`PermissionDenied` being the common cases.
 pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<tokio::fs::DirEntry>> {
     let mut rd = tokio::fs::read_dir(path.into()).await?;
     let mut out = Vec::new();
@@ -110,10 +128,22 @@ pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<tokio::fs::Dir
     Ok(out)
 }
 
+/// Recursively create a directory and all missing parent directories.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::create_dir_all` returns (e.g.
+/// `PermissionDenied`).
 pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
     tokio::fs::create_dir_all(path.into()).await
 }
 
+/// Remove a file.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::remove_file` returns (`NotFound`,
+/// `PermissionDenied`, etc).
 pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
     tokio::fs::remove_file(path.into()).await
 }

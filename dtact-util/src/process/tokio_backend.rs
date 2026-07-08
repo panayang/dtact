@@ -19,24 +19,33 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+/// Wraps a `tokio::process` child stdio handle to additionally implement
+/// `futures_io::AsyncRead`/`AsyncWrite`.
 pub struct DtactCompat<T>(T);
 
 impl<T> DtactCompat<T> {
-    pub fn new(inner: T) -> Self {
+    /// Wrap `inner`.
+    pub const fn new(inner: T) -> Self {
         Self(inner)
     }
+    /// Unwrap back to the inner value.
     pub fn into_inner(self) -> T {
         self.0
     }
-    pub fn get_ref(&self) -> &T {
+    /// Borrow the inner value.
+    pub const fn get_ref(&self) -> &T {
         &self.0
     }
-    pub fn get_mut(&mut self) -> &mut T {
+    /// Mutably borrow the inner value.
+    pub const fn get_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
 
+/// Extension trait: call `.compat()` on a child stdio handle to obtain a
+/// [`DtactCompat`] adapter implementing `futures_io::AsyncRead`/`AsyncWrite`.
 pub trait DtactCompatExt: Sized {
+    /// Wrap `self` in a [`DtactCompat`] adapter.
     fn compat(self) -> DtactCompat<Self>;
 }
 

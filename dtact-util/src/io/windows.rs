@@ -1,4 +1,4 @@
-use super::*;
+use super::{Future, Pin};
 use std::net::SocketAddr;
 use std::os::windows::io::{AsRawSocket, FromRawSocket, RawSocket};
 use std::sync::OnceLock;
@@ -16,7 +16,13 @@ use crate::io::trace::{io_trace, trace_now_us};
 use crate::lockfree::{SpscQueue, TreiberStack};
 
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Networking::WinSock::*;
+use windows_sys::Win32::Networking::WinSock::{
+    AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, INVALID_SOCKET,
+    SO_UPDATE_ACCEPT_CONTEXT, SO_UPDATE_CONNECT_CONTEXT, SOCK_STREAM, SOCKADDR, SOCKADDR_IN,
+    SOCKADDR_IN6, SOCKADDR_IN6_0, SOCKADDR_STORAGE, SOCKET, SOL_SOCKET, WSA_FLAG_OVERLAPPED,
+    WSA_IO_PENDING, WSABUF, WSAEINVAL, WSAGetLastError, WSAGetOverlappedResult, WSAIoctl, WSARecv,
+    WSARecvFrom, WSASend, WSASendTo, WSASocketW, bind, closesocket, setsockopt,
+};
 use windows_sys::Win32::System::IO::{
     CreateIoCompletionPort, GetQueuedCompletionStatusEx, OVERLAPPED, OVERLAPPED_ENTRY,
     PostQueuedCompletionStatus,
@@ -82,7 +88,7 @@ fn wake_next_waiting_fiber(state: &WorkerState) {
         state.free_wait_slots.push(wait_idx);
 
         if !data.is_null() && !vtable.is_null() {
-            let raw = RawWaker::new(data as *const (), unsafe { &*vtable });
+            let raw = RawWaker::new(data.cast_const(), unsafe { &*vtable });
             let w = unsafe { Waker::from_raw(raw) };
             w.wake();
         }
@@ -113,12 +119,21 @@ static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
 // IOCP-specific types
 // =========================================================================
 
+/// Which kind of async op an [`IoRequest`]/completion refers to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
+    /// A socket read.
     Read,
+    /// A socket write.
     Write,
+    /// Accepting an incoming connection on a listener.
     Accept,
+    /// Connecting to a remote address.
     Connect,
+    /// Connectionless UDP send to an explicit peer (`WSASendTo`).
+    SendTo,
+    /// Connectionless UDP receive, recording the peer address (`WSARecvFrom`).
+    RecvFrom,
 }
 
 /// Completion key used to distinguish a real op completion from a
@@ -140,11 +155,11 @@ struct IoOverlapped {
     /// Accept, the stream's own socket otherwise) — needed to call
     /// `WSAGetOverlappedResult` to decode the real result/error.
     issuing_socket: usize,
-    /// Accept only: the pre-created socket AcceptEx will fill in. On
+    /// Accept only: the pre-created socket `AcceptEx` will fill in. On
     /// success this is what gets reported as the op's result (the new
     /// connection), mirroring the Unix backend returning a new fd.
     accept_socket: usize,
-    /// Scratch output buffer for AcceptEx's local+remote address pair —
+    /// Scratch output buffer for `AcceptEx`'s local+remote address pair —
     /// must outlive the op, hence living inside this heap allocation
     /// rather than on any stack. `2 * (sizeof(SOCKADDR_STORAGE) + 16)`.
     accept_addr_buf: [u8; 288],
@@ -172,6 +187,25 @@ enum IoRequest {
         socket: usize,
         addr: SOCKADDR_STORAGE,
         addr_len: i32,
+        slot_idx: usize,
+    },
+    SendTo {
+        socket: usize,
+        buf_ptr: *const u8,
+        len: usize,
+        addr: SOCKADDR_STORAGE,
+        addr_len: i32,
+        slot_idx: usize,
+    },
+    RecvFrom {
+        socket: usize,
+        buf_ptr: *mut u8,
+        len: usize,
+        /// Caller-owned (see `DtactUdpSocket::recv_from`) `SOCKADDR_STORAGE`
+        /// the OS fills with the sender's address; must outlive the op.
+        from_ptr: *mut SOCKADDR_STORAGE,
+        /// Caller-owned in/out length for `from_ptr`.
+        from_len_ptr: *mut i32,
         slot_idx: usize,
     },
     /// See `Drop for DtactIoFuture` — cancellation is handed off to the
@@ -214,14 +248,14 @@ type ConnectExFn = unsafe extern "system" fn(
 const SIO_GET_EXTENSION_FUNCTION_POINTER: u32 = 0xC800_0006;
 // {b5367df1-cbac-11cf-95ca-00805f48a192}
 const WSAID_ACCEPTEX: windows_sys::core::GUID = windows_sys::core::GUID {
-    data1: 0xb5367df1,
+    data1: 0xb536_7df1,
     data2: 0xcbac,
     data3: 0x11cf,
     data4: [0x95, 0xca, 0x00, 0x80, 0x5f, 0x48, 0xa1, 0x92],
 };
 // {25a207b9-ddf3-4660-8ee9-76e58c74063e}
 const WSAID_CONNECTEX: windows_sys::core::GUID = windows_sys::core::GUID {
-    data1: 0x25a207b9,
+    data1: 0x25a2_07b9,
     data2: 0xddf3,
     data3: 0x4660,
     data4: [0x8e, 0xe9, 0x76, 0xe5, 0x8c, 0x74, 0x06, 0x3e],
@@ -235,11 +269,11 @@ fn get_extension_fn<F: Copy>(socket: SOCKET, guid: &windows_sys::core::GUID) -> 
         WSAIoctl(
             socket,
             SIO_GET_EXTENSION_FUNCTION_POINTER,
-            guid as *const _ as *const core::ffi::c_void,
+            std::ptr::from_ref(guid).cast::<core::ffi::c_void>(),
             std::mem::size_of::<windows_sys::core::GUID>() as u32,
-            &mut fn_ptr as *mut usize as *mut core::ffi::c_void,
+            (&raw mut fn_ptr).cast::<core::ffi::c_void>(),
             std::mem::size_of::<usize>() as u32,
-            &mut bytes_returned,
+            &raw mut bytes_returned,
             std::ptr::null_mut(),
             None,
         )
@@ -279,12 +313,24 @@ unsafe impl Sync for WorkerState {}
 static WORKERS: OnceLock<Box<[WorkerState]>> = OnceLock::new();
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// Start the IOCP-backed native io reactor.
+///
+/// `workers` io-worker threads, each with a `ring_depth`-deep in-flight-op
+/// slot table. `buffer_pool_size`/`chunk_size`/`pin_cpus` are accepted
+/// only for signature parity with the Unix backend and are currently
+/// unused. Idempotent: only the first call takes effect.
+///
+/// # Panics
+///
+/// Panics if `CreateIoCompletionPort` fails to create the per-worker IOCP
+/// handle, or if the OS refuses to spawn a worker thread — both are
+/// treated as fatal startup failures.
 pub fn init_runtime(
     workers: usize,
+    ring_depth: u32,
     _buffer_pool_size: usize,
     _chunk_size: usize,
     _pin_cpus: &[usize],
-    ring_depth: u32,
 ) {
     let config = GlobalConfig { workers };
     if GLOBAL_CONFIG.set(config).is_err() {
@@ -335,9 +381,7 @@ pub fn init_runtime(
 
         let iocp =
             unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
-        if iocp.is_null() {
-            panic!("Failed to create IOCP handle");
-        }
+        assert!(!iocp.is_null(), "Failed to create IOCP handle");
 
         worker_states.push(WorkerState {
             iocp,
@@ -368,13 +412,15 @@ pub fn init_runtime(
 
 /// Shorthand initialiser matching the Unix backend's `init(workers)`.
 pub fn init(workers: usize) {
-    init_runtime(workers, 0, 0, &[], 1024);
+    init_runtime(workers, 1024, 0, 0, &[]);
 }
 
+/// Signal every io-worker thread to stop via a wake packet. Does not join
+/// the worker threads.
 pub fn shutdown_runtime() {
     SHUTDOWN.store(true, Ordering::Release);
     if let Some(workers) = WORKERS.get() {
-        for state in workers.iter() {
+        for state in workers {
             unsafe {
                 PostQueuedCompletionStatus(state.iocp, 0, WAKE_KEY, std::ptr::null_mut());
             }
@@ -395,7 +441,7 @@ fn run_windows_worker_loop(state: &WorkerState) {
         }
 
         let mut pushed = false;
-        for q in state.queues.iter() {
+        for q in &state.queues {
             while let Some(req) = q.pop() {
                 pushed = true;
                 submit_windows_request(state, req);
@@ -430,7 +476,7 @@ fn run_windows_worker_loop(state: &WorkerState) {
                 iocp,
                 entries.as_mut_ptr(),
                 entries.len() as u32,
-                &mut removed,
+                &raw mut removed,
                 effective_timeout,
                 0,
             )
@@ -442,10 +488,10 @@ fn run_windows_worker_loop(state: &WorkerState) {
         }
 
         for entry in entries.iter().take(removed as usize) {
-            if entry.lpCompletionKey as usize == WAKE_KEY {
+            if entry.lpCompletionKey == WAKE_KEY {
                 continue;
             }
-            let ov_ptr = entry.lpOverlapped as *mut IoOverlapped;
+            let ov_ptr = entry.lpOverlapped.cast::<IoOverlapped>();
             if ov_ptr.is_null() {
                 continue;
             }
@@ -454,6 +500,164 @@ fn run_windows_worker_loop(state: &WorkerState) {
     }
 }
 
+// `req` is taken by value (not `&IoRequest`) deliberately: it was just
+// popped by value off the per-worker `SpscQueue<IoRequest>` (see the
+// caller), and every field clippy would suggest borrowing instead is a
+// `Copy` primitive (pointer/usize) matched out of the enum anyway, so a
+// reference would only add lifetime noise with no allocation saved.
+fn submit_read(state: &WorkerState, socket: usize, buf_ptr: *mut u8, len: usize, slot_idx: usize) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(socket, Ordering::Relaxed);
+    let ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: socket,
+        accept_socket: 0,
+        accept_addr_buf: [0u8; 288],
+    });
+    let ov_ptr = Box::into_raw(ov);
+    let wsabuf = WSABUF {
+        len: len as u32,
+        buf: buf_ptr,
+    };
+    let mut flags: u32 = 0;
+    let res = unsafe {
+        WSARecv(
+            socket,
+            &raw const wsabuf,
+            1,
+            std::ptr::null_mut(),
+            &raw mut flags,
+            ov_ptr.cast::<OVERLAPPED>(),
+            None,
+        )
+    };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
+}
+
+fn submit_write(
+    state: &WorkerState,
+    socket: usize,
+    buf_ptr: *const u8,
+    len: usize,
+    slot_idx: usize,
+) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(socket, Ordering::Relaxed);
+    let ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: socket,
+        accept_socket: 0,
+        accept_addr_buf: [0u8; 288],
+    });
+    let ov_ptr = Box::into_raw(ov);
+    let wsabuf = WSABUF {
+        len: len as u32,
+        buf: buf_ptr.cast_mut(),
+    };
+    let res = unsafe {
+        WSASend(
+            socket,
+            &raw const wsabuf,
+            1,
+            std::ptr::null_mut(),
+            0,
+            ov_ptr.cast::<OVERLAPPED>(),
+            None,
+        )
+    };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
+}
+
+fn submit_accept(state: &WorkerState, listen_socket: usize, accept_socket: usize, slot_idx: usize) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(listen_socket, Ordering::Relaxed);
+    let accept_fn = match get_accept_ex(listen_socket) {
+        Ok(f) => f,
+        Err(e) => {
+            complete_with_error(state, slot_idx, &e);
+            return;
+        }
+    };
+    let mut ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: listen_socket,
+        accept_socket,
+        accept_addr_buf: [0u8; 288],
+    });
+    let buf_ptr = ov.accept_addr_buf.as_mut_ptr();
+    let ov_ptr = Box::into_raw(ov);
+    let mut bytes_received: u32 = 0;
+    let res = unsafe {
+        accept_fn(
+            listen_socket,
+            accept_socket,
+            buf_ptr.cast::<core::ffi::c_void>(),
+            0,
+            144,
+            144,
+            &raw mut bytes_received,
+            ov_ptr.cast::<OVERLAPPED>(),
+        )
+    };
+    // AcceptEx returns BOOL directly (TRUE = immediate success),
+    // not the WSA "0 or SOCKET_ERROR" convention WSARecv/WSASend use.
+    let res = if res != 0 { 0 } else { -1 };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
+}
+
+fn submit_connect(
+    state: &WorkerState,
+    socket: usize,
+    addr: SOCKADDR_STORAGE,
+    addr_len: i32,
+    slot_idx: usize,
+) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(socket, Ordering::Relaxed);
+    let connect_fn = match get_connect_ex(socket) {
+        Ok(f) => f,
+        Err(e) => {
+            complete_with_error(state, slot_idx, &e);
+            return;
+        }
+    };
+    let ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: socket,
+        accept_socket: 0,
+        accept_addr_buf: [0u8; 288],
+    });
+    let ov_ptr = Box::into_raw(ov);
+    let mut bytes_sent: u32 = 0;
+    let res = unsafe {
+        connect_fn(
+            socket,
+            (&raw const addr).cast::<SOCKADDR>(),
+            addr_len,
+            std::ptr::null_mut(),
+            0,
+            &raw mut bytes_sent,
+            ov_ptr.cast::<OVERLAPPED>(),
+        )
+    };
+    let res = if res != 0 { 0 } else { -1 };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
+}
+
+// `req` is taken by value (not `&IoRequest`) deliberately: it was just
+// popped by value off the per-worker `SpscQueue<IoRequest>` (see the
+// caller), and every field clippy would suggest borrowing instead is a
+// `Copy` primitive (pointer/usize) matched out of the enum anyway, so a
+// reference would only add lifetime noise with no allocation saved.
+#[allow(clippy::needless_pass_by_value)]
 fn submit_windows_request(state: &WorkerState, req: IoRequest) {
     match req {
         IoRequest::Cancel { slot_idx } => {
@@ -470,152 +674,132 @@ fn submit_windows_request(state: &WorkerState, req: IoRequest) {
             buf_ptr,
             len,
             slot_idx,
-        } => {
-            state.slots[slot_idx]
-                .origin_socket
-                .store(socket, Ordering::Relaxed);
-            let ov = Box::new(IoOverlapped {
-                overlapped: unsafe { std::mem::zeroed() },
-                slot_idx,
-                issuing_socket: socket,
-                accept_socket: 0,
-                accept_addr_buf: [0u8; 288],
-            });
-            let ov_ptr = Box::into_raw(ov);
-            let mut wsabuf = WSABUF {
-                len: len as u32,
-                buf: buf_ptr,
-            };
-            let mut flags: u32 = 0;
-            let res = unsafe {
-                WSARecv(
-                    socket,
-                    &mut wsabuf,
-                    1,
-                    std::ptr::null_mut(),
-                    &mut flags,
-                    ov_ptr as *mut OVERLAPPED,
-                    None,
-                )
-            };
-            handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
-        }
+        } => submit_read(state, socket, buf_ptr, len, slot_idx),
         IoRequest::Write {
             socket,
             buf_ptr,
             len,
             slot_idx,
-        } => {
-            state.slots[slot_idx]
-                .origin_socket
-                .store(socket, Ordering::Relaxed);
-            let ov = Box::new(IoOverlapped {
-                overlapped: unsafe { std::mem::zeroed() },
-                slot_idx,
-                issuing_socket: socket,
-                accept_socket: 0,
-                accept_addr_buf: [0u8; 288],
-            });
-            let ov_ptr = Box::into_raw(ov);
-            let wsabuf = WSABUF {
-                len: len as u32,
-                buf: buf_ptr as *mut u8,
-            };
-            let res = unsafe {
-                WSASend(
-                    socket,
-                    &wsabuf,
-                    1,
-                    std::ptr::null_mut(),
-                    0,
-                    ov_ptr as *mut OVERLAPPED,
-                    None,
-                )
-            };
-            handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
-        }
+        } => submit_write(state, socket, buf_ptr, len, slot_idx),
         IoRequest::Accept {
             listen_socket,
             accept_socket,
             slot_idx,
-        } => {
-            state.slots[slot_idx]
-                .origin_socket
-                .store(listen_socket, Ordering::Relaxed);
-            let accept_fn = match get_accept_ex(listen_socket) {
-                Ok(f) => f,
-                Err(e) => {
-                    complete_with_error(state, slot_idx, e);
-                    return;
-                }
-            };
-            let mut ov = Box::new(IoOverlapped {
-                overlapped: unsafe { std::mem::zeroed() },
-                slot_idx,
-                issuing_socket: listen_socket,
-                accept_socket,
-                accept_addr_buf: [0u8; 288],
-            });
-            let buf_ptr = ov.accept_addr_buf.as_mut_ptr();
-            let ov_ptr = Box::into_raw(ov);
-            let mut bytes_received: u32 = 0;
-            let res = unsafe {
-                accept_fn(
-                    listen_socket,
-                    accept_socket,
-                    buf_ptr as *mut core::ffi::c_void,
-                    0,
-                    144,
-                    144,
-                    &mut bytes_received,
-                    ov_ptr as *mut OVERLAPPED,
-                )
-            };
-            // AcceptEx returns BOOL directly (TRUE = immediate success),
-            // not the WSA "0 or SOCKET_ERROR" convention WSARecv/WSASend use.
-            let res = if res != 0 { 0 } else { -1 };
-            handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
-        }
+        } => submit_accept(state, listen_socket, accept_socket, slot_idx),
         IoRequest::Connect {
             socket,
             addr,
             addr_len,
             slot_idx,
-        } => {
-            state.slots[slot_idx]
-                .origin_socket
-                .store(socket, Ordering::Relaxed);
-            let connect_fn = match get_connect_ex(socket) {
-                Ok(f) => f,
-                Err(e) => {
-                    complete_with_error(state, slot_idx, e);
-                    return;
-                }
-            };
-            let ov = Box::new(IoOverlapped {
-                overlapped: unsafe { std::mem::zeroed() },
-                slot_idx,
-                issuing_socket: socket,
-                accept_socket: 0,
-                accept_addr_buf: [0u8; 288],
-            });
-            let ov_ptr = Box::into_raw(ov);
-            let mut bytes_sent: u32 = 0;
-            let res = unsafe {
-                connect_fn(
-                    socket,
-                    &addr as *const SOCKADDR_STORAGE as *const SOCKADDR,
-                    addr_len,
-                    std::ptr::null_mut(),
-                    0,
-                    &mut bytes_sent,
-                    ov_ptr as *mut OVERLAPPED,
-                )
-            };
-            let res = if res != 0 { 0 } else { -1 };
-            handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
-        }
+        } => submit_connect(state, socket, addr, addr_len, slot_idx),
+        IoRequest::SendTo {
+            socket,
+            buf_ptr,
+            len,
+            addr,
+            addr_len,
+            slot_idx,
+        } => submit_send_to(state, socket, buf_ptr, len, addr, addr_len, slot_idx),
+        IoRequest::RecvFrom {
+            socket,
+            buf_ptr,
+            len,
+            from_ptr,
+            from_len_ptr,
+            slot_idx,
+        } => submit_recv_from(
+            state,
+            socket,
+            buf_ptr,
+            len,
+            from_ptr,
+            from_len_ptr,
+            slot_idx,
+        ),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_send_to(
+    state: &WorkerState,
+    socket: usize,
+    buf_ptr: *const u8,
+    len: usize,
+    addr: SOCKADDR_STORAGE,
+    addr_len: i32,
+    slot_idx: usize,
+) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(socket, Ordering::Relaxed);
+    let ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: socket,
+        accept_socket: 0,
+        accept_addr_buf: [0u8; 288],
+    });
+    let ov_ptr = Box::into_raw(ov);
+    let wsabuf = WSABUF {
+        len: len as u32,
+        buf: buf_ptr.cast_mut(),
+    };
+    let res = unsafe {
+        WSASendTo(
+            socket,
+            &raw const wsabuf,
+            1,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::addr_of!(addr).cast::<SOCKADDR>(),
+            addr_len,
+            ov_ptr.cast::<OVERLAPPED>(),
+            None,
+        )
+    };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_recv_from(
+    state: &WorkerState,
+    socket: usize,
+    buf_ptr: *mut u8,
+    len: usize,
+    from_ptr: *mut SOCKADDR_STORAGE,
+    from_len_ptr: *mut i32,
+    slot_idx: usize,
+) {
+    state.slots[slot_idx]
+        .origin_socket
+        .store(socket, Ordering::Relaxed);
+    let ov = Box::new(IoOverlapped {
+        overlapped: unsafe { std::mem::zeroed() },
+        slot_idx,
+        issuing_socket: socket,
+        accept_socket: 0,
+        accept_addr_buf: [0u8; 288],
+    });
+    let ov_ptr = Box::into_raw(ov);
+    let wsabuf = WSABUF {
+        len: len as u32,
+        buf: buf_ptr,
+    };
+    let mut flags: u32 = 0;
+    let res = unsafe {
+        WSARecvFrom(
+            socket,
+            &raw const wsabuf,
+            1,
+            std::ptr::null_mut(),
+            &raw mut flags,
+            from_ptr.cast::<SOCKADDR>(),
+            from_len_ptr,
+            ov_ptr.cast::<OVERLAPPED>(),
+            None,
+        )
+    };
+    handle_immediate_or_pending(state, slot_idx, ov_ptr, res);
 }
 
 /// WSARecv/WSASend/AcceptEx/ConnectEx can *return* success immediately —
@@ -647,10 +831,10 @@ fn handle_immediate_or_pending(
     unsafe {
         drop(Box::from_raw(ov_ptr));
     }
-    complete_with_error(state, slot_idx, std::io::Error::from_raw_os_error(err));
+    complete_with_error(state, slot_idx, &std::io::Error::from_raw_os_error(err));
 }
 
-fn complete_with_error(state: &WorkerState, slot_idx: usize, err: std::io::Error) {
+fn complete_with_error(state: &WorkerState, slot_idx: usize, err: &std::io::Error) {
     let res = -err.raw_os_error().unwrap_or(WSAEINVAL);
     finish_slot(state, slot_idx, res);
 }
@@ -665,10 +849,10 @@ fn process_windows_completion(state: &WorkerState, ov_ptr: *mut IoOverlapped) {
     let ok = unsafe {
         WSAGetOverlappedResult(
             socket,
-            &ov.overlapped as *const OVERLAPPED as *mut OVERLAPPED,
-            &mut transferred,
+            (&raw const ov.overlapped).cast_mut(),
+            &raw mut transferred,
             0,
-            &mut flags,
+            &raw mut flags,
         )
     };
 
@@ -717,13 +901,13 @@ fn finish_slot(state: &WorkerState, slot_idx: usize, res: i32) {
         state.free_slots.push(slot_idx as u32);
         wake_next_waiting_fiber(state);
     } else if !data.is_null() && !vtable.is_null() {
-        let raw = RawWaker::new(data as *const (), unsafe { &*vtable });
+        let raw = RawWaker::new(data.cast_const(), unsafe { &*vtable });
         let w = unsafe { Waker::from_raw(raw) };
         w.wake();
     }
 }
 
-fn cancel_windows_slot(state: &WorkerState, slot_idx: usize) {
+const fn cancel_windows_slot(state: &WorkerState, slot_idx: usize) {
     // The corresponding op is still genuinely in flight with the OS (we
     // have no cheap portable way to cancel it early); just let
     // `process_windows_completion`/`finish_slot`'s `dropped` check free
@@ -738,28 +922,63 @@ fn cancel_windows_slot(state: &WorkerState, slot_idx: usize) {
 // =========================================================================
 // DtactIoFuture
 // =========================================================================
+/// A single in-flight async socket op (read/write/accept/connect),
+/// dispatched to the IOCP worker for `worker_idx` and polled to
+/// completion.
 pub struct DtactIoFuture {
+    /// Index of the io-worker thread this op is (or will be) dispatched
+    /// to.
     pub worker_idx: usize,
+    /// The socket this op operates on, as a raw `usize` (cast from
+    /// `SOCKET`).
     pub fd: u32,
+    /// Unused on this backend (kept for signature parity with the Unix
+    /// direct-descriptor-table backend); always `0`.
     pub direct_fd_idx: u32,
+    /// Which kind of op this is.
     pub op: OpCode,
+    /// Read/Write only: pointer to the caller-owned buffer.
     pub buf_ptr: *mut u8,
+    /// Read/Write only: length of the buffer at `buf_ptr`.
     pub len: usize,
+    /// Unused on this backend (no positional read/write here); always
+    /// `0`.
     pub offset: i64,
+    /// Connect only: the target address to connect to.
     pub addr: Option<SOCKADDR_STORAGE>,
+    /// Connect only: length in bytes of the valid prefix of `addr`.
     pub addr_len: i32,
+    /// `None` until the op has been submitted (assigned a pool slot);
+    /// `Some(idx)` while in flight.
     pub slot_idx: Option<usize>,
-    /// Accept only: a pre-created socket for AcceptEx to fill in, created
+    /// Accept only: a pre-created socket for `AcceptEx` to fill in, created
     /// lazily on first poll so `new()` stays a plain constructor.
     accept_socket: std::cell::Cell<usize>,
+    /// `RecvFrom` only: caller-owned output buffers for the peer address
+    /// (see `DtactUdpSocket::recv_from`), null for every other op.
+    from_ptr: *mut SOCKADDR_STORAGE,
+    from_len_ptr: *mut i32,
 }
 
+// SAFETY: every field is either a `Copy` primitive/pointer treated as an
+// opaque handle (never dereferenced through `&DtactIoFuture` from two
+// threads at once — `buf_ptr`'s pointee is only touched by whichever
+// worker thread is actively servicing this op's slot) or already
+// thread-safe (`Cell<usize>`, which is `!Sync` on its own, but this type
+// is only ever polled from one task at a time per the `Future` contract,
+// so no two threads observe `accept_socket` concurrently).
 unsafe impl Send for DtactIoFuture {}
+// SAFETY: same reasoning as `Send` — the `Future::poll` contract already
+// guarantees exclusive access to `&mut self` (and by extension its
+// `Cell`) from one thread at a time.
 unsafe impl Sync for DtactIoFuture {}
 
 impl DtactIoFuture {
+    /// Build a not-yet-submitted future for the given op. Submission
+    /// (queueing to the target worker) happens lazily on first
+    /// [`Future::poll`].
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub const fn new(
         worker_idx: usize,
         fd: u32,
         direct_fd_idx: u32,
@@ -783,6 +1002,8 @@ impl DtactIoFuture {
             addr_len,
             slot_idx,
             accept_socket: std::cell::Cell::new(0),
+            from_ptr: std::ptr::null_mut(),
+            from_len_ptr: std::ptr::null_mut(),
         }
     }
 
@@ -804,8 +1025,8 @@ impl DtactIoFuture {
                 if self.accept_socket.get() == 0 {
                     let s = unsafe {
                         WSASocketW(
-                            AF_INET as i32,
-                            SOCK_STREAM as i32,
+                            i32::from(AF_INET),
+                            SOCK_STREAM,
                             0,
                             std::ptr::null(),
                             0,
@@ -826,7 +1047,120 @@ impl DtactIoFuture {
                 addr_len: self.addr_len,
                 slot_idx,
             },
+            OpCode::SendTo => IoRequest::SendTo {
+                socket: self.fd as usize,
+                buf_ptr: self.buf_ptr,
+                len: self.len,
+                addr: self.addr.unwrap(),
+                addr_len: self.addr_len,
+                slot_idx,
+            },
+            OpCode::RecvFrom => IoRequest::RecvFrom {
+                socket: self.fd as usize,
+                buf_ptr: self.buf_ptr,
+                len: self.len,
+                from_ptr: self.from_ptr,
+                from_len_ptr: self.from_len_ptr,
+                slot_idx,
+            },
         }
+    }
+}
+
+impl DtactIoFuture {
+    /// Acquire a free op slot for `worker_idx`, registering `cx`'s waker
+    /// in a waiting-list slot instead and returning `None` if the pool is
+    /// currently exhausted (the caller must then return `Poll::Pending`).
+    fn acquire_op_slot(state: &WorkerState, cx: &Context<'_>) -> Option<usize> {
+        if let Some(i) = state.free_slots.pop() {
+            return Some(i as usize);
+        }
+        let wait_idx = state.free_wait_slots.pop()?;
+        let wait_slot = &state.wait_slots[wait_idx as usize];
+        wait_slot
+            .waker_data
+            .store(cx.waker().data().cast_mut(), Ordering::Relaxed);
+        wait_slot.waker_vtable.store(
+            std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable()).cast_mut(),
+            Ordering::Relaxed,
+        );
+        state.waiting_queue.push(wait_idx);
+
+        let idx = state.free_slots.pop()?;
+        wait_slot
+            .waker_data
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+        wait_slot
+            .waker_vtable
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+        Some(idx as usize)
+    }
+
+    /// Submit this op (first poll only): acquire a slot, register the
+    /// waker on it, enqueue the [`IoRequest`] to a worker queue, and wake
+    /// the worker if it's parked. Returns the acquired slot index, or
+    /// `None` if the caller should return `Poll::Pending` right away
+    /// (slot pool exhausted, or the target queue rejected the push).
+    fn submit(self: Pin<&mut Self>, cx: &Context<'_>) -> Option<usize> {
+        let this = self.get_mut();
+        let state = &WORKERS.get().unwrap()[this.worker_idx];
+        let Some(idx) = Self::acquire_op_slot(state, cx) else {
+            cx.waker().wake_by_ref();
+            return None;
+        };
+
+        let slot = &state.slots[idx];
+        slot.completed.store(false, Ordering::Relaxed);
+        slot.dropped.store(false, Ordering::Relaxed);
+        slot.lock_waker();
+        slot.waker_data
+            .store(cx.waker().data().cast_mut(), Ordering::Relaxed);
+        slot.waker_vtable.store(
+            std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable()).cast_mut(),
+            Ordering::Relaxed,
+        );
+        slot.unlock_waker();
+
+        let req = this.create_io_request(idx);
+        let q_idx = get_local_thread_id() % state.queues.len();
+        let queue = &state.queues[q_idx];
+
+        io_trace!(
+            "[dtact-io] t={} slot={} fd={} op={:?} A_submit",
+            trace_now_us(),
+            idx,
+            this.fd,
+            this.op
+        );
+
+        if queue.push(req).is_err() {
+            slot.lock_waker();
+            slot.waker_data
+                .store(std::ptr::null_mut(), Ordering::Relaxed);
+            slot.waker_vtable
+                .store(std::ptr::null_mut(), Ordering::Relaxed);
+            slot.unlock_waker();
+            state.free_slots.push(idx as u32);
+            wake_next_waiting_fiber(state);
+            cx.waker().wake_by_ref();
+            return None;
+        }
+
+        // Paired with the Dekker-style re-check in
+        // `run_windows_worker_loop` — must be SeqCst with a fence
+        // after the queue push above so this load can't be
+        // reordered ahead of it, or we could miss waking a
+        // worker that's about to block on
+        // `GetQueuedCompletionStatusEx` with an infinite timeout.
+        fence(Ordering::SeqCst);
+        if state.is_sleeping.load(Ordering::SeqCst) {
+            unsafe {
+                PostQueuedCompletionStatus(state.iocp, 0, WAKE_KEY, std::ptr::null_mut());
+            }
+        }
+
+        this.slot_idx = Some(idx);
+        Some(idx)
     }
 }
 
@@ -834,95 +1168,13 @@ impl Future for DtactIoFuture {
     type Output = std::io::Result<usize>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let slot_idx = match self.slot_idx {
-            Some(idx) => idx,
-            None => {
-                let state = &WORKERS.get().unwrap()[self.worker_idx];
-                let idx = match state.free_slots.pop() {
-                    Some(i) => i as usize,
-                    None => {
-                        if let Some(wait_idx) = state.free_wait_slots.pop() {
-                            let wait_slot = &state.wait_slots[wait_idx as usize];
-                            wait_slot
-                                .waker_data
-                                .store(cx.waker().data() as *mut (), Ordering::Relaxed);
-                            wait_slot.waker_vtable.store(
-                                cx.waker().vtable() as *const RawWakerVTable as *mut _,
-                                Ordering::Relaxed,
-                            );
-                            state.waiting_queue.push(wait_idx);
-
-                            if let Some(i) = state.free_slots.pop() {
-                                wait_slot
-                                    .waker_data
-                                    .store(std::ptr::null_mut(), Ordering::Relaxed);
-                                wait_slot
-                                    .waker_vtable
-                                    .store(std::ptr::null_mut(), Ordering::Relaxed);
-                                i as usize
-                            } else {
-                                return Poll::Pending;
-                            }
-                        } else {
-                            cx.waker().wake_by_ref();
-                            return Poll::Pending;
-                        }
-                    }
-                };
-
-                let slot = &state.slots[idx];
-                slot.completed.store(false, Ordering::Relaxed);
-                slot.dropped.store(false, Ordering::Relaxed);
-                slot.lock_waker();
-                slot.waker_data
-                    .store(cx.waker().data() as *mut (), Ordering::Relaxed);
-                slot.waker_vtable.store(
-                    cx.waker().vtable() as *const RawWakerVTable as *mut _,
-                    Ordering::Relaxed,
-                );
-                slot.unlock_waker();
-
-                let req = self.create_io_request(idx);
-                let q_idx = get_local_thread_id() % state.queues.len();
-                let queue = &state.queues[q_idx];
-
-                io_trace!(
-                    "[dtact-io] t={} slot={} fd={} op={:?} A_submit",
-                    trace_now_us(),
-                    idx,
-                    self.fd,
-                    self.op
-                );
-
-                if queue.push(req).is_err() {
-                    slot.lock_waker();
-                    slot.waker_data
-                        .store(std::ptr::null_mut(), Ordering::Relaxed);
-                    slot.waker_vtable
-                        .store(std::ptr::null_mut(), Ordering::Relaxed);
-                    slot.unlock_waker();
-                    state.free_slots.push(idx as u32);
-                    wake_next_waiting_fiber(state);
-                    cx.waker().wake_by_ref();
-                    return Poll::Pending;
-                }
-
-                // Paired with the Dekker-style re-check in
-                // `run_windows_worker_loop` — must be SeqCst with a fence
-                // after the queue push above so this load can't be
-                // reordered ahead of it, or we could miss waking a
-                // worker that's about to block on
-                // `GetQueuedCompletionStatusEx` with an infinite timeout.
-                fence(Ordering::SeqCst);
-                if state.is_sleeping.load(Ordering::SeqCst) {
-                    unsafe {
-                        PostQueuedCompletionStatus(state.iocp, 0, WAKE_KEY, std::ptr::null_mut());
-                    }
-                }
-
-                self.slot_idx = Some(idx);
-                idx
-            }
+        let slot_idx = if let Some(idx) = self.slot_idx {
+            idx
+        } else {
+            let Some(idx) = self.as_mut().submit(cx) else {
+                return Poll::Pending;
+            };
+            idx
         };
 
         let state = &WORKERS.get().unwrap()[self.worker_idx];
@@ -953,8 +1205,8 @@ impl Future for DtactIoFuture {
                 Poll::Ready(Ok(res as usize))
             }
         } else {
-            let new_data = cx.waker().data() as *mut ();
-            let new_vtable = cx.waker().vtable() as *const RawWakerVTable as *mut _;
+            let new_data = cx.waker().data().cast_mut();
+            let new_vtable = std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable()).cast_mut();
 
             slot.lock_waker();
             let old_data = slot.waker_data.load(Ordering::Relaxed);
@@ -1007,6 +1259,7 @@ impl Drop for DtactIoFuture {
 // =========================================================================
 // HIGH-LEVEL API: DtactTcpStream / DtactTcpListener
 // =========================================================================
+/// An async TCP stream backed by IOCP-issued `WSARecv`/`WSASend`.
 pub struct DtactTcpStream {
     inner: std::net::TcpStream,
     worker_idx: usize,
@@ -1018,6 +1271,19 @@ fn pick_worker(socket: usize) -> usize {
 }
 
 impl DtactTcpStream {
+    /// Wrap an existing `std::net::TcpStream`, switching it to
+    /// non-blocking + `TCP_NODELAY` and associating it with this worker's
+    /// IOCP.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking`/`set_nodelay` fail, or
+    /// if `CreateIoCompletionPort` fails to associate the socket.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
     pub fn from_std(stream: std::net::TcpStream) -> std::io::Result<Self> {
         stream.set_nonblocking(true)?;
         // See the equivalent comment on the Unix backend's `from_std` —
@@ -1036,6 +1302,12 @@ impl DtactTcpStream {
         })
     }
 
+    /// Read into `buf`, returning the number of bytes read (`0` = EOF).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `WSARecv`/IOCP completion
+    /// reports one (e.g. connection reset by peer).
     pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -1055,6 +1327,12 @@ impl DtactTcpStream {
         .await
     }
 
+    /// Write from `buf`, returning the number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `WSASend`/IOCP completion
+    /// reports one (e.g. connection reset by peer, broken pipe).
     pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -1064,7 +1342,7 @@ impl DtactTcpStream {
             self.inner.as_raw_socket() as u32,
             u32::MAX,
             OpCode::Write,
-            buf.as_ptr() as *mut u8,
+            buf.as_ptr().cast_mut(),
             buf.len(),
             0,
             None,
@@ -1074,6 +1352,18 @@ impl DtactTcpStream {
         .await
     }
 
+    /// Connect to `addr`, returning a ready-to-use stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if socket creation, binding the ephemeral
+    /// local address `ConnectEx` requires, or the connect itself fails
+    /// (e.g. `ConnectionRefused`, `TimedOut`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called,
+    /// same as [`Self::from_std`].
     pub async fn connect(addr: SocketAddr) -> std::io::Result<Self> {
         let domain = match addr {
             SocketAddr::V4(_) => AF_INET,
@@ -1081,8 +1371,8 @@ impl DtactTcpStream {
         };
         let raw_socket = unsafe {
             WSASocketW(
-                domain as i32,
-                SOCK_STREAM as i32,
+                i32::from(domain),
+                SOCK_STREAM,
                 0,
                 std::ptr::null(),
                 0,
@@ -1102,7 +1392,7 @@ impl DtactTcpStream {
         let bind_res = unsafe {
             bind(
                 raw_socket,
-                &bind_addr as *const SOCKADDR_STORAGE as *const SOCKADDR,
+                (&raw const bind_addr).cast::<SOCKADDR>(),
                 bind_len,
             )
         };
@@ -1163,12 +1453,25 @@ impl DtactTcpStream {
     }
 }
 
+/// An async TCP listener backed by IOCP-issued `AcceptEx`.
 pub struct DtactTcpListener {
     inner: std::net::TcpListener,
     worker_idx: usize,
 }
 
 impl DtactTcpListener {
+    /// Wrap an existing `std::net::TcpListener`, switching it to
+    /// non-blocking and associating it with this worker's IOCP.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking` fails, or if
+    /// `CreateIoCompletionPort` fails to associate the socket.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
     pub fn from_std(listener: std::net::TcpListener) -> std::io::Result<Self> {
         listener.set_nonblocking(true)?;
         let socket = listener.as_raw_socket() as usize;
@@ -1184,6 +1487,14 @@ impl DtactTcpListener {
         })
     }
 
+    /// Accept an incoming connection, returning the new stream and the
+    /// peer's address.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `AcceptEx`/IOCP
+    /// completion reports one, or if a post-accept socket-option/address
+    /// query fails.
     pub async fn accept(&self) -> std::io::Result<(DtactTcpStream, SocketAddr)> {
         let listen_socket = self.inner.as_raw_socket() as usize;
         let fut = DtactIoFuture::new(
@@ -1208,7 +1519,7 @@ impl DtactTcpListener {
                 accept_socket,
                 SOL_SOCKET,
                 SO_UPDATE_ACCEPT_CONTEXT,
-                &listen_socket as *const usize as *const u8,
+                (&raw const listen_socket).cast::<u8>(),
                 std::mem::size_of::<usize>() as i32,
             );
         }
@@ -1221,12 +1532,203 @@ impl DtactTcpListener {
     }
 }
 
-fn socket_addr_to_win(addr: &SocketAddr) -> (SOCKADDR_STORAGE, i32) {
+// =========================================================================
+// HIGH-LEVEL API: DtactUdpSocket  (IOCP backend)
+// =========================================================================
+
+/// Async UDP socket driven by the IOCP backend.
+///
+/// Supports the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API shape. `send_to`/`recv_from` issue overlapped
+/// `WSASendTo`/`WSARecvFrom` ops; the connected `send`/`recv` reuse the same
+/// `WSASend`/`WSARecv` machinery as [`DtactTcpStream`].
+pub struct DtactUdpSocket {
+    inner: std::net::UdpSocket,
+    worker_idx: usize,
+}
+
+impl DtactUdpSocket {
+    /// Bind a new UDP socket to `addr` and register it with the driver.
+    ///
+    /// # Errors
+    /// Returns any error from binding the OS socket or associating it with
+    /// the IOCP completion port.
+    pub fn bind(addr: SocketAddr) -> impl Future<Output = std::io::Result<Self>> {
+        std::future::ready(std::net::UdpSocket::bind(addr).and_then(Self::from_std))
+    }
+
+    /// Register an existing (already-bound) `std::net::UdpSocket`, taking
+    /// ownership and associating it with the IOCP completion port.
+    ///
+    /// # Errors
+    /// Returns any error from switching to non-blocking mode or the
+    /// `CreateIoCompletionPort` association.
+    ///
+    /// # Panics
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    pub fn from_std(socket: std::net::UdpSocket) -> std::io::Result<Self> {
+        socket.set_nonblocking(true)?;
+        let raw = socket.as_raw_socket() as usize;
+        let worker_idx = pick_worker(raw);
+        let state = &WORKERS.get().unwrap()[worker_idx];
+        let res = unsafe { CreateIoCompletionPort(raw as HANDLE, state.iocp, raw, 0) };
+        if res.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            inner: socket,
+            worker_idx,
+        })
+    }
+
+    /// The local address this socket is bound to.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `getsockname` call.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Send `buf` as a single datagram to `target`, returning the number of
+    /// bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `WSASendTo`.
+    pub async fn send_to(&self, buf: &[u8], target: SocketAddr) -> std::io::Result<usize> {
+        let (win_addr, win_len) = socket_addr_to_win(&target);
+        DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_socket() as u32,
+            u32::MAX,
+            OpCode::SendTo,
+            buf.as_ptr().cast_mut(),
+            buf.len(),
+            0,
+            Some(win_addr),
+            win_len,
+            None,
+        )
+        .await
+    }
+
+    /// Receive a single datagram into `buf`, returning the byte count and the
+    /// peer address it came from.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `WSARecvFrom`.
+    pub async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+        // These live in this async fn's frame, which stays pinned across the
+        // await below, so the raw pointers handed to the op remain valid
+        // until the OS fills them on completion.
+        let mut from: SOCKADDR_STORAGE = unsafe { std::mem::zeroed() };
+        let mut from_len: i32 = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+
+        let mut fut = DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_socket() as u32,
+            u32::MAX,
+            OpCode::RecvFrom,
+            buf.as_mut_ptr(),
+            buf.len(),
+            0,
+            None,
+            0,
+            None,
+        );
+        fut.from_ptr = &raw mut from;
+        fut.from_len_ptr = &raw mut from_len;
+        let n = fut.await?;
+        Ok((n, win_to_socket_addr(&from)))
+    }
+
+    /// Connect this socket to `addr` so [`send`](Self::send)/[`recv`](Self::recv)
+    /// can omit the peer address. UDP `connect` is a local operation (it just
+    /// records the default peer), so this completes without a round trip.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `connect`.
+    pub fn connect(&self, addr: SocketAddr) -> impl Future<Output = std::io::Result<()>> {
+        std::future::ready(self.inner.connect(addr))
+    }
+
+    /// Send `buf` to the connected peer (see [`connect`](Self::connect)),
+    /// returning the number of bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `WSASend`.
+    pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
+        DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_socket() as u32,
+            u32::MAX,
+            OpCode::Write,
+            buf.as_ptr().cast_mut(),
+            buf.len(),
+            0,
+            None,
+            0,
+            None,
+        )
+        .await
+    }
+
+    /// Receive a datagram from the connected peer into `buf`, returning the
+    /// byte count.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `WSARecv`.
+    pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_socket() as u32,
+            u32::MAX,
+            OpCode::Read,
+            buf.as_mut_ptr(),
+            buf.len(),
+            0,
+            None,
+            0,
+            None,
+        )
+        .await
+    }
+}
+
+/// Parse a `SOCKADDR_STORAGE` (filled by `WSARecvFrom`) into a
+/// `std::net::SocketAddr`.
+fn win_to_socket_addr(storage: &SOCKADDR_STORAGE) -> SocketAddr {
+    if storage.ss_family == AF_INET {
+        // SAFETY: family checked to be AF_INET.
+        let sin = unsafe { &*(std::ptr::from_ref(storage).cast::<SOCKADDR_IN>()) };
+        // `S_addr` is stored in network byte order as a native `u32`; its
+        // native-endian bytes are the address octets in order.
+        let octets = unsafe { sin.sin_addr.S_un.S_addr }.to_ne_bytes();
+        let ip = std::net::Ipv4Addr::from(octets);
+        let port = u16::from_be(sin.sin_port);
+        SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
+    } else {
+        // SAFETY: any non-AF_INET storage here is AF_INET6.
+        let sin6 = unsafe { &*(std::ptr::from_ref(storage).cast::<SOCKADDR_IN6>()) };
+        let ip = std::net::Ipv6Addr::from(unsafe { sin6.sin6_addr.u.Byte });
+        let port = u16::from_be(sin6.sin6_port);
+        let scope = unsafe { sin6.Anonymous.sin6_scope_id };
+        SocketAddr::V6(std::net::SocketAddrV6::new(
+            ip,
+            port,
+            sin6.sin6_flowinfo,
+            scope,
+        ))
+    }
+}
+
+const fn socket_addr_to_win(addr: &SocketAddr) -> (SOCKADDR_STORAGE, i32) {
     let mut storage: SOCKADDR_STORAGE = unsafe { std::mem::zeroed() };
     let len = match addr {
         SocketAddr::V4(a) => {
             let sin = SOCKADDR_IN {
-                sin_family: AF_INET as u16,
+                sin_family: AF_INET,
                 sin_port: a.port().to_be(),
                 sin_addr: IN_ADDR {
                     S_un: IN_ADDR_0 {
@@ -1237,8 +1739,8 @@ fn socket_addr_to_win(addr: &SocketAddr) -> (SOCKADDR_STORAGE, i32) {
             };
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &sin as *const _ as *const u8,
-                    &mut storage as *mut _ as *mut u8,
+                    (&raw const sin).cast::<u8>(),
+                    (&raw mut storage).cast::<u8>(),
                     std::mem::size_of_val(&sin),
                 );
             }
@@ -1246,7 +1748,7 @@ fn socket_addr_to_win(addr: &SocketAddr) -> (SOCKADDR_STORAGE, i32) {
         }
         SocketAddr::V6(a) => {
             let sin6 = SOCKADDR_IN6 {
-                sin6_family: AF_INET6 as u16,
+                sin6_family: AF_INET6,
                 sin6_port: a.port().to_be(),
                 sin6_flowinfo: a.flowinfo(),
                 sin6_addr: IN6_ADDR {
@@ -1260,8 +1762,8 @@ fn socket_addr_to_win(addr: &SocketAddr) -> (SOCKADDR_STORAGE, i32) {
             };
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &sin6 as *const _ as *const u8,
-                    &mut storage as *mut _ as *mut u8,
+                    (&raw const sin6).cast::<u8>(),
+                    (&raw mut storage).cast::<u8>(),
                     std::mem::size_of_val(&sin6),
                 );
             }

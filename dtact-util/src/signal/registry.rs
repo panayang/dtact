@@ -45,7 +45,7 @@ pub struct ListenerState {
 }
 
 impl ListenerState {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             pending: AtomicUsize::new(0),
             waker: AtomicWakerSlot::new(),
@@ -58,6 +58,7 @@ impl ListenerState {
     /// signal handler context, so this is free to do normal atomic work
     /// (still avoids allocation/locking regardless, out of habit and
     /// because the delivery path is shared code either way).
+    #[inline]
     pub fn deliver(&self) {
         if self.dead.load(Ordering::Acquire) {
             return;
@@ -104,14 +105,19 @@ pub struct ListenerRegistry {
 }
 
 impl ListenerRegistry {
-    pub const fn new() -> Self {
-        // `AtomicPtr::new(null)` isn't `Copy`-array-initializable via
-        // `[x; N]` in a const fn without `Default`/repeat tricks pre-1.90
-        // arrays-of-non-Copy support; this crate targets 1.90+, but keep
-        // the explicit-array form for clarity regardless.
-        const NULL: AtomicPtr<ListenerState> = AtomicPtr::new(std::ptr::null_mut());
+    /// An empty registry with no listeners.
+    #[must_use]
+    pub fn new() -> Self {
+        // A `const NULL: AtomicPtr<_> = ...; [NULL; N]` repeat-array
+        // would be a "const item with interior mutability" (clippy
+        // rightly flags this: a `const` gets re-evaluated at each use
+        // site rather than sharing storage, which is a correctness trap
+        // for interior-mutable types even though it happens to be fine
+        // for a repeat-array literal). `std::array::from_fn` builds each
+        // element from a fresh call instead, sidestepping the const
+        // entirely.
         Self {
-            slots: [NULL; MAX_LISTENERS],
+            slots: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
             len: AtomicUsize::new(0),
         }
     }
@@ -127,7 +133,7 @@ impl ListenerRegistry {
             idx < MAX_LISTENERS,
             "dtact-signal: too many concurrent listeners for one signal kind (max {MAX_LISTENERS})"
         );
-        let ptr = Arc::into_raw(Arc::clone(&state)) as *mut ListenerState;
+        let ptr = Arc::into_raw(Arc::clone(&state)).cast_mut();
         self.slots[idx].store(ptr, Ordering::Release);
         state
     }

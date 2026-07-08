@@ -19,7 +19,10 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{FALSE, TRUE};
 use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
 
-type BOOL = i32;
+// Named `Bool` (not `BOOL`) purely to satisfy `clippy::upper_case_acronyms`
+// — this is still the Win32 `BOOL` (`i32`) ABI type, just spelled with
+// Rust naming conventions rather than the Win32 SDK's.
+type Bool = i32;
 
 static CTRLC: OnceLock<ListenerRegistry> = OnceLock::new();
 static CTRLBREAK: OnceLock<ListenerRegistry> = OnceLock::new();
@@ -33,7 +36,7 @@ fn ctrlbreak_registry() -> &'static ListenerRegistry {
     CTRLBREAK.get_or_init(ListenerRegistry::new)
 }
 
-unsafe extern "system" fn handler(ctrl_type: u32) -> BOOL {
+unsafe extern "system" fn handler(ctrl_type: u32) -> Bool {
     match ctrl_type {
         CTRL_C_EVENT => {
             ctrlc_registry().broadcast();
@@ -71,15 +74,20 @@ impl DtactSignalStream {
         }
     }
 
+    /// Wait for the next delivery of this control event.
     pub async fn recv(&self) {
-        std::future::poll_fn(|cx| self.state.poll_recv(cx)).await
+        std::future::poll_fn(|cx| self.state.poll_recv(cx)).await;
     }
 }
 
+/// Subscribe to Ctrl+C (`CTRL_C_EVENT`) deliveries.
+#[must_use]
 pub fn ctrl_c() -> DtactSignalStream {
     DtactSignalStream::from_registry(ctrlc_registry())
 }
 
+/// Subscribe to Ctrl+Break (`CTRL_BREAK_EVENT`) deliveries.
+#[must_use]
 pub fn ctrl_break() -> DtactSignalStream {
     DtactSignalStream::from_registry(ctrlbreak_registry())
 }

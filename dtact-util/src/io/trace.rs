@@ -8,7 +8,7 @@
 //! trying to measure (every syscall reads as ~1-2ms regardless of
 //! backend). This gives three in-process, monotonic-clock checkpoints per
 //! op so the total latency can be split into "submit -> kernel completion
-//! observed by io-worker" (io_uring/IOCP/kernel round trip) vs "kernel
+//! observed by io-worker" (`io_uring/IOCP/kernel` round trip) vs "kernel
 //! completion -> fiber re-polls and observes it" (wake propagation /
 //! scheduler rescheduling), without any external tracer in the loop.
 

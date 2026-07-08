@@ -105,6 +105,40 @@ mod native_tests {
     }
 
     #[test]
+    fn spawn_nonexistent_binary_errors() {
+        dtact_util::process::init(2);
+        let mut cmd = DtactCommand::new("this-binary-definitely-does-not-exist-xyz123");
+        let result = cmd.spawn();
+        assert!(
+            result.is_err(),
+            "spawning a nonexistent program must return Err, not panic or hang"
+        );
+        if let Err(e) = result {
+            assert_eq!(
+                e.kind(),
+                std::io::ErrorKind::NotFound,
+                "expected NotFound, got {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonzero_exit_code_is_reported() {
+        dtact_util::process::init(2);
+        let (prog, args) = shell_cmd("exit 3");
+        let mut cmd = DtactCommand::new(prog);
+        cmd.args(args);
+        let child = cmd.spawn().unwrap();
+        let status = block_on(child.wait()).unwrap();
+        assert!(!status.success());
+        assert_eq!(
+            status.code(),
+            Some(3),
+            "expected the child's exact exit code to be reported"
+        );
+    }
+
+    #[test]
     fn kill_terminates_a_long_running_child() {
         dtact_util::process::init(2);
         #[cfg(unix)]

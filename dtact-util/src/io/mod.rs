@@ -1,8 +1,10 @@
-//! I/O primitives: lock-free native backend (io_uring on Linux, IOCP on
-//! Windows, kqueue via mio on macOS/BSD) plus a thin tokio-backed
-//! alternative. Split out of what used to be a single monolithic
-//! `lib.rs` — module boundaries mirror the original `native_impl` /
-//! `windows_impl` / `tokio_impl` blocks.
+//! I/O primitives: TCP listener/stream, native and `tokio`-backed.
+//!
+//! The native backend is lock-free (`io_uring` on Linux, IOCP on Windows,
+//! kqueue via mio on macOS/BSD) plus a thin tokio-backed alternative.
+//! Split out of what used to be a single monolithic `lib.rs` — module
+//! boundaries mirror the original `native_impl` / `windows_impl` /
+//! `tokio_impl` blocks.
 
 use std::future::Future;
 use std::pin::Pin;

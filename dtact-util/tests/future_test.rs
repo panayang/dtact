@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[test]
 fn test_io_future_complex() {
     // Initialize dtact_io runtime
-    init_runtime(2, 1024, 4096, &[], 128);
+    init_runtime(2, 128, 1024, 4096, &[]);
 
     // Helper inside the test to convert SocketAddr to libc sockaddr
     fn to_libc_addr(addr: std::net::SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {

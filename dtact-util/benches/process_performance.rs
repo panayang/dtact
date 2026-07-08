@@ -1,5 +1,10 @@
-//! Criterion bench for the dtact-process backends: spawn+wait latency of
-//! a trivial child process, native vs tokio.
+//! Criterion bench for dtact-process vs tokio::process: spawn+wait latency
+//! of a trivial child process, run side by side in the same report so the
+//! numbers are directly comparable (not one-or-the-other depending on
+//! which feature happened to be enabled).
+//!
+//! Run:  cargo bench --bench process_performance
+//! Test: cargo bench --bench process_performance -- --test
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -12,7 +17,6 @@ fn shell_cmd() -> (&'static str, Vec<&'static str>) {
     ("sh", vec!["-c", "exit 0"])
 }
 
-#[cfg(feature = "native")]
 fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     use std::pin::pin;
     use std::sync::Arc;
@@ -33,13 +37,14 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     }
 }
 
-#[cfg(feature = "native")]
-fn bench_process_native(c: &mut Criterion) {
-    use dtact_util::process::DtactCommand;
+fn bench_process_spawn_wait(c: &mut Criterion) {
     dtact_util::process::init(4);
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
     let (prog, args) = shell_cmd();
-    let mut group = c.benchmark_group("dtact_process_spawn_wait");
-    group.bench_function("native", |b| {
+    let mut group = c.benchmark_group("process_spawn_wait");
+
+    group.bench_function("dtact-process", |b| {
+        use dtact_util::process::DtactCommand;
         b.iter(|| {
             let mut cmd = DtactCommand::new(prog);
             cmd.args(args.iter().copied());
@@ -47,33 +52,21 @@ fn bench_process_native(c: &mut Criterion) {
             block_on(child.wait()).unwrap();
         });
     });
-    group.finish();
-}
 
-#[cfg(all(feature = "tokio", not(feature = "native")))]
-fn bench_process_tokio(c: &mut Criterion) {
-    use dtact_util::process::DtactCommand;
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let (prog, args) = shell_cmd();
-    let mut group = c.benchmark_group("dtact_process_spawn_wait");
     group.bench_function("tokio", |b| {
         b.iter(|| {
-            rt.block_on(async {
-                let mut cmd = DtactCommand::new(prog);
-                cmd.args(args.iter().copied());
-                let mut child = cmd.spawn().unwrap();
+            tokio_rt.block_on(async {
+                let mut child = tokio::process::Command::new(prog)
+                    .args(args.iter().copied())
+                    .spawn()
+                    .unwrap();
                 child.wait().await.unwrap();
             });
         });
     });
+
     group.finish();
 }
 
-#[cfg(feature = "native")]
-criterion_group!(benches, bench_process_native);
-#[cfg(all(feature = "tokio", not(feature = "native")))]
-criterion_group!(benches, bench_process_tokio);
-#[cfg(not(any(feature = "native", feature = "tokio")))]
-criterion_group!(benches,);
-
+criterion_group!(benches, bench_process_spawn_wait);
 criterion_main!(benches);

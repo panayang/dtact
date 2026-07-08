@@ -5,7 +5,7 @@
 //! with a completion port, so a read/write is a single async syscall whose
 //! completion is delivered straight into the caller-supplied buffer — no
 //! hop through a blocking worker thread, no extra copy. This is the
-//! Windows analogue of the io_uring path on Linux (`uring_linux.rs`).
+//! Windows analogue of the `io_uring` path on Linux (`uring_linux.rs`).
 //!
 //! One process-wide IOCP handle + one dedicated worker thread drains
 //! `GetQueuedCompletionStatusEx` and wakes the waiting future per
@@ -98,7 +98,7 @@ struct OpState {
 }
 
 impl OpState {
-    fn fresh() -> Self {
+    const fn fresh() -> Self {
         Self {
             overlapped: unsafe { std::mem::zeroed() },
             result: AtomicI64::new(PENDING),
@@ -106,6 +106,24 @@ impl OpState {
         }
     }
 }
+
+// SAFETY: `overlapped` embeds an `OVERLAPPED` (raw pointers inside, from
+// windows-sys, e.g. its `hEvent` field) purely as opaque kernel-visible
+// scratch memory: it is written once at submission time on the submitting
+// thread, then only ever touched by the OS kernel and by the single IOCP
+// worker thread reading it back via `GetQueuedCompletionStatusEx` — Rust
+// code never dereferences the pointers embedded inside it. The fields
+// Rust code actually reads/writes concurrently (`result`, `waker`) are
+// already atomics, so no additional synchronization is needed for those
+// either. This makes `OpState` sound to hand across threads, which in
+// turn is what makes `IoOp` (which owns one via `Slot` below) itself
+// `Send`, so its future can be `.await`-ed from a multi-threaded executor
+// (required for the blocking FFI layer to `block_on` it from any thread).
+unsafe impl Send for OpState {}
+// SAFETY: same reasoning as `Send` above — all cross-thread-visible state
+// is atomics; nothing borrows `&OpState` and mutates the non-atomic
+// `overlapped` field concurrently with another thread's access.
+unsafe impl Sync for OpState {}
 
 // =============================================================================
 // Preallocated slot pool — see module doc for the reuse/leak-on-cancel policy.
@@ -115,14 +133,6 @@ struct SlotPool {
     slots: Box<[OpState]>,
     free: TreiberStack,
 }
-// SAFETY: `OpState` embeds an `OVERLAPPED` (raw pointers inside, from
-// windows-sys) purely as opaque kernel-visible scratch memory — nothing
-// here ever dereferences those inner pointers from Rust; the OS treats
-// the struct as a value, not a "pointer to shared data" that would need
-// synchronization. `result`/`waker` (the fields Rust code actually reads
-// and writes) are already atomics.
-unsafe impl Send for SlotPool {}
-unsafe impl Sync for SlotPool {}
 
 static RING_DEPTH: OnceLock<usize> = OnceLock::new();
 static SLOT_POOL: OnceLock<SlotPool> = OnceLock::new();
@@ -145,12 +155,14 @@ fn slot_pool() -> &'static SlotPool {
     })
 }
 
-/// Configure and eagerly start the fs-IOCP subsystem: `ring_depth` sized
-/// preallocated op slots (see module doc) plus the completion-port worker
-/// thread. `workers`/`buffer_pool_size`/`chunk_size`/`pin_cpus` are
-/// accepted for signature parity with the other native backends'
-/// `init_fs` (and with `crate::io::native::init_runtime`) but unused here:
-/// IOCP dispatch is single-worker-thread by design (one port, one
+/// Configure and eagerly start the fs-IOCP subsystem.
+///
+/// `ring_depth` sized preallocated op slots (see module doc) plus the
+/// completion-port worker thread. `workers`/`buffer_pool_size`/
+/// `chunk_size`/`pin_cpus` are accepted for signature parity with the
+/// other native backends' `init_fs` (and with
+/// `crate::io::native::init_runtime`) but unused here: IOCP dispatch is
+/// single-worker-thread by design (one port, one
 /// `GetQueuedCompletionStatusEx` loop), and this backend has no
 /// caller-facing buffer pool yet (reads/writes still take an owned
 /// `Vec<u8>` per call — see the `fs` module doc for why that wasn't
@@ -172,11 +184,11 @@ pub fn init(workers: usize) {
     init_fs(workers, 256, 0, 0, &[]);
 }
 
-fn encode_ok(n: usize) -> i64 {
+const fn encode_ok(n: usize) -> i64 {
     n as i64
 }
 
-fn encode_err(win32_code: u32) -> i64 {
+const fn encode_err(win32_code: u32) -> i64 {
     -(win32_code as i64)
 }
 
@@ -198,7 +210,7 @@ fn worker_loop() {
                 iocp,
                 entries.as_mut_ptr(),
                 entries.len() as u32,
-                &mut removed,
+                &raw mut removed,
                 u32::MAX,
                 0,
             )
@@ -210,7 +222,7 @@ fn worker_loop() {
             if entry.lpCompletionKey == WAKE_KEY {
                 continue;
             }
-            let op_ptr = entry.lpOverlapped as *mut OpState;
+            let op_ptr = entry.lpOverlapped.cast::<OpState>();
             if op_ptr.is_null() {
                 continue;
             }
@@ -236,14 +248,15 @@ enum Slot {
 
 fn acquire_slot() -> Slot {
     let pool = slot_pool();
-    if let Some(idx) = pool.free.pop() {
-        pool.slots[idx as usize]
-            .result
-            .store(PENDING, Ordering::Relaxed);
-        Slot::Pooled(idx)
-    } else {
-        Slot::Heap(Box::new(OpState::fresh()))
-    }
+    pool.free.pop().map_or_else(
+        || Slot::Heap(Box::new(OpState::fresh())),
+        |idx| {
+            pool.slots[idx as usize]
+                .result
+                .store(PENDING, Ordering::Relaxed);
+            Slot::Pooled(idx)
+        },
+    )
 }
 
 struct IoOp {
@@ -268,10 +281,10 @@ impl IoOp {
             // reuse policy in the module doc), so a mutable raw view of
             // the array element it owns is sound despite going through a
             // shared `&SlotPool` reference.
-            Slot::Pooled(idx) => {
-                (&slot_pool().slots[*idx as usize] as *const OpState as *mut OpState).cast()
-            }
-            Slot::Heap(b) => (b.as_ref() as *const OpState as *mut OpState).cast(),
+            Slot::Pooled(idx) => (&raw const slot_pool().slots[*idx as usize])
+                .cast_mut()
+                .cast(),
+            Slot::Heap(b) => std::ptr::from_ref::<OpState>(b.as_ref()).cast_mut().cast(),
         }
     }
 }
@@ -409,15 +422,54 @@ fn open_impl(path: &Path, disposition: u32, access: u32) -> io::Result<DtactFile
     })
 }
 
+fn open_with_impl(path: &Path, opts: &std::fs::OpenOptions) -> io::Result<DtactFile> {
+    use std::os::windows::io::IntoRawHandle;
+    let file = opts.open(path)?;
+    let handle = file.into_raw_handle() as HANDLE;
+    let iocp = port();
+    let assoc = unsafe { CreateIoCompletionPort(handle, iocp, FILE_KEY, 0) };
+    if assoc.is_null() {
+        let e = io::Error::last_os_error();
+        unsafe { CloseHandle(handle) };
+        return Err(e);
+    }
+    Ok(DtactFile {
+        handle,
+        cursor: AtomicI64::new(0),
+    })
+}
+
 impl DtactFile {
-    pub async fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
+    /// Open an existing file for reading.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::ErrorKind::NotFound` if `path` doesn't exist,
+    /// `PermissionDenied` if it exists but isn't readable by the current
+    /// user, or another `io::Error` from `CreateFileW`/associating the
+    /// handle with the IOCP for any other OS-level failure.
+    pub fn open(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<Self>> {
         let path = path.into();
-        open_impl(&path, OPEN_EXISTING, GENERIC_READ)
+        std::future::ready(open_impl(&path, OPEN_EXISTING, GENERIC_READ))
     }
 
-    pub async fn create(path: impl Into<PathBuf>) -> io::Result<Self> {
+    /// Create a new file (or truncate an existing one) for reading and
+    /// writing.
+    ///
+    /// # Errors
+    ///
+    /// Returns `io::ErrorKind::PermissionDenied` if the containing
+    /// directory isn't writable, `NotFound` if the containing directory
+    /// doesn't exist, or another `io::Error` from `CreateFileW`/
+    /// associating the handle with the IOCP for any other OS-level
+    /// failure.
+    pub fn create(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<Self>> {
         let path = path.into();
-        open_impl(&path, CREATE_ALWAYS, GENERIC_READ | GENERIC_WRITE)
+        std::future::ready(open_impl(
+            &path,
+            CREATE_ALWAYS,
+            GENERIC_READ | GENERIC_WRITE,
+        ))
     }
 
     /// Generic open honoring an arbitrary [`std::fs::OpenOptions`]. Rather
@@ -425,29 +477,31 @@ impl DtactFile {
     /// has no public getters), this delegates to `opts.open()` itself with
     /// `FILE_FLAG_OVERLAPPED` injected via `OpenOptionsExt::custom_flags`,
     /// then takes ownership of the resulting overlapped-capable handle.
-    pub async fn open_with(
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever `opts.open(path)` returns (e.g. `NotFound`,
+    /// `PermissionDenied`, `AlreadyExists` depending on how `opts` is
+    /// configured), or an `io::Error` if associating the resulting handle
+    /// with the IOCP fails.
+    pub fn open_with(
         path: impl Into<PathBuf>,
         mut opts: std::fs::OpenOptions,
-    ) -> io::Result<Self> {
+    ) -> impl Future<Output = io::Result<Self>> {
         use std::os::windows::fs::OpenOptionsExt;
-        use std::os::windows::io::IntoRawHandle;
         opts.custom_flags(FILE_FLAG_OVERLAPPED);
         let path = path.into();
-        let file = opts.open(&path)?;
-        let handle = file.into_raw_handle() as HANDLE;
-        let iocp = port();
-        let assoc = unsafe { CreateIoCompletionPort(handle, iocp, FILE_KEY, 0) };
-        if assoc.is_null() {
-            let e = io::Error::last_os_error();
-            unsafe { CloseHandle(handle) };
-            return Err(e);
-        }
-        Ok(Self {
-            handle,
-            cursor: AtomicI64::new(0),
-        })
+        std::future::ready(open_with_impl(&path, &opts))
     }
 
+    /// Read into `buf` at the current shared cursor, advancing it by the
+    /// number of bytes read, and hand `buf` back for reuse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `ReadFile`/IOCP completion
+    /// reports one (e.g. the handle was closed concurrently); `Ok((0,
+    /// buf))` signals EOF, matching `ReadFile`'s own convention.
     pub async fn read(&self, mut buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
         let n = issue_read(self.handle, &mut buf, offset).await?;
@@ -455,6 +509,14 @@ impl DtactFile {
         Ok((n, buf))
     }
 
+    /// Write `buf` at the current shared cursor, advancing it by the
+    /// number of bytes written, and hand `buf` back for reuse.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `WriteFile`/IOCP
+    /// completion reports one (e.g. disk full, handle closed
+    /// concurrently).
     pub async fn write(&self, buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
         let n = issue_write(self.handle, &buf, offset).await?;
@@ -465,17 +527,38 @@ impl DtactFile {
     /// Positional read: does not move the shared cursor, safe to call
     /// concurrently with other `read_at`/`write_at` calls on the same handle
     /// (each issues its own `OVERLAPPED` with an explicit offset).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::read`].
     pub async fn read_at(&self, mut buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
         let n = issue_read(self.handle, &mut buf, offset).await?;
         Ok((n, buf))
     }
 
+    /// Positional write: does not move the shared cursor, safe to call
+    /// concurrently with other `read_at`/`write_at` calls on the same
+    /// handle.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::write`].
     pub async fn write_at(&self, buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
         let n = issue_write(self.handle, &buf, offset).await?;
         Ok((n, buf))
     }
 
-    pub async fn sync_all(&self) -> io::Result<()> {
+    /// Flush the file's buffers to disk (`FlushFileBuffers`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `FlushFileBuffers` fails (e.g. the
+    /// underlying device was removed).
+    pub fn sync_all(&self) -> impl Future<Output = io::Result<()>> + '_ {
+        std::future::ready(self.sync_all_impl())
+    }
+
+    fn sync_all_impl(&self) -> io::Result<()> {
         let ok = unsafe { FlushFileBuffers(self.handle) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
@@ -483,30 +566,70 @@ impl DtactFile {
         Ok(())
     }
 
-    pub async fn metadata(&self) -> io::Result<std::fs::Metadata> {
-        // Win32 has no handle->std::fs::Metadata conversion without going
-        // through a path or a duplicated std::fs::File; borrow the raw
-        // handle briefly via ManuallyDrop so we don't double-close it.
+    /// Query file metadata via a temporarily-borrowed `std::fs::File`
+    /// view of this handle (never closes it — see the `ManuallyDrop`
+    /// guard in the implementation).
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever `std::fs::File::metadata` returns for the
+    /// underlying handle.
+    pub fn metadata(&self) -> impl Future<Output = io::Result<std::fs::Metadata>> + '_ {
+        std::future::ready(self.metadata_impl())
+    }
+
+    // Win32 has no handle->std::fs::Metadata conversion without going
+    // through a path or a duplicated std::fs::File; borrow the raw
+    // handle briefly via ManuallyDrop so we don't double-close it.
+    fn metadata_impl(&self) -> io::Result<std::fs::Metadata> {
         use std::os::windows::io::{AsRawHandle, FromRawHandle};
-        let file = unsafe { std::fs::File::from_raw_handle(self.handle as *mut _) };
+        let file = unsafe { std::fs::File::from_raw_handle(self.handle.cast()) };
         let file = std::mem::ManuallyDrop::new(file);
         let meta = file.metadata();
         let _ = file.as_raw_handle(); // keep handle alive/used until here
         meta
     }
 
-    pub async fn close(self) -> io::Result<()> {
+    /// Close the file. A no-op beyond documenting intent — `Drop` already
+    /// performs the actual `CloseHandle`, so this exists only so callers
+    /// can spell out an explicit close point in async code.
+    ///
+    /// # Errors
+    ///
+    /// Never actually fails; returns `Ok(())` unconditionally. The
+    /// `Result` return type exists for API parity with the other
+    /// backends' `close`, in case a future revision needs to surface a
+    /// real close-time error.
+    pub fn close(self) -> impl Future<Output = io::Result<()>> {
         // Drop performs the actual CloseHandle.
-        Ok(())
+        std::future::ready(Ok(()))
     }
 
+    /// The file's current size in bytes (`GetFileSizeEx`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `GetFileSizeEx` fails (e.g. the handle
+    /// was invalidated).
     pub fn len(&self) -> io::Result<u64> {
         let mut size: i64 = 0;
-        let ok = unsafe { GetFileSizeEx(self.handle, &mut size) };
+        let ok = unsafe { GetFileSizeEx(self.handle, &raw mut size) };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(size as u64)
+    }
+
+    /// Whether the file is currently zero-length. Queries the live file
+    /// size via [`Self::len`] rather than caching it, so this can return
+    /// different answers across calls if the file is being written
+    /// concurrently.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::len`].
+    pub fn is_empty(&self) -> io::Result<bool> {
+        self.len().map(|n| n == 0)
     }
 }
 
@@ -518,22 +641,53 @@ impl Drop for DtactFile {
     }
 }
 
-pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
+/// Query a path's metadata without opening a [`DtactFile`] handle.
+///
+/// # Errors
+///
+/// Returns `io::ErrorKind::NotFound` if `path` doesn't exist,
+/// `PermissionDenied` if a containing directory can't be traversed, or
+/// another `io::Error` from `std::fs::metadata`.
+pub fn metadata(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<std::fs::Metadata>> {
     let path = path.into();
-    std::fs::metadata(&path)
+    std::future::ready(std::fs::metadata(&path))
 }
 
-pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<std::fs::DirEntry>> {
+/// List a directory's entries.
+///
+/// # Errors
+///
+/// Returns `io::ErrorKind::NotFound` if `path` doesn't exist, `NotADirectory`
+/// if it isn't a directory, `PermissionDenied` if it can't be read, or
+/// propagates any per-entry `io::Error` encountered while collecting.
+pub fn read_dir(
+    path: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<Vec<std::fs::DirEntry>>> {
     let path: PathBuf = path.into();
-    std::fs::read_dir(&path)?.collect()
+    std::future::ready(std::fs::read_dir(&path).and_then(Iterator::collect))
 }
 
-pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
+/// Recursively create a directory and all missing parent directories.
+///
+/// # Errors
+///
+/// Returns `io::ErrorKind::PermissionDenied` if any component can't be
+/// created, or `AlreadyExists`-adjacent errors if a path component exists
+/// as a non-directory — see `std::fs::create_dir_all`'s own documented
+/// error conditions, which this delegates to directly.
+pub fn create_dir_all(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<()>> {
     let path = path.into();
-    std::fs::create_dir_all(&path)
+    std::future::ready(std::fs::create_dir_all(&path))
 }
 
-pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
+/// Remove a file.
+///
+/// # Errors
+///
+/// Returns `io::ErrorKind::NotFound` if `path` doesn't exist,
+/// `PermissionDenied` if it can't be removed, or another `io::Error` from
+/// `std::fs::remove_file`.
+pub fn remove_file(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<()>> {
     let path = path.into();
-    std::fs::remove_file(&path)
+    std::future::ready(std::fs::remove_file(&path))
 }

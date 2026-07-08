@@ -57,7 +57,7 @@ struct SleepState {
 struct Node {
     state: Arc<SleepState>,
     /// Remaining full rotations before this node is eligible to fire.
-    /// Decremented with `Relaxed` fetch_sub — only ever touched by the
+    /// Decremented with `Relaxed` `fetch_sub` — only ever touched by the
     /// single wheel worker thread, so no synchronization is needed beyond
     /// what already orders bucket drains (each tick fully drains and
     /// rebuilds its bucket via `MpmcStack::drain_all`/`push`).
@@ -91,14 +91,14 @@ fn wheel() -> &'static Arc<Wheel> {
         let worker_wheel = Arc::clone(&w);
         let handle = std::thread::Builder::new()
             .name("dtact-timer-wheel".into())
-            .spawn(move || worker_loop(worker_wheel))
+            .spawn(move || worker_loop(&worker_wheel))
             .expect("failed to spawn dtact-timer-wheel worker thread");
         let _ = w.worker.set(handle.thread().clone());
         w
     })
 }
 
-fn worker_loop(w: Arc<Wheel>) {
+fn worker_loop(w: &Arc<Wheel>) {
     loop {
         // Idle-park: no pending timers anywhere, avoid ticking for nothing.
         // `park_timeout` also guards against a lost wakeup race between
@@ -149,19 +149,31 @@ fn worker_loop(w: Arc<Wheel>) {
 }
 
 fn register(deadline: Instant) -> Arc<SleepState> {
+    let now = Instant::now();
+
+    // A deadline that's already passed (including `Duration::ZERO`
+    // sleeps) must fire immediately rather than going through the wheel:
+    // inserting into the *current* tick's bucket would place it in a slot
+    // the worker just finished draining, which then wouldn't be revisited
+    // for a full rotation (`WHEEL_SIZE` ticks, ~256ms) — a "zero-duration"
+    // sleep would then take up to a quarter-second instead of resolving
+    // on the very next poll. Short-circuiting here also avoids waking the
+    // wheel worker thread at all for a no-op sleep.
+    if deadline <= now {
+        return Arc::new(SleepState {
+            status: AtomicI32::new(DONE),
+            waker: AtomicWakerSlot::new(),
+        });
+    }
+
     let w = wheel();
     let state = Arc::new(SleepState {
         status: AtomicI32::new(PENDING),
         waker: AtomicWakerSlot::new(),
     });
 
-    let now = Instant::now();
-    let ticks_from_now = if deadline <= now {
-        0u64
-    } else {
-        let remaining = deadline - now;
-        remaining.as_nanos().div_ceil(TICK.as_nanos()) as u64
-    };
+    let remaining = deadline - now;
+    let ticks_from_now = remaining.as_nanos().div_ceil(TICK.as_nanos()) as u64;
 
     let current_tick = w.current_tick.load(Ordering::Relaxed);
     let target_tick = current_tick + ticks_from_now;
@@ -188,10 +200,15 @@ pub struct DtactSleep {
 }
 
 impl DtactSleep {
+    /// Sleep for `duration` from now.
+    #[must_use]
     pub fn new(duration: Duration) -> Self {
         Self::until(Instant::now() + duration)
     }
 
+    /// Sleep until the given `deadline` (already-elapsed deadlines
+    /// resolve on the very next wheel tick).
+    #[must_use]
     pub fn until(deadline: Instant) -> Self {
         Self {
             state: register(deadline),
@@ -217,6 +234,7 @@ impl Future for DtactSleep {
 }
 
 /// Convenience free function mirroring `tokio::time::sleep`.
+#[must_use]
 pub fn sleep(duration: Duration) -> DtactSleep {
     DtactSleep::new(duration)
 }
@@ -229,6 +247,15 @@ pub struct DtactInterval {
 }
 
 impl DtactInterval {
+    /// Build an interval firing every `period`, starting one `period`
+    /// from now.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `period` is zero — a zero-length period has no sensible
+    /// tick rate and almost always indicates a caller bug (e.g. an
+    /// unintended default `Duration::ZERO`).
+    #[must_use]
     pub fn new(period: Duration) -> Self {
         assert!(
             period > Duration::ZERO,
@@ -257,6 +284,7 @@ impl DtactInterval {
 }
 
 /// Convenience free function mirroring `tokio::time::interval`.
+#[must_use]
 pub fn interval(period: Duration) -> DtactInterval {
     DtactInterval::new(period)
 }
@@ -286,6 +314,7 @@ pub struct DtactTimeout<F> {
 }
 
 impl<F> DtactTimeout<F> {
+    /// Wrap `inner`, racing it against a `duration`-long deadline.
     pub fn new(duration: Duration, inner: F) -> Self {
         Self {
             inner: Box::pin(inner),

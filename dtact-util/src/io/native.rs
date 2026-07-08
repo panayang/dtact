@@ -194,15 +194,35 @@ impl Drop for BufferSlice {
 // =========================================================================
 // 5. IO ENGINE WORKERS AND EVENTS DEFINITIONS
 // =========================================================================
+/// Which async operation a [`DtactIoFuture`] represents — mirrors the
+/// Windows backend's `OpCode` of the same name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
+    /// A socket read.
     Read,
+    /// A socket write.
     Write,
+    /// Accept a new connection on a listening socket.
     Accept,
+    /// Connect to a remote address.
     Connect,
+    /// Connectionless UDP send to an explicit peer. Carries a caller-owned
+    /// `msghdr` (see `DtactUdpSocket::send_to`); io_uring uses `SendMsg`,
+    /// the mio fallback uses `sendmsg(2)`.
+    SendTo,
+    /// Connectionless UDP receive recording the peer address. Carries a
+    /// caller-owned `msghdr`; io_uring uses `RecvMsg`, the mio fallback uses
+    /// `recvmsg(2)`.
+    RecvFrom,
 }
 
+/// A single io-worker request, submitted across an [`SpscQueue`] from a
+/// fiber's poll to the worker thread that owns the underlying reactor
+/// (io_uring ring or mio `Poll`). Not constructed directly by callers —
+/// built internally from a [`DtactIoFuture`]'s fields on first poll.
 pub enum IoRequest {
+    /// Read into `buf_ptr[..len]` at `offset` (or the current file
+    /// position for sockets, where `offset` is ignored).
     Read {
         fd: u32,
         direct_fd_idx: u32,
@@ -211,6 +231,7 @@ pub enum IoRequest {
         offset: i64,
         slot_idx: usize,
     },
+    /// Write `buf_ptr[..len]` at `offset`.
     Write {
         fd: u32,
         direct_fd_idx: u32,
@@ -219,11 +240,13 @@ pub enum IoRequest {
         offset: i64,
         slot_idx: usize,
     },
+    /// Accept a new connection on listening socket `fd`.
     Accept {
         fd: u32,
         direct_fd_idx: u32,
         slot_idx: usize,
     },
+    /// Connect socket `fd` to `addr`.
     Connect {
         fd: u32,
         direct_fd_idx: u32,
@@ -231,14 +254,29 @@ pub enum IoRequest {
         addr_len: libc::socklen_t,
         slot_idx: usize,
     },
-    RegisterFile {
-        fd: RawFd,
-        slot_idx: usize,
-    },
-    UnregisterFile {
+    /// Connectionless UDP send to an explicit peer.
+    SendTo {
+        fd: u32,
         direct_fd_idx: u32,
+        /// Caller-owned `msghdr` (see `DtactUdpSocket::send_to`), valid until
+        /// the op completes.
+        msg_ptr: *mut libc::msghdr,
         slot_idx: usize,
     },
+    /// Connectionless UDP receive, recording the peer address.
+    RecvFrom {
+        fd: u32,
+        direct_fd_idx: u32,
+        /// Caller-owned `msghdr` whose `msg_name` the kernel fills with the
+        /// sender's address; valid until the op completes.
+        msg_ptr: *mut libc::msghdr,
+        slot_idx: usize,
+    },
+    /// Register `fd` as an io_uring direct/fixed file, returning its
+    /// direct-fd index as the op's result.
+    RegisterFile { fd: RawFd, slot_idx: usize },
+    /// Release a previously-registered direct/fixed file.
+    UnregisterFile { direct_fd_idx: u32, slot_idx: usize },
 }
 
 /// Lock-free waker slot.
@@ -313,6 +351,10 @@ fn wake_next_waiting_fiber(state: &WorkerState) {
     }
 }
 
+/// Per-worker reactor state: the io_uring ring (Linux) or mio `Poll`
+/// (other Unix), its op-slot table, and the lock-free queues fibers use
+/// to submit/cancel requests. One of these exists per io-worker thread —
+/// see [`init_runtime`].
 pub struct WorkerState {
     #[cfg(target_os = "linux")]
     ring: std::cell::UnsafeCell<io_uring::IoUring>,
@@ -416,12 +458,25 @@ fn pick_direct_fd_count(desired_max: usize) -> usize {
 // =========================================================================
 // 6. RUNTIME INITIALIZATION
 // =========================================================================
+/// Start the native io reactor: `workers` io-worker threads (io_uring on
+/// Linux, kqueue/mio elsewhere), a `buffer_pool_size`-chunk arena sliced
+/// into `chunk_size`-byte buffers, a `ring_depth`-deep in-flight-op slot
+/// table per worker, and optional `pin_cpus` core affinity (index `i`
+/// pins worker `i`; a shorter/empty slice leaves the rest unpinned).
+///
+/// Idempotent: only the first call takes effect, later calls are no-ops
+/// (mirrors [`crate::fs::init_fs`]/[`crate::process::init_process`]).
+///
+/// Argument order — `(workers, ring_depth, buffer_pool_size, chunk_size,
+/// pin_cpus)` — matches every other native backend's five-knob init
+/// function in this crate; see the crate-level doc comment in `crate` for
+/// the full init-API shape this is part of.
 pub fn init_runtime(
     workers: usize,
+    ring_depth: u32,
     buffer_pool_size: usize,
     chunk_size: usize,
     pin_cpus: &[usize],
-    ring_depth: u32,
 ) {
     let config = GlobalConfig {
         workers,
@@ -590,6 +645,18 @@ pub fn init_runtime(
     }
 }
 
+/// Shorthand initialiser — `workers` io-worker threads with sane defaults
+/// (64 MiB buffer pool split into 4 KiB chunks, no CPU pinning, a 1024-deep
+/// per-worker op-slot ring). Equivalent to
+/// `init_runtime(workers, 1024, 65536, 4096, &[])`. Matches
+/// [`crate::fs::init`]/[`crate::process::init`]'s shape.
+pub fn init(workers: usize) {
+    init_runtime(workers, 1024, 65536, 4096, &[]);
+}
+
+/// Signal every io-worker thread to stop and unblock its reactor wait
+/// (`eventfd` on Linux, the `mio::Waker` elsewhere) so it can observe the
+/// shutdown flag and exit. Does not join the worker threads.
 pub fn shutdown_runtime() {
     SHUTDOWN.store(true, Ordering::Release);
     if let Some(workers) = WORKERS.get() {
@@ -898,6 +965,49 @@ fn submit_linux_request(state: &WorkerState, req: IoRequest) -> Result<(), &'sta
                 io_uring::opcode::Connect::new(io_uring::types::Fd(target_fd), addr_ptr, addr_len)
                     .build()
                     .user_data(slot_idx as u64);
+            if use_fixed {
+                s = s.flags(io_uring::squeue::Flags::FIXED_FILE);
+            }
+            s
+        }
+        IoRequest::SendTo {
+            fd,
+            direct_fd_idx,
+            msg_ptr,
+            slot_idx,
+        } => {
+            let use_fixed = direct_fd_idx != u32::MAX;
+            let target_fd = if use_fixed {
+                direct_fd_idx as i32
+            } else {
+                fd as i32
+            };
+            let mut s = io_uring::opcode::SendMsg::new(
+                io_uring::types::Fd(target_fd),
+                msg_ptr.cast_const(),
+            )
+            .build()
+            .user_data(slot_idx as u64);
+            if use_fixed {
+                s = s.flags(io_uring::squeue::Flags::FIXED_FILE);
+            }
+            s
+        }
+        IoRequest::RecvFrom {
+            fd,
+            direct_fd_idx,
+            msg_ptr,
+            slot_idx,
+        } => {
+            let use_fixed = direct_fd_idx != u32::MAX;
+            let target_fd = if use_fixed {
+                direct_fd_idx as i32
+            } else {
+                fd as i32
+            };
+            let mut s = io_uring::opcode::RecvMsg::new(io_uring::types::Fd(target_fd), msg_ptr)
+                .build()
+                .user_data(slot_idx as u64);
             if use_fixed {
                 s = s.flags(io_uring::squeue::Flags::FIXED_FILE);
             }
@@ -1216,11 +1326,15 @@ fn run_mio_worker_loop(worker_idx: usize, state: &WorkerState) {
 #[cfg(not(target_os = "linux"))]
 fn process_mio_request(state: &WorkerState, fd_states: &mut Vec<FdState>, req: IoRequest) {
     match req {
-        IoRequest::Read { fd, slot_idx, .. } | IoRequest::Accept { fd, slot_idx, .. } => {
+        IoRequest::Read { fd, slot_idx, .. }
+        | IoRequest::Accept { fd, slot_idx, .. }
+        | IoRequest::RecvFrom { fd, slot_idx, .. } => {
             ensure_fd_state(fd_states, fd as usize);
             install_interest(state, &mut fd_states[fd as usize], fd, slot_idx, true);
         }
-        IoRequest::Write { fd, slot_idx, .. } | IoRequest::Connect { fd, slot_idx, .. } => {
+        IoRequest::Write { fd, slot_idx, .. }
+        | IoRequest::Connect { fd, slot_idx, .. }
+        | IoRequest::SendTo { fd, slot_idx, .. } => {
             ensure_fd_state(fd_states, fd as usize);
             install_interest(state, &mut fd_states[fd as usize], fd, slot_idx, false);
         }
@@ -1377,23 +1491,45 @@ fn complete_mio_slot(state: &WorkerState, slot_idx: usize, res: i32) {
 // =========================================================================
 // 9. DtactIoFuture INTERFACE
 // =========================================================================
+/// A single in-flight async socket op (read/write/accept/connect),
+/// dispatched to the io-worker for `worker_idx` and polled to completion.
+/// Mirrors the Windows backend's `DtactIoFuture` field-for-field so
+/// higher-level types (`DtactTcpStream`/`DtactTcpListener`) don't need
+/// backend-specific code.
 pub struct DtactIoFuture {
+    /// Index of the io-worker (and its `WORKERS` slot) this op runs on.
     pub worker_idx: usize,
+    /// The raw fd this op is issued against.
     pub fd: u32,
+    /// io_uring direct/fixed-file index, or `u32::MAX` if `fd` is not
+    /// registered as one.
     pub direct_fd_idx: u32,
+    /// Which operation this future performs.
     pub op: OpCode,
+    /// Read/Write only: pointer to the caller-supplied buffer.
     pub buf_ptr: *mut u8,
+    /// Read/Write only: length of the buffer at `buf_ptr`.
     pub len: usize,
+    /// Positional read/write offset (ignored for plain socket ops).
     pub offset: i64,
+    /// Connect only: the remote address to connect to.
     pub addr: Option<libc::sockaddr_storage>,
+    /// Connect only: byte length of `addr`.
     pub addr_len: libc::socklen_t,
+    /// Slot index in the owning worker's op-slot table once the op has
+    /// been submitted; `None` before the first `poll`.
     pub slot_idx: Option<usize>,
+    /// `SendTo`/`RecvFrom` only: caller-owned `msghdr` (see
+    /// `DtactUdpSocket`), null for every other op.
+    pub msg_ptr: *mut libc::msghdr,
 }
 
 unsafe impl Send for DtactIoFuture {}
 unsafe impl Sync for DtactIoFuture {}
 
 impl DtactIoFuture {
+    /// Construct a not-yet-submitted op. Submission happens on first
+    /// `poll`, not here — see `impl Future for DtactIoFuture`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         worker_idx: usize,
@@ -1418,11 +1554,24 @@ impl DtactIoFuture {
             addr,
             addr_len,
             slot_idx,
+            msg_ptr: std::ptr::null_mut(),
         }
     }
 
     fn create_io_request(&self, slot_idx: usize) -> IoRequest {
         match self.op {
+            OpCode::SendTo => IoRequest::SendTo {
+                fd: self.fd,
+                direct_fd_idx: self.direct_fd_idx,
+                msg_ptr: self.msg_ptr,
+                slot_idx,
+            },
+            OpCode::RecvFrom => IoRequest::RecvFrom {
+                fd: self.fd,
+                direct_fd_idx: self.direct_fd_idx,
+                msg_ptr: self.msg_ptr,
+                slot_idx,
+            },
             OpCode::Read => IoRequest::Read {
                 fd: self.fd,
                 direct_fd_idx: self.direct_fd_idx,
@@ -1470,6 +1619,8 @@ impl DtactIoFuture {
             OpCode::Accept => unsafe {
                 libc::accept(self.fd as i32, std::ptr::null_mut(), std::ptr::null_mut()) as isize
             },
+            OpCode::SendTo => unsafe { libc::sendmsg(self.fd as i32, self.msg_ptr, 0) },
+            OpCode::RecvFrom => unsafe { libc::recvmsg(self.fd as i32, self.msg_ptr, 0) },
             OpCode::Connect => {
                 let addr_ptr =
                     &self.addr.unwrap() as *const libc::sockaddr_storage as *const libc::sockaddr;
@@ -1833,6 +1984,9 @@ impl Drop for DtactIoFuture {
 // =========================================================================
 // 10. HIGH-LEVEL API: DtactTcpStream AND DtactTcpListener
 // =========================================================================
+/// A lock-free, non-blocking TCP stream registered with the dtact-io
+/// driver. Mirrors the Windows backend's `DtactTcpStream` API so callers
+/// can switch platforms without code changes.
 pub struct DtactTcpStream {
     inner: std::net::TcpStream,
     direct_fd_idx: u32,
@@ -1870,6 +2024,8 @@ impl DtactTcpStream {
         })
     }
 
+    /// Read into `buf`, returning `Ok(0)` immediately for an empty buffer
+    /// without issuing a syscall.
     pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -1921,11 +2077,14 @@ impl DtactTcpStream {
             addr: None,
             addr_len: 0,
             slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
         }
         .await
         .map(|n| n.min(buf.len()))
     }
 
+    /// Write `buf`, returning `Ok(0)` immediately for an empty buffer
+    /// without issuing a syscall.
     pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -1966,10 +2125,13 @@ impl DtactTcpStream {
             addr: None,
             addr_len: 0,
             slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
         }
         .await
     }
 
+    /// Create a new non-blocking socket and connect to `addr`, registering
+    /// the result with the dtact-io driver.
     pub async fn connect(addr: std::net::SocketAddr) -> std::io::Result<Self> {
         let domain = match addr {
             std::net::SocketAddr::V4(_) => libc::AF_INET,
@@ -2083,6 +2245,7 @@ impl DtactTcpStream {
             addr: Some(libc_addr),
             addr_len,
             slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
         }
         .await;
 
@@ -2107,6 +2270,9 @@ impl Drop for DtactTcpStream {
     }
 }
 
+/// A lock-free, non-blocking TCP listener registered with the dtact-io
+/// driver. Mirrors the Windows backend's `DtactTcpListener` API so callers
+/// can switch platforms without code changes.
 pub struct DtactTcpListener {
     inner: std::net::TcpListener,
     direct_fd_idx: u32,
@@ -2114,6 +2280,9 @@ pub struct DtactTcpListener {
 }
 
 impl DtactTcpListener {
+    /// Register an existing non-blocking `TcpListener` with the dtact-io
+    /// driver (see `DtactTcpStream::from_std` for the registration
+    /// mechanics).
     pub fn from_std(listener: std::net::TcpListener) -> std::io::Result<Self> {
         let fd = listener.as_raw_fd();
         listener.set_nonblocking(true)?;
@@ -2131,6 +2300,8 @@ impl DtactTcpListener {
         })
     }
 
+    /// Accept a new connection, registering the accepted stream with the
+    /// dtact-io driver.
     pub async fn accept(&self) -> std::io::Result<(DtactTcpStream, std::net::SocketAddr)> {
         // One direct attempt before going async — see the comment in
         // `read()` above for why this is no longer a busy-spin loop. An
@@ -2181,6 +2352,7 @@ impl DtactTcpListener {
             addr: None,
             addr_len: 0,
             slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
         }
         .await?;
 
@@ -2195,6 +2367,263 @@ impl DtactTcpListener {
 }
 
 impl Drop for DtactTcpListener {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+// =========================================================================
+// 10b. HIGH-LEVEL API: DtactUdpSocket
+// =========================================================================
+
+/// Async UDP socket driven by the native backend (io_uring `SendMsg`/`RecvMsg`
+/// on Linux, `sendmsg`/`recvmsg` via the mio/kqueue reactor elsewhere).
+///
+/// Supports the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API shape. The connected `send`/`recv` reuse the
+/// same `Write`/`Read` submission machinery as [`DtactTcpStream`].
+pub struct DtactUdpSocket {
+    inner: std::net::UdpSocket,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+impl DtactUdpSocket {
+    /// Bind a new UDP socket to `addr` and register it with the driver.
+    ///
+    /// # Errors
+    /// Returns any error from binding the OS socket or registering it.
+    pub async fn bind(addr: std::net::SocketAddr) -> std::io::Result<Self> {
+        let sock = std::net::UdpSocket::bind(addr)?;
+        Self::from_std(sock)
+    }
+
+    /// Register an existing (already-bound) `std::net::UdpSocket`, taking
+    /// ownership.
+    ///
+    /// # Errors
+    /// Returns any error from switching the socket to non-blocking mode or
+    /// registering it with the driver.
+    ///
+    /// # Panics
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    pub fn from_std(socket: std::net::UdpSocket) -> std::io::Result<Self> {
+        let fd = socket.as_raw_fd();
+        socket.set_nonblocking(true)?;
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+        let worker_idx = fd as usize % num_workers;
+        let state = &WORKERS.get().unwrap()[worker_idx];
+        let direct_fd_idx = register_fd_sync(state, fd)?;
+        Ok(Self {
+            inner: socket,
+            direct_fd_idx,
+            worker_idx,
+        })
+    }
+
+    /// The local address this socket is bound to.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `getsockname` call.
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Send `buf` as a single datagram to `target`, returning the number of
+    /// bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `sendmsg`.
+    pub async fn send_to(
+        &self,
+        buf: &[u8],
+        target: std::net::SocketAddr,
+    ) -> std::io::Result<usize> {
+        // These locals live in this async fn's frame (pinned across the await
+        // below), so the raw pointers in `msg` stay valid until the op
+        // completes.
+        let (mut storage, addr_len) = socket_addr_to_libc(target);
+        let mut iov = libc::iovec {
+            iov_base: buf.as_ptr().cast_mut().cast::<libc::c_void>(),
+            iov_len: buf.len(),
+        };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_name = std::ptr::addr_of_mut!(storage).cast::<libc::c_void>();
+        msg.msg_namelen = addr_len;
+        msg.msg_iov = &raw mut iov;
+        msg.msg_iovlen = 1;
+
+        // One direct attempt before going async — see `DtactTcpStream::write`.
+        let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const msg, 0) };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+
+        let mut fut = DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_fd() as u32,
+            self.direct_fd_idx,
+            OpCode::SendTo,
+            std::ptr::null_mut(),
+            0,
+            0,
+            None,
+            0,
+            None,
+        );
+        fut.msg_ptr = &raw mut msg;
+        fut.await
+    }
+
+    /// Receive a single datagram into `buf`, returning the byte count and the
+    /// peer address it came from.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recvmsg`.
+    pub async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> std::io::Result<(usize, std::net::SocketAddr)> {
+        let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut iov = libc::iovec {
+            iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
+            iov_len: buf.len(),
+        };
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_name = std::ptr::addr_of_mut!(storage).cast::<libc::c_void>();
+        msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        msg.msg_iov = &raw mut iov;
+        msg.msg_iovlen = 1;
+
+        let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut msg, 0) };
+        if r >= 0 {
+            let from = sockaddr_storage_to_socketaddr(&storage, msg.msg_namelen);
+            return Ok((r as usize, from));
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+
+        let mut fut = DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_fd() as u32,
+            self.direct_fd_idx,
+            OpCode::RecvFrom,
+            std::ptr::null_mut(),
+            0,
+            0,
+            None,
+            0,
+            None,
+        );
+        fut.msg_ptr = &raw mut msg;
+        let n = fut.await?;
+        let from = sockaddr_storage_to_socketaddr(&storage, msg.msg_namelen);
+        Ok((n, from))
+    }
+
+    /// Connect this socket to `addr` so [`send`](Self::send)/[`recv`](Self::recv)
+    /// can omit the peer address. UDP `connect` is a local operation, so it
+    /// completes without a round trip.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `connect`.
+    pub async fn connect(&self, addr: std::net::SocketAddr) -> std::io::Result<()> {
+        self.inner.connect(addr)
+    }
+
+    /// Send `buf` to the connected peer, returning the number of bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying send.
+    pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let r = unsafe {
+            libc::send(
+                self.inner.as_raw_fd(),
+                buf.as_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                0,
+            )
+        };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Write,
+            buf_ptr: buf.as_ptr().cast_mut(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+    }
+
+    /// Receive a datagram from the connected peer into `buf`, returning the
+    /// byte count.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying recv.
+    pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let r = unsafe {
+            libc::recv(
+                self.inner.as_raw_fd(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                0,
+            )
+        };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Read,
+            buf_ptr: buf.as_mut_ptr(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+    }
+}
+
+impl Drop for DtactUdpSocket {
     fn drop(&mut self) {
         if let Some(workers) = WORKERS.get()
             && let Some(state) = workers.get(self.worker_idx)

@@ -1,12 +1,17 @@
-//! Criterion bench for the dtact-signal backends: per-poll overhead of an
-//! already-registered listener that has nothing pending (the common
-//! "idle, waiting" case). Deliberately does *not* bench repeated
-//! register+drop cycles: `native`'s `ListenerRegistry` intentionally
-//! leaks a fixed-capacity slot per registration for the process's
-//! lifetime (see `signal::registry`'s module doc) — looping registration
-//! thousands of times, which is what Criterion's `b.iter` would do, would
-//! just hit that capacity limit and panic. One registration up front,
-//! many polls against it, is both what this bench needs and what's safe.
+//! Criterion bench for dtact-signal vs tokio::signal: per-poll overhead of
+//! an already-registered listener that has nothing pending (the common
+//! "idle, waiting" case), run side by side.
+//!
+//! Deliberately does *not* bench repeated register+drop cycles: `native`'s
+//! `ListenerRegistry` intentionally leaks a fixed-capacity slot per
+//! registration for the process's lifetime (see `signal::registry`'s
+//! module doc) — looping registration thousands of times, which is what
+//! Criterion's `b.iter` would do, would just hit that capacity limit and
+//! panic. One registration up front, many polls against it, is both what
+//! this bench needs and what's safe.
+//!
+//! Run:  cargo bench --bench signal_performance
+//! Test: cargo bench --bench signal_performance -- --test
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::future::Future;
@@ -26,55 +31,44 @@ fn poll_once<F: Future>(fut: F) {
     let _ = fut.as_mut().poll(&mut cx);
 }
 
-#[cfg(all(feature = "native", unix))]
-fn bench_signal_native(c: &mut Criterion) {
+#[cfg(unix)]
+fn bench_signal_poll_idle(c: &mut Criterion) {
     use dtact_util::signal::sigusr2;
-    let stream = sigusr2(); // registered once, outside the timed loop
-    let mut group = c.benchmark_group("dtact_signal_poll_idle");
-    group.bench_function("native_poll_recv", |b| {
-        b.iter(|| poll_once(stream.recv()));
+    let _rt_guard = tokio::runtime::Runtime::new().unwrap();
+    let _enter = _rt_guard.enter();
+
+    let dtact_stream = sigusr2(); // registered once, outside the timed loop
+    let mut tokio_stream =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2()).unwrap();
+
+    let mut group = c.benchmark_group("signal_poll_idle");
+    group.bench_function("dtact-signal", |b| {
+        b.iter(|| poll_once(dtact_stream.recv()));
+    });
+    group.bench_function("tokio", |b| {
+        b.iter(|| poll_once(tokio_stream.recv()));
     });
     group.finish();
 }
 
-#[cfg(all(feature = "native", windows))]
-fn bench_signal_native(c: &mut Criterion) {
+#[cfg(windows)]
+fn bench_signal_poll_idle(c: &mut Criterion) {
     use dtact_util::signal::ctrl_c;
-    let stream = ctrl_c(); // registered once, outside the timed loop
-    let mut group = c.benchmark_group("dtact_signal_poll_idle");
-    group.bench_function("native_poll_recv", |b| {
-        b.iter(|| poll_once(stream.recv()));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _enter = rt.enter();
+
+    let dtact_stream = ctrl_c(); // registered once, outside the timed loop
+    let mut tokio_stream = tokio::signal::windows::ctrl_c().unwrap();
+
+    let mut group = c.benchmark_group("signal_poll_idle");
+    group.bench_function("dtact-signal", |b| {
+        b.iter(|| poll_once(dtact_stream.recv()));
+    });
+    group.bench_function("tokio", |b| {
+        b.iter(|| poll_once(tokio_stream.recv()));
     });
     group.finish();
 }
 
-#[cfg(all(feature = "tokio", not(feature = "native"), unix))]
-fn bench_signal_tokio(c: &mut Criterion) {
-    use dtact_util::signal::sigusr2;
-    let mut stream = sigusr2();
-    let mut group = c.benchmark_group("dtact_signal_poll_idle");
-    group.bench_function("tokio_poll_recv", |b| {
-        b.iter(|| poll_once(stream.recv()));
-    });
-    group.finish();
-}
-
-#[cfg(all(feature = "tokio", not(feature = "native"), windows))]
-fn bench_signal_tokio(c: &mut Criterion) {
-    use dtact_util::signal::ctrl_c;
-    let mut stream = ctrl_c();
-    let mut group = c.benchmark_group("dtact_signal_poll_idle");
-    group.bench_function("tokio_poll_recv", |b| {
-        b.iter(|| poll_once(stream.recv()));
-    });
-    group.finish();
-}
-
-#[cfg(feature = "native")]
-criterion_group!(benches, bench_signal_native);
-#[cfg(all(feature = "tokio", not(feature = "native")))]
-criterion_group!(benches, bench_signal_tokio);
-#[cfg(not(any(feature = "native", feature = "tokio")))]
-criterion_group!(benches,);
-
+criterion_group!(benches, bench_signal_poll_idle);
 criterion_main!(benches);

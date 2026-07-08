@@ -49,7 +49,7 @@ fn ensure_runtimes() {
 
         // dtact-io: 1 IO workers, 16 384 pool buffers × 4 KB = 64 MB arena,
         // ring_depth = 4096.
-        init_runtime(1, 16_384, 4096, &[], 4096);
+        init_runtime(1, 4096, 16_384, 4096, &[]);
     });
 }
 

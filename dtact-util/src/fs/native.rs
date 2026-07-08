@@ -18,12 +18,13 @@
 //! the task brief ("thread-pool-bridged blocking I/O is fine for fs on
 //! non-Linux") and is used unconditionally on all platforms for now.
 
+use crate::lockfree::OnceSlot;
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -73,26 +74,20 @@ pub fn init_fs(
     init(workers);
 }
 
-struct OpState<T> {
-    result: Option<T>,
-    waker: Option<Waker>,
-}
-
-/// A single blocking filesystem operation, dispatched to the fs thread pool.
+/// A single blocking filesystem operation, dispatched to the fs thread
+/// pool. Completion is signaled via a wait-free [`OnceSlot`] (a single
+/// `AtomicPtr` swap) rather than a `Mutex`-guarded result/waker pair —
+/// same completion mechanism `process::native` already uses, moved here so
+/// every op's poll no longer pays a lock/unlock on the hot path.
 pub struct BlockingOp<T> {
-    state: Arc<Mutex<OpState<T>>>,
+    slot: Arc<OnceSlot<T>>,
 }
 
 impl<T: Send + 'static> Future for BlockingOp<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
-        let mut guard = self.state.lock().unwrap();
-        if let Some(v) = guard.result.take() {
-            return Poll::Ready(v);
-        }
-        guard.waker = Some(cx.waker().clone());
-        Poll::Pending
+        self.slot.poll(cx)
     }
 }
 
@@ -105,21 +100,14 @@ where
     if FS_POOL.get().is_none() {
         init(4);
     }
-    let state = Arc::new(Mutex::new(OpState {
-        result: None,
-        waker: None,
-    }));
-    let state2 = Arc::clone(&state);
+    let slot = Arc::new(OnceSlot::new());
+    let slot2 = Arc::clone(&slot);
     let job: Job = Box::new(move || {
         let result = f();
-        let mut guard = state2.lock().unwrap();
-        guard.result = Some(result);
-        if let Some(w) = guard.waker.take() {
-            w.wake();
-        }
+        slot2.set(result);
     });
     let _ = FS_POOL.get().unwrap().sender.send(job);
-    BlockingOp { state }
+    BlockingOp { slot }
 }
 
 /// An open file whose blocking read/write/metadata operations run on the

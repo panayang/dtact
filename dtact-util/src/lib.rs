@@ -1,7 +1,78 @@
-#![allow(dead_code)]
-#![allow(non_camel_case_types)]
-#![allow(clippy::missing_safety_doc)]
-#![allow(clippy::undocumented_unsafe_blocks)]
+//! Async I/O, filesystem, process, signal, stream, and timer primitives for
+//! the `dtact` coroutine runtime.
+//!
+//! Two backend families are available behind Cargo features:
+//! - `native` — hand-rolled, lock-free backends (`io_uring` on Linux,
+//!   kqueue/IOCP elsewhere, thread-pool bridges where a true async
+//!   syscall path doesn't exist) built directly on `dtact`'s coroutine
+//!   scheduler, no `tokio` dependency.
+//! - `tokio` (default) — thin wrappers over `tokio`'s equivalents, for
+//!   embedding in a `tokio`-based application instead of `dtact` itself.
+//!
+//! Each of the six primitive modules (`io`, `fs`, `process`, `signal`,
+//! `stream`, `timer`) exposes the same public surface regardless of which
+//! backend feature is enabled, so callers can switch backends without
+//! rewriting call sites.
+
+// =========================================================================
+// RUST LINT CONFIGURATION: dtact-util
+// =========================================================================
+
+// -------------------------------------------------------------------------
+// LEVEL 1: CRITICAL ERRORS (Deny)
+// -------------------------------------------------------------------------
+#![deny(
+    unreachable_code,
+    improper_ctypes_definitions,
+    future_incompatible,
+    nonstandard_style,
+    rust_2018_idioms,
+    clippy::perf,
+    clippy::correctness,
+    clippy::suspicious,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::missing_safety_doc,
+    clippy::same_item_push,
+    clippy::implicit_clone,
+    clippy::all,
+    clippy::pedantic,
+    missing_docs,
+    clippy::nursery,
+    clippy::single_call_fn
+)]
+// -------------------------------------------------------------------------
+// LEVEL 2: STYLE WARNINGS (Warn)
+// -------------------------------------------------------------------------
+#![warn(
+    dead_code,
+    warnings,
+    clippy::dbg_macro,
+    clippy::todo,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::unnecessary_safety_comment
+)]
+// -------------------------------------------------------------------------
+// LEVEL 3: ALLOW/IGNORABLE (Allow)
+// -------------------------------------------------------------------------
+#![allow(
+    unsafe_code,
+    unused_unsafe,
+    private_interfaces,
+    clippy::restriction,
+    clippy::inline_always,
+    unused_doc_comments,
+    clippy::empty_line_after_doc_comments,
+    clippy::missing_const_for_thread_local,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+#![crate_name = "dtact_util"]
 
 #[cfg(feature = "native")]
 pub use dtact_macros::dtact_io_init as init;
@@ -34,3 +105,6 @@ pub mod stream;
 pub mod signal;
 
 pub mod process;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;

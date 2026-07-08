@@ -3,7 +3,7 @@
 //! Two backends, selected the same way as [`crate::io`]:
 //! - `native` (default): a small dedicated blocking-thread pool that bridges
 //!   `std::fs`/platform positional-I/O syscalls into futures. On Linux this
-//!   is a reasonable place to grow real io_uring opcodes (Openat/Read/Write/
+//!   is a reasonable place to grow real `io_uring` opcodes (Openat/Read/Write/
 //!   Fsync/Close/Statx) later — see the module doc on `native` for exactly
 //!   what's deferred and why.
 //! - `tokio` (when `native` is off): a thin wrapper over `tokio::fs`.

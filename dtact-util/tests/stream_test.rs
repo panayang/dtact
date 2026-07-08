@@ -106,6 +106,68 @@ mod native_tests {
     }
 
     #[test]
+    fn zero_length_write_and_read() {
+        let (a, b) = pair(16);
+        block_on(async {
+            let n = a.write(&[]).await.unwrap();
+            assert_eq!(n, 0, "writing an empty buffer must report 0 bytes written");
+
+            // Put a real byte in, then confirm a zero-length read reports
+            // 0 without consuming that byte.
+            a.write(b"x").await.unwrap();
+            let n = b.read(&mut []).await.unwrap();
+            assert_eq!(
+                n, 0,
+                "reading into an empty buffer must report 0 bytes read"
+            );
+
+            let mut buf = [0u8; 1];
+            let n = b.read(&mut buf).await.unwrap();
+            assert_eq!(n, 1);
+            assert_eq!(buf, [b'x']);
+        });
+    }
+
+    #[test]
+    fn dropping_a_pending_read_then_writing_still_delivers() {
+        // Poll a read on an empty pipe exactly once (registering its waker
+        // and returning Pending), then drop it before it ever resolves —
+        // simulating a fiber that starts an async read and is cancelled
+        // (e.g. via `select!`/timeout) before data arrives. A *fresh* read
+        // afterwards must still see data written later, proving the
+        // dropped read didn't leave the queue/waker slot in a bad state.
+        struct PollOnce<F>(Option<F>);
+        impl<F: Future> Future for PollOnce<F> {
+            type Output = ();
+            fn poll(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<()> {
+                let this = unsafe { self.get_unchecked_mut() };
+                if let Some(fut) = this.0.as_mut() {
+                    let fut = unsafe { std::pin::Pin::new_unchecked(fut) };
+                    let _ = fut.poll(cx);
+                }
+                this.0 = None;
+                std::task::Poll::Ready(())
+            }
+        }
+
+        let (a, b) = pair(16);
+        block_on(async {
+            let mut buf = [0u8; 4];
+            let pending_read = b.read(&mut buf);
+            PollOnce(Some(pending_read)).await;
+            // `pending_read` is now dropped without ever completing.
+
+            a.write_all(b"ok").await.unwrap();
+            let mut buf2 = [0u8; 4];
+            let n = b.read(&mut buf2).await.unwrap();
+            assert_eq!(&buf2[..n], b"ok");
+        });
+    }
+
+    #[test]
     fn eof_on_writer_drop() {
         let (a, b) = pair(16);
         drop(a);

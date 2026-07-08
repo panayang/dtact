@@ -8,10 +8,6 @@
 //!   availability notification. No `Mutex`, no per-call heap allocation.
 //! - `tokio` (when `native` is off): a thin wrapper over
 //!   `tokio::io::duplex`.
-//!
-//! Unlike [`crate::io`], `stream` items live under `dtact_util::stream::*`
-//! (see `fs`'s module doc for why: keeps the growing set of new modules
-//! from colliding on names).
 
 #[cfg(feature = "native")]
 mod native;

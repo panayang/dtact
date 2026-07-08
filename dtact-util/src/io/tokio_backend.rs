@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, Future, Pin, Poll};
 
 // The `Runtime` itself is wrapped in a Mutex<Option<…>> purely so
 // `shutdown_runtime()` can drop it rather than leaking it until process
@@ -27,6 +27,11 @@ fn runtime_handle() -> tokio::runtime::Handle {
 /// switch drivers with a single feature flag.  The extra parameters
 /// (`buffer_pool_size`, `chunk_size`, `pin_cpus`, `ring_depth`) are
 /// accepted for API compatibility but are ignored by the Tokio backend.
+///
+/// # Panics
+///
+/// Panics if building the underlying `tokio::runtime::Runtime` fails
+/// (e.g. the OS refuses to spawn its worker threads).
 pub fn init_runtime(
     workers: usize,
     _buffer_pool_size: usize,
@@ -69,6 +74,7 @@ pub fn shutdown_runtime() {
 ///
 /// # Panics
 /// Panics if `init_runtime()` / `init()` has not been called.
+#[must_use]
 pub fn get_runtime_handle() -> tokio::runtime::Handle {
     runtime_handle()
 }
@@ -311,11 +317,20 @@ impl Drop for DtactIoFuture {
     }
 }
 
+/// Tokio-backed TCP stream. Mirrors the native backend's `DtactTcpStream`
+/// API surface, but drives readiness through tokio's reactor instead of the
+/// crate's own `IOCP`/`io_uring`/kqueue driver.
 pub struct DtactTcpStream {
     inner: tokio::net::TcpStream,
 }
 
 impl DtactTcpStream {
+    /// Wrap an existing `std::net::TcpStream`, switching it to non-blocking
+    /// mode and disabling Nagle's algorithm.
+    ///
+    /// # Errors
+    /// Returns an error if the OS refuses to set the socket non-blocking or
+    /// disable `TCP_NODELAY` (e.g. an already-closed or invalid socket).
     pub fn from_std(stream: std::net::TcpStream) -> std::io::Result<Self> {
         stream.set_nonblocking(true)?;
         // See the equivalent comment on the native backend's
@@ -327,6 +342,12 @@ impl DtactTcpStream {
         Ok(Self { inner })
     }
 
+    /// Read into `buf`, waiting on tokio's reactor for readability between
+    /// `WouldBlock` retries rather than busy-polling.
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying socket other than
+    /// `WouldBlock`, which is retried internally.
     pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             match self.inner.try_read(buf) {
@@ -339,6 +360,12 @@ impl DtactTcpStream {
         }
     }
 
+    /// Write `buf`, waiting on tokio's reactor for writability between
+    /// `WouldBlock` retries rather than busy-polling.
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying socket other than
+    /// `WouldBlock`, which is retried internally.
     pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
         loop {
             match self.inner.try_write(buf) {
@@ -351,6 +378,12 @@ impl DtactTcpStream {
         }
     }
 
+    /// Connect to `addr`, disabling Nagle's algorithm once established.
+    ///
+    /// # Errors
+    /// Returns any error from `tokio::net::TcpStream::connect` (refused
+    /// connection, timeout at the OS level, unreachable host, etc.) or from
+    /// setting `TCP_NODELAY` afterward.
     pub async fn connect(addr: std::net::SocketAddr) -> std::io::Result<Self> {
         let handle = runtime_handle();
         // Build the future inside the runtime context, then drop the guard before awaiting.
@@ -364,11 +397,18 @@ impl DtactTcpStream {
     }
 }
 
+/// Tokio-backed TCP listener. Mirrors the native backend's
+/// `DtactTcpListener` API surface.
 pub struct DtactTcpListener {
     inner: tokio::net::TcpListener,
 }
 
 impl DtactTcpListener {
+    /// Wrap an existing `std::net::TcpListener`, switching it to
+    /// non-blocking mode.
+    ///
+    /// # Errors
+    /// Returns an error if the OS refuses to set the socket non-blocking.
     pub fn from_std(listener: std::net::TcpListener) -> std::io::Result<Self> {
         listener.set_nonblocking(true)?;
         let _guard = runtime_handle().enter();
@@ -376,6 +416,12 @@ impl DtactTcpListener {
         Ok(Self { inner })
     }
 
+    /// Accept a single incoming connection, disabling Nagle's algorithm on
+    /// the accepted stream.
+    ///
+    /// # Errors
+    /// Returns any error surfaced by the OS while accepting (e.g. the
+    /// listener was closed, or a transient per-connection accept failure).
     pub async fn accept(&self) -> std::io::Result<(DtactTcpStream, std::net::SocketAddr)> {
         // Build the future while inside the runtime context, drop the guard before awaiting
         // so the future remains Send (EnterGuard is !Send).
@@ -390,6 +436,143 @@ impl DtactTcpListener {
 }
 
 // =========================================================================
+// HIGH-LEVEL API: DtactUdpSocket  (tokio backend)
+// =========================================================================
+
+/// Async UDP socket — tokio-backend equivalent of the native
+/// `DtactUdpSocket`, a thin wrapper over [`tokio::net::UdpSocket`].
+///
+/// Mirrors the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) halves of `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API so call-sites port across backends with a
+/// single feature flag.
+pub struct DtactUdpSocket {
+    inner: tokio::net::UdpSocket,
+}
+
+impl DtactUdpSocket {
+    /// Bind a new UDP socket to `addr`.
+    ///
+    /// # Errors
+    /// Returns any error from binding the underlying OS socket (e.g. the
+    /// address is already in use) or from registering it with the reactor.
+    pub fn bind(addr: std::net::SocketAddr) -> impl Future<Output = std::io::Result<Self>> {
+        std::future::ready(std::net::UdpSocket::bind(addr).and_then(Self::from_std))
+    }
+
+    /// Register an existing (already-bound) `std::net::UdpSocket` with the
+    /// driver, taking ownership of it.
+    ///
+    /// # Errors
+    /// Returns any error from switching the socket to non-blocking mode or
+    /// registering it with the tokio reactor.
+    pub fn from_std(socket: std::net::UdpSocket) -> std::io::Result<Self> {
+        socket.set_nonblocking(true)?;
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UdpSocket::from_std(socket)?;
+        Ok(Self { inner })
+    }
+
+    /// The local address this socket is bound to.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `getsockname` call.
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.inner.local_addr()
+    }
+
+    /// Send `buf` as a single datagram to `target`, returning the number of
+    /// bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `sendto`.
+    pub async fn send_to(
+        &self,
+        buf: &[u8],
+        target: std::net::SocketAddr,
+    ) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_send_to(buf, target) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.writable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Receive a single datagram into `buf`, returning the byte count and
+    /// the peer address it came from.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recvfrom`.
+    pub async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> std::io::Result<(usize, std::net::SocketAddr)> {
+        loop {
+            match self.inner.try_recv_from(buf) {
+                Ok(pair) => return Ok(pair),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.readable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Connect this socket to `addr` so [`send`](Self::send)/[`recv`](Self::recv)
+    /// can be used without repeating the peer address.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `connect`.
+    pub async fn connect(&self, addr: std::net::SocketAddr) -> std::io::Result<()> {
+        let fut = {
+            let _guard = runtime_handle().enter();
+            self.inner.connect(addr)
+        };
+        TokioFutureWrapper { inner: fut }.await
+    }
+
+    /// Send `buf` to the connected peer (see [`connect`](Self::connect)),
+    /// returning the number of bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `send`, including if the socket
+    /// is not connected.
+    pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_send(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.writable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Receive a datagram from the connected peer into `buf`, returning the
+    /// byte count.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recv`, including if the socket
+    /// is not connected.
+    pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_recv(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.readable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+}
+
+// =========================================================================
 // COMPAT: convert DtactTcpStream to futures-io / tokio AsyncRead+AsyncWrite
 // =========================================================================
 
@@ -400,7 +583,7 @@ pub struct DtactCompat<T>(T);
 
 impl<T> DtactCompat<T> {
     /// Wrap `inner` in a compat adapter.
-    pub fn new(inner: T) -> Self {
+    pub const fn new(inner: T) -> Self {
         Self(inner)
     }
 
@@ -410,12 +593,12 @@ impl<T> DtactCompat<T> {
     }
 
     /// Shared reference to the wrapped value.
-    pub fn get_ref(&self) -> &T {
+    pub const fn get_ref(&self) -> &T {
         &self.0
     }
 
     /// Exclusive reference to the wrapped value.
-    pub fn get_mut(&mut self) -> &mut T {
+    pub const fn get_mut(&mut self) -> &mut T {
         &mut self.0
     }
 }
@@ -423,6 +606,8 @@ impl<T> DtactCompat<T> {
 /// Extension trait: call `.compat()` on a `DtactTcpStream` to obtain a
 /// [`DtactCompat`] adapter that implements `AsyncRead`/`AsyncWrite`.
 pub trait DtactCompatExt: Sized {
+    /// Wrap `self` in a [`DtactCompat`] adapter that implements the
+    /// standard `AsyncRead`/`AsyncWrite` traits.
     fn compat(self) -> DtactCompat<Self>;
 }
 

@@ -6,9 +6,6 @@
 //!   (see the module doc on `native` for why this — rather than a hashed
 //!   timer wheel — was chosen for this pass).
 //! - `tokio` (when `native` is off): a thin wrapper over `tokio::time`.
-//!
-//! Like `fs`, timer items live under `dtact_util::timer::*` rather than
-//! being re-exported flat at the crate root.
 
 #[cfg(feature = "native")]
 mod native;

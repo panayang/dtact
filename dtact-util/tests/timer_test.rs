@@ -94,6 +94,30 @@ mod native_tests {
             assert_eq!(result.unwrap(), 42);
         });
     }
+
+    /// A zero-duration sleep must still resolve (immediately or on the very
+    /// next poll), not panic or hang forever.
+    #[test]
+    fn zero_duration_sleep_resolves() {
+        let start = Instant::now();
+        block_on(sleep(Duration::ZERO));
+        assert!(
+            start.elapsed() < SLACK,
+            "a zero-duration sleep should resolve almost immediately"
+        );
+    }
+
+    /// A zero-duration timeout racing a future that is already pending
+    /// (never resolves on its own) must reliably time out rather than
+    /// hanging — the degenerate case of the deadline being "now".
+    #[test]
+    fn zero_duration_timeout_always_fires_for_a_pending_future() {
+        block_on(async {
+            let never = std::future::pending::<()>();
+            let result = DtactTimeout::new(Duration::ZERO, never).await;
+            assert!(result.is_err(), "a zero-duration timeout must elapse");
+        });
+    }
 }
 
 #[cfg(all(feature = "tokio", not(feature = "native")))]
@@ -147,5 +171,25 @@ mod tokio_tests {
         let fast = async { 42 };
         let result = timeout(Duration::from_millis(500), fast).await;
         assert_eq!(result.unwrap(), 42);
+    }
+
+    /// A zero-duration sleep must still resolve, not panic or hang forever.
+    #[tokio::test]
+    async fn zero_duration_sleep_resolves() {
+        let start = Instant::now();
+        sleep(Duration::ZERO).await;
+        assert!(
+            start.elapsed() < SLACK,
+            "a zero-duration sleep should resolve almost immediately"
+        );
+    }
+
+    /// A zero-duration timeout racing a future that never resolves on its
+    /// own must reliably time out rather than hanging.
+    #[tokio::test]
+    async fn zero_duration_timeout_always_fires_for_a_pending_future() {
+        let never = std::future::pending::<()>();
+        let result = DtactTimeout::new(Duration::ZERO, never).await;
+        assert!(result.is_err(), "a zero-duration timeout must elapse");
     }
 }
