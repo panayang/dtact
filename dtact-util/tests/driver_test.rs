@@ -1,4 +1,4 @@
-use dtact_io::{DtactTcpListener, DtactTcpStream, init_runtime};
+use dtact_util::io::{DtactTcpListener, DtactTcpStream, init_runtime};
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -86,5 +86,5 @@ fn test_io_driver_tcp() {
     assert_eq!(client_finished.load(Ordering::SeqCst), 1);
 
     // Clean up
-    dtact_io::shutdown_runtime();
+    dtact_util::io::shutdown_runtime();
 }

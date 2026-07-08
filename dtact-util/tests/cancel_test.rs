@@ -1,6 +1,6 @@
 #![cfg(all(feature = "native", windows))]
 
-use dtact_io::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
+use dtact_util::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 

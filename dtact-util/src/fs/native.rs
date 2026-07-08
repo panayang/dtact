@@ -1,0 +1,307 @@
+//! Native filesystem backend: a small dedicated blocking-thread pool that
+//! bridges `std::fs` and platform positional-I/O syscalls (`pread`/`pwrite`
+//! on Unix, `seek_read`/`seek_write` on Windows) into futures.
+//!
+//! **Deferred / not lock-free**: unlike the `io` module's io_uring-backed
+//! reactor (SPSC queues, per-slot atomics, zero-lock hot path), this backend
+//! uses a plain `Mutex`-guarded completion slot per operation. Filesystem
+//! syscalls are not competitive with a lock-free dispatch path the way
+//! socket I/O is — the syscall itself dominates — so a mutex here is a
+//! deliberate, correctness-first simplification, not an oversight.
+//!
+//! **Deferred: real io_uring opcodes.** On Linux, `Openat`/`Read`/`Write`/
+//! `Fsync`/`Close`/`Statx` could be submitted directly to the same ring the
+//! `io` module drives instead of going through a blocking-thread pool. That
+//! integration (sharing `WORKERS`/`SpscQueue` from `crate::io::native`) is
+//! substantial additional plumbing and was not implemented in this pass;
+//! this module is the sane, portable, always-correct fallback described in
+//! the task brief ("thread-pool-bridged blocking I/O is fine for fs on
+//! non-Linux") and is used unconditionally on all platforms for now.
+
+use std::future::Future;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::task::{Context, Poll, Waker};
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+struct FsPool {
+    sender: mpsc::Sender<Job>,
+}
+
+static FS_POOL: OnceLock<FsPool> = OnceLock::new();
+
+/// Start the fs thread pool with the given number of worker threads.
+/// Idempotent — later calls are no-ops once the pool is initialized.
+pub fn init(workers: usize) {
+    FS_POOL.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<Job>();
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..workers.max(1) {
+            let rx = Arc::clone(&rx);
+            std::thread::Builder::new()
+                .name("dtact-fs-worker".into())
+                .spawn(move || {
+                    loop {
+                        let job = { rx.lock().unwrap().recv() };
+                        match job {
+                            Ok(job) => job(),
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .expect("failed to spawn dtact-fs worker thread");
+        }
+        FsPool { sender: tx }
+    });
+}
+
+/// Full-signature entry point matching the other native backends'
+/// `init_fs` (and `crate::io::native::init_runtime`), for the `fs_init`
+/// macro to call uniformly regardless of which backend is active.
+/// `ring_depth`/`buffer_pool_size`/`chunk_size`/`pin_cpus` don't apply to
+/// this thread-pool-bridged fallback (no ring, no arena) and are ignored.
+pub fn init_fs(
+    workers: usize,
+    _ring_depth: u32,
+    _buffer_pool_size: usize,
+    _chunk_size: usize,
+    _pin_cpus: &[usize],
+) {
+    init(workers);
+}
+
+struct OpState<T> {
+    result: Option<T>,
+    waker: Option<Waker>,
+}
+
+/// A single blocking filesystem operation, dispatched to the fs thread pool.
+pub struct BlockingOp<T> {
+    state: Arc<Mutex<OpState<T>>>,
+}
+
+impl<T: Send + 'static> Future for BlockingOp<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<T> {
+        let mut guard = self.state.lock().unwrap();
+        if let Some(v) = guard.result.take() {
+            return Poll::Ready(v);
+        }
+        guard.waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+fn spawn_blocking<T, F>(f: F) -> BlockingOp<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    // Ensure a pool exists even if the caller never called `init` explicitly.
+    if FS_POOL.get().is_none() {
+        init(4);
+    }
+    let state = Arc::new(Mutex::new(OpState {
+        result: None,
+        waker: None,
+    }));
+    let state2 = Arc::clone(&state);
+    let job: Job = Box::new(move || {
+        let result = f();
+        let mut guard = state2.lock().unwrap();
+        guard.result = Some(result);
+        if let Some(w) = guard.waker.take() {
+            w.wake();
+        }
+    });
+    let _ = FS_POOL.get().unwrap().sender.send(job);
+    BlockingOp { state }
+}
+
+/// An open file whose blocking read/write/metadata operations run on the
+/// dtact-fs thread pool rather than the calling task's thread.
+pub struct DtactFile {
+    inner: Arc<Mutex<Option<std::fs::File>>>,
+}
+
+impl DtactFile {
+    pub async fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        let file = spawn_blocking(move || std::fs::File::open(&path)).await?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Some(file))),
+        })
+    }
+
+    pub async fn create(path: impl Into<PathBuf>) -> io::Result<Self> {
+        let path = path.into();
+        let file = spawn_blocking(move || std::fs::File::create(&path)).await?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Some(file))),
+        })
+    }
+
+    pub async fn open_with(
+        path: impl Into<PathBuf>,
+        opts: std::fs::OpenOptions,
+    ) -> io::Result<Self> {
+        let path = path.into();
+        let file = spawn_blocking(move || opts.open(&path)).await?;
+        Ok(Self {
+            inner: Arc::new(Mutex::new(Some(file))),
+        })
+    }
+
+    /// Read into `buf`, returning the number of bytes read and the buffer
+    /// (buffer round-tripping avoids a borrow across the `.await` point).
+    pub async fn read(&self, mut buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            use std::io::Read;
+            let mut guard = inner.lock().unwrap();
+            let file = guard
+                .as_mut()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            let n = file.read(&mut buf)?;
+            Ok((n, buf))
+        })
+        .await
+    }
+
+    pub async fn write(&self, buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            use std::io::Write;
+            let mut guard = inner.lock().unwrap();
+            let file = guard
+                .as_mut()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            let n = file.write(&buf)?;
+            Ok((n, buf))
+        })
+        .await
+    }
+
+    /// Positional read: `pread` on Unix, `seek_read` on Windows. Does not
+    /// move the file's shared cursor, so is safe to call concurrently with
+    /// other `read_at`/`write_at` calls on the same handle.
+    pub async fn read_at(&self, mut buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            let n = read_at_impl(file, &mut buf, offset)?;
+            Ok((n, buf))
+        })
+        .await
+    }
+
+    pub async fn write_at(&self, buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            let n = write_at_impl(file, &buf, offset)?;
+            Ok((n, buf))
+        })
+        .await
+    }
+
+    pub async fn sync_all(&self) -> io::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            file.sync_all()
+        })
+        .await
+    }
+
+    pub async fn metadata(&self) -> io::Result<std::fs::Metadata> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            let guard = inner.lock().unwrap();
+            let file = guard
+                .as_ref()
+                .ok_or_else(|| io::Error::other("dtact-fs: file already closed"))?;
+            file.metadata()
+        })
+        .await
+    }
+
+    /// Close the file. Equivalent to dropping it, but lets callers observe
+    /// close-time errors (there are none on the std backend today, but this
+    /// keeps the signature stable if a future io_uring `Close` opcode needs
+    /// to surface one).
+    pub async fn close(self) -> io::Result<()> {
+        let inner = Arc::clone(&self.inner);
+        spawn_blocking(move || {
+            inner.lock().unwrap().take();
+            Ok(())
+        })
+        .await
+    }
+}
+
+#[cfg(unix)]
+fn read_at_impl(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.read_at(buf, offset)
+}
+
+#[cfg(unix)]
+fn write_at_impl(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
+    use std::os::unix::fs::FileExt;
+    file.write_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_at_impl(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_read(buf, offset)
+}
+
+#[cfg(windows)]
+fn write_at_impl(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
+    use std::os::windows::fs::FileExt;
+    file.seek_write(buf, offset)
+}
+
+pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::metadata(&path)).await
+}
+
+/// Read a directory's entries into a `Vec` (the blocking `ReadDir` iterator
+/// itself never crosses the pool boundary, so this fully drains it on the
+/// worker thread rather than trickling one syscall per `.await`).
+pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<std::fs::DirEntry>> {
+    let path: PathBuf = path.into();
+    spawn_blocking(move || -> io::Result<Vec<std::fs::DirEntry>> {
+        std::fs::read_dir(&path)?.collect()
+    })
+    .await
+}
+
+pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::create_dir_all(&path)).await
+}
+
+pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::remove_file(&path)).await
+}
+
+#[allow(dead_code)]
+fn _assert_path_bound(_: &Path) {}

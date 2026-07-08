@@ -6,7 +6,7 @@
 //! `DtactTcpListener` level instead.
 #![cfg(all(unix, not(feature = "native")))]
 
-use dtact_io::{DtactCompatExt, DtactIoFuture, OpCode, init_runtime, shutdown_runtime};
+use dtact_util::{DtactCompatExt, DtactIoFuture, OpCode, init_runtime, shutdown_runtime};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};

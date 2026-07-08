@@ -9,7 +9,7 @@
 /// Run:  cargo bench --bench io_performance
 /// Test: cargo bench --bench io_performance -- --test
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use dtact_io::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
+use dtact_util::io::{DtactTcpListener, DtactTcpStream, init_runtime, shutdown_runtime};
 use std::hint::black_box;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;

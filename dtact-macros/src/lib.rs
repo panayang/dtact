@@ -422,12 +422,90 @@ pub fn dtact_io_init(args: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         #(#attrs)* #vis #sig {
-            dtact_io::init_runtime(
+            dtact_util::init_runtime(
                 #workers,
                 #buffer_pool_size,
                 #chunk_size,
                 &[#(#pin_cpus),*],
                 #ring_depth,
+            );
+            #block
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Sibling to [`dtact_io_init`] for the `fs` module: configures and starts
+/// whichever native fs backend is active (io_uring slot pool on Linux,
+/// IOCP slot pool on Windows, thread pool elsewhere — see
+/// `dtact_util::fs::init_fs`) before the wrapped `main`/entry point runs.
+/// Takes the same five knobs as `dtact_io_init` (`workers`,
+/// `buffer_pool_size`, `chunk_size`, `pin_cpus`, `ring_depth`); `ring_depth`
+/// is what actually sizes the preallocated op-slot pool for fs ops.
+#[proc_macro_attribute]
+pub fn fs_init(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(args as IoInitArgs);
+    let input = parse_macro_input!(item as ItemFn);
+
+    let workers = args.workers;
+    let buffer_pool_size = args.buffer_pool_size;
+    let chunk_size = args.chunk_size;
+    let ring_depth = args.ring_depth;
+    let pin_cpus = &args.pin_cpus;
+
+    let attrs = &input.attrs;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let block = &input.block;
+
+    let expanded = quote! {
+        #(#attrs)* #vis #sig {
+            dtact_util::fs::init_fs(
+                #workers,
+                #ring_depth,
+                #buffer_pool_size,
+                #chunk_size,
+                &[#(#pin_cpus),*],
+            );
+            #block
+        }
+    };
+
+    TokenStream::from(expanded)
+}
+
+/// Sibling to [`fs_init`] for the `process` module: starts the
+/// dtact-process blocking-thread pool before the wrapped `main`/entry
+/// point runs. Same five knobs for call-site parity with `fs_init`/
+/// `dtact_io_init`; only `workers` is actually consulted by
+/// `dtact_util::process::init_process` today (see that function's doc
+/// for why the ring/buffer-pool knobs don't apply to a thread-pool-
+/// bridged backend).
+#[proc_macro_attribute]
+pub fn process_init(args: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(args as IoInitArgs);
+    let input = parse_macro_input!(item as ItemFn);
+
+    let workers = args.workers;
+    let buffer_pool_size = args.buffer_pool_size;
+    let chunk_size = args.chunk_size;
+    let ring_depth = args.ring_depth;
+    let pin_cpus = &args.pin_cpus;
+
+    let attrs = &input.attrs;
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let block = &input.block;
+
+    let expanded = quote! {
+        #(#attrs)* #vis #sig {
+            dtact_util::process::init_process(
+                #workers,
+                #ring_depth,
+                #buffer_pool_size,
+                #chunk_size,
+                &[#(#pin_cpus),*],
             );
             #block
         }

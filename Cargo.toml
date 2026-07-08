@@ -1,5 +1,5 @@
 [workspace]
-members = ["dtact-io", "dtact-macros", "fuzz", "web"]
+members = ["dtact-util", "dtact-macros", "fuzz", "web"]
 
 [package]
 name = "dtact"
@@ -40,7 +40,7 @@ proptest = "1.6"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1.52", features = ["full"] }
 serial_test = "3.0"
-dtact-io = { path = "./dtact-io", version = "0.1" }
+dtact-util = { path = "./dtact-util", version = "0.1" }
 
 [build-dependencies]
 cbindgen = "0.29"
@@ -94,8 +94,4 @@ dtact-macros = { path = "dtact-macros" }
 
 [[bench]]
 name = "scheduler_efficiency"
-harness = false
-
-[[bench]]
-name = "io_performance"
 harness = false
