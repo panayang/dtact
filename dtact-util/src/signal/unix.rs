@@ -51,7 +51,7 @@ extern "C" fn handler(sig: libc::c_int) {
     if fd >= 0 {
         let byte = sig as u8;
         unsafe {
-            libc::write(fd, &byte as *const u8 as *const libc::c_void, 1);
+            libc::write(fd, (&raw const byte).cast::<libc::c_void>(), 1);
         }
     }
 }
@@ -88,7 +88,7 @@ fn reader_loop(read_fd: RawFd) {
     let regs = registry();
     let mut byte = [0u8; 1];
     loop {
-        let n = unsafe { libc::read(read_fd, byte.as_mut_ptr() as *mut libc::c_void, 1) };
+        let n = unsafe { libc::read(read_fd, byte.as_mut_ptr().cast::<libc::c_void>(), 1) };
         if n == 1 {
             let sig = byte[0] as usize;
             if sig < regs.len() {
@@ -115,9 +115,9 @@ fn ensure_handler_installed(sig: libc::c_int) {
     unsafe {
         let mut act: libc::sigaction = std::mem::zeroed();
         act.sa_sigaction = handler as *const () as usize;
-        libc::sigemptyset(&mut act.sa_mask);
+        libc::sigemptyset(&raw mut act.sa_mask);
         act.sa_flags = libc::SA_RESTART;
-        libc::sigaction(sig, &act, std::ptr::null_mut());
+        libc::sigaction(sig, &raw const act, std::ptr::null_mut());
     }
 }
 
@@ -131,6 +131,7 @@ pub struct DtactSignalStream {
 impl DtactSignalStream {
     /// Register a listener for raw Unix signal number `sig` (e.g.
     /// `libc::SIGINT`, `libc::SIGTERM`, `libc::SIGUSR1`).
+    #[must_use]
     pub fn new(sig: libc::c_int) -> Self {
         ensure_handler_installed(sig);
         let state = registry()[sig as usize].register();
@@ -142,36 +143,42 @@ impl DtactSignalStream {
 
     /// Wait for the next delivery of this signal.
     pub async fn recv(&self) {
-        std::future::poll_fn(|cx| self.state.poll_recv(cx)).await
+        std::future::poll_fn(|cx| self.state.poll_recv(cx)).await;
     }
 }
 
 /// A stream of `SIGINT` deliveries.
+#[must_use]
 pub fn sigint() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGINT)
 }
 
 /// A stream of `SIGTERM` deliveries.
+#[must_use]
 pub fn sigterm() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGTERM)
 }
 
 /// A stream of `SIGHUP` deliveries.
+#[must_use]
 pub fn sighup() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGHUP)
 }
 
 /// A stream of `SIGUSR1` deliveries.
+#[must_use]
 pub fn sigusr1() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGUSR1)
 }
 
 /// A stream of `SIGUSR2` deliveries.
+#[must_use]
 pub fn sigusr2() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGUSR2)
 }
 
 /// A stream of `SIGCHLD` deliveries.
+#[must_use]
 pub fn sigchld() -> DtactSignalStream {
     DtactSignalStream::new(libc::SIGCHLD)
 }

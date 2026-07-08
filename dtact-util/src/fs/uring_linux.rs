@@ -1,4 +1,4 @@
-//! Linux native filesystem backend: real io_uring opcodes
+//! Linux native filesystem backend: real `io_uring` opcodes
 //! (`OpenAt`/`Read`/`Write`/`Fsync`/`Close`) submitted to a single
 //! dedicated ring, instead of `native.rs`'s thread-pool fallback.
 //!
@@ -31,7 +31,7 @@
 //! completion first — not implemented here, same caveat as the Windows
 //! backend's module doc).
 //!
-//! "Zero-copy" here means what it means for io_uring in general: the
+//! "Zero-copy" here means what it means for `io_uring` in general: the
 //! kernel reads/writes directly into the caller-supplied `Vec<u8>`'s
 //! backing allocation with no intermediate buffer and no thread-pool hop,
 //! not that an extra buffer-pool registration (`IORING_REGISTER_BUFFERS`)
@@ -56,8 +56,8 @@ use io_uring::{IoUring, opcode, squeue, types};
 
 /// Sentinel for `OpState::result` meaning "not yet completed" — mirrors
 /// `fs::iocp_windows::PENDING`. `>= 0` after completion is the raw
-/// io_uring cqe result (bytes transferred / fd); `< 0` and `!= PENDING`
-/// is `-errno`, exactly io_uring's own convention, so no decode step is
+/// `io_uring` cqe result (bytes transferred / fd); `< 0` and `!= PENDING`
+/// is `-errno`, exactly `io_uring`'s own convention, so no decode step is
 /// needed beyond checking the sign.
 const PENDING: i64 = i64::MIN;
 
@@ -67,7 +67,7 @@ struct OpState {
 }
 
 impl OpState {
-    fn fresh() -> Self {
+    const fn fresh() -> Self {
         Self {
             result: AtomicI64::new(PENDING),
             waker: AtomicWakerSlot::new(),
@@ -235,7 +235,7 @@ fn worker_loop() {
             // `IoOp` across its `.await`, so this is just a borrow.
             let state = unsafe { &*(user_data as *const OpState) };
             let res = cqe.result();
-            state.result.store(res as i64, Ordering::Release);
+            state.result.store(i64::from(res), Ordering::Release);
             state.waker.take_and_wake();
         }
     }
@@ -244,7 +244,7 @@ fn worker_loop() {
 fn submit(entry: squeue::Entry) -> IoOp {
     let slot = acquire_slot();
     let ptr: *const OpState = match &slot {
-        Slot::Pooled(idx) => &slot_pool().slots[*idx as usize],
+        Slot::Pooled(idx) => &raw const slot_pool().slots[*idx as usize],
         Slot::Heap(b) => b.as_ref(),
     };
     let entry = entry.user_data(ptr as u64);
@@ -313,7 +313,7 @@ fn path_cstring(path: &Path) -> io::Result<CString> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
 }
 
-/// An open file whose ops are submitted as real io_uring SQEs.
+/// An open file whose ops are submitted as real `io_uring` SQEs.
 pub struct DtactFile {
     fd: i32,
     cursor: AtomicI64,
@@ -388,7 +388,7 @@ impl DtactFile {
             .offset(offset)
             .build();
         let n = submit(entry).await?;
-        self.cursor.fetch_add(n as i64, Ordering::Relaxed);
+        self.cursor.fetch_add(i64::from(n), Ordering::Relaxed);
         Ok((n as usize, buf))
     }
 
@@ -401,7 +401,7 @@ impl DtactFile {
             .offset(offset)
             .build();
         let n = submit(entry).await?;
-        self.cursor.fetch_add(n as i64, Ordering::Relaxed);
+        self.cursor.fetch_add(i64::from(n), Ordering::Relaxed);
         Ok((n as usize, buf))
     }
 

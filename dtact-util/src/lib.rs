@@ -51,6 +51,7 @@
     warnings,
     clippy::dbg_macro,
     clippy::todo,
+    clippy::unused_async,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,

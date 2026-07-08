@@ -1,4 +1,4 @@
-use super::*;
+use super::{Future, Pin};
 use std::cell::RefCell;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::sync::OnceLock;
@@ -42,6 +42,7 @@ thread_local! {
 }
 
 #[doc(hidden)]
+#[must_use]
 pub fn get_local_thread_id() -> usize {
     THREAD_ID.with(|id| *id)
 }
@@ -123,10 +124,9 @@ pub fn allocate_buffer() -> Option<u32> {
 #[doc(hidden)]
 pub fn free_buffer(idx: u32) {
     if let Some(pool) = GLOBAL_BUFFER_POOL.get() {
-        let owner = CHUNK_OWNERS
-            .get()
-            .map(|owners| owners[idx as usize].load(Ordering::Acquire))
-            .unwrap_or(u32::MAX);
+        let owner = CHUNK_OWNERS.get().map_or(u32::MAX, |owners| {
+            owners[idx as usize].load(Ordering::Acquire)
+        });
         if owner == u32::MAX {
             pool.release(idx);
             return;
@@ -159,6 +159,7 @@ pub struct BufferSlice {
 }
 
 impl BufferSlice {
+    #[must_use]
     pub const fn new(buf_idx: u32, len: usize) -> Self {
         Self {
             buf_idx,
@@ -173,7 +174,8 @@ impl BufferSlice {
     }
 
     #[inline]
-    pub fn remaining(&self) -> usize {
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
         self.write_pos.saturating_sub(self.read_pos)
     }
 }
@@ -207,18 +209,18 @@ pub enum OpCode {
     /// Connect to a remote address.
     Connect,
     /// Connectionless UDP send to an explicit peer. Carries a caller-owned
-    /// `msghdr` (see `DtactUdpSocket::send_to`); io_uring uses `SendMsg`,
+    /// `msghdr` (see `DtactUdpSocket::send_to`); `io_uring` uses `SendMsg`,
     /// the mio fallback uses `sendmsg(2)`.
     SendTo,
     /// Connectionless UDP receive recording the peer address. Carries a
-    /// caller-owned `msghdr`; io_uring uses `RecvMsg`, the mio fallback uses
+    /// caller-owned `msghdr`; `io_uring` uses `RecvMsg`, the mio fallback uses
     /// `recvmsg(2)`.
     RecvFrom,
 }
 
 /// A single io-worker request, submitted across an [`SpscQueue`] from a
 /// fiber's poll to the worker thread that owns the underlying reactor
-/// (io_uring ring or mio `Poll`). Not constructed directly by callers —
+/// (`io_uring` ring or mio `Poll`). Not constructed directly by callers —
 /// built internally from a [`DtactIoFuture`]'s fields on first poll.
 pub enum IoRequest {
     /// Read into `buf_ptr[..len]` at `offset` (or the current file
@@ -272,7 +274,7 @@ pub enum IoRequest {
         msg_ptr: *mut libc::msghdr,
         slot_idx: usize,
     },
-    /// Register `fd` as an io_uring direct/fixed file, returning its
+    /// Register `fd` as an `io_uring` direct/fixed file, returning its
     /// direct-fd index as the op's result.
     RegisterFile { fd: RawFd, slot_idx: usize },
     /// Release a previously-registered direct/fixed file.
@@ -344,14 +346,14 @@ fn wake_next_waiting_fiber(state: &WorkerState) {
         state.free_wait_slots.push(wait_idx);
 
         if !data.is_null() && !vtable.is_null() {
-            let raw = RawWaker::new(data as *const (), unsafe { &*vtable });
+            let raw = RawWaker::new(data.cast_const(), unsafe { &*vtable });
             let w = unsafe { Waker::from_raw(raw) };
             w.wake();
         }
     }
 }
 
-/// Per-worker reactor state: the io_uring ring (Linux) or mio `Poll`
+/// Per-worker reactor state: the `io_uring` ring (Linux) or mio `Poll`
 /// (other Unix), its op-slot table, and the lock-free queues fibers use
 /// to submit/cancel requests. One of these exists per io-worker thread —
 /// see [`init_runtime`].
@@ -409,8 +411,11 @@ fn pin_thread_to_cpu(cpu_id: usize) -> Result<(), &'static str> {
         let mut cpuset: libc::cpu_set_t = std::mem::zeroed();
         libc::CPU_SET(cpu_id, &mut cpuset);
         let thread = libc::pthread_self();
-        let res =
-            libc::pthread_setaffinity_np(thread, std::mem::size_of::<libc::cpu_set_t>(), &cpuset);
+        let res = libc::pthread_setaffinity_np(
+            thread,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &raw const cpuset,
+        );
         if res == 0 {
             Ok(())
         } else {
@@ -424,7 +429,7 @@ fn pin_thread_to_cpu(_cpu_id: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Registering `n` direct/fixed files with io_uring requires the
+/// Registering `n` direct/fixed files with `io_uring` requires the
 /// process's `RLIMIT_NOFILE` soft limit to cover `n` (on top of whatever
 /// fds are already open) — unconditionally asking for 4096 slots panics
 /// with EMFILE on any environment with a lower default soft limit (1024
@@ -436,14 +441,14 @@ fn pin_thread_to_cpu(_cpu_id: usize) -> Result<(), &'static str> {
 fn pick_direct_fd_count(desired_max: usize) -> usize {
     unsafe {
         let mut lim: libc::rlimit = std::mem::zeroed();
-        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) == 0 {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut lim) == 0 {
             if lim.rlim_cur < lim.rlim_max {
                 let raised = libc::rlimit {
                     rlim_cur: lim.rlim_max,
                     rlim_max: lim.rlim_max,
                 };
-                let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &raised);
-                let _ = libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim);
+                let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &raw const raised);
+                let _ = libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut lim);
             }
             let headroom = 256usize;
             let available = (lim.rlim_cur as usize).saturating_sub(headroom);
@@ -458,7 +463,7 @@ fn pick_direct_fd_count(desired_max: usize) -> usize {
 // =========================================================================
 // 6. RUNTIME INITIALIZATION
 // =========================================================================
-/// Start the native io reactor: `workers` io-worker threads (io_uring on
+/// Start the native io reactor: `workers` io-worker threads (`io_uring` on
 /// Linux, kqueue/mio elsewhere), a `buffer_pool_size`-chunk arena sliced
 /// into `chunk_size`-byte buffers, a `ring_depth`-deep in-flight-op slot
 /// table per worker, and optional `pin_cpus` core affinity (index `i`
@@ -558,9 +563,7 @@ pub fn init_runtime(
         #[cfg(target_os = "linux")]
         {
             let wake_eventfd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
-            if wake_eventfd < 0 {
-                panic!("Failed to create eventfd");
-            }
+            assert!(wake_eventfd >= 0, "Failed to create eventfd");
 
             let (ring, sqpoll_enabled) = match io_uring::IoUring::builder()
                 .setup_sqpoll(2000)
@@ -660,12 +663,12 @@ pub fn init(workers: usize) {
 pub fn shutdown_runtime() {
     SHUTDOWN.store(true, Ordering::Release);
     if let Some(workers) = WORKERS.get() {
-        for state in workers.iter() {
+        for state in workers {
             #[cfg(target_os = "linux")]
             let _ = unsafe {
                 libc::write(
                     state.wake_eventfd,
-                    &1u64 as *const u64 as *const libc::c_void,
+                    std::ptr::from_ref::<u64>(&1u64).cast::<libc::c_void>(),
                     8,
                 )
             };
@@ -698,7 +701,7 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
         if !eventfd_submitted {
             let sqe = io_uring::opcode::Read::new(
                 io_uring::types::Fd(state.wake_eventfd),
-                &mut eventfd_buf as *mut u64 as *mut u8,
+                (&raw mut eventfd_buf).cast::<u8>(),
                 8,
             )
             .build()
@@ -712,7 +715,7 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
         }
 
         let mut pushed_sqe = false;
-        for q in state.queues.iter() {
+        for q in &state.queues {
             while let Some(req) = q.pop() {
                 pushed_sqe = true;
                 let _ = submit_linux_request(state, req);
@@ -721,7 +724,7 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
 
         while let Some(slot_idx) = state.cancel_queue.pop() {
             pushed_sqe = true;
-            let sqe = io_uring::opcode::AsyncCancel::new(slot_idx as u64)
+            let sqe = io_uring::opcode::AsyncCancel::new(u64::from(slot_idx))
                 .build()
                 .user_data(u64::MAX - 1);
             unsafe {
@@ -856,12 +859,11 @@ unsafe fn push_sqe(
 ) -> Result<(), &'static str> {
     loop {
         let res = unsafe { ring.submission().push(sqe) };
-        match res {
-            Ok(_) => return Ok(()),
-            Err(_) => {
-                let _ = ring.submit();
-                core::hint::spin_loop();
-            }
+        if res == Ok(()) {
+            return Ok(());
+        } else {
+            let _ = ring.submit();
+            core::hint::spin_loop();
         }
     }
 }
@@ -953,7 +955,7 @@ fn submit_linux_request(state: &WorkerState, req: IoRequest) -> Result<(), &'sta
             // io_uring copies the sockaddr into the kernel during push_sqe /
             // io_uring_enter, so a stack pointer is safe for the duration of
             // submit_linux_request.  No Mutex required.
-            let addr_ptr = &addr as *const libc::sockaddr_storage as *const libc::sockaddr;
+            let addr_ptr = (&raw const addr).cast::<libc::sockaddr>();
 
             let use_fixed = direct_fd_idx != u32::MAX;
             let target_fd = if use_fixed {
@@ -1091,7 +1093,7 @@ fn process_linux_completion(state: &WorkerState, slot_idx: usize, res: i32) {
         state.free_slots.push(slot_idx as u32);
         wake_next_waiting_fiber(state);
     } else if !data.is_null() && !vtable.is_null() {
-        let raw = RawWaker::new(data as *const (), unsafe { &*vtable });
+        let raw = RawWaker::new(data.cast_const(), unsafe { &*vtable });
         let w = unsafe { Waker::from_raw(raw) };
         w.wake();
     }
@@ -1501,7 +1503,7 @@ pub struct DtactIoFuture {
     pub worker_idx: usize,
     /// The raw fd this op is issued against.
     pub fd: u32,
-    /// io_uring direct/fixed-file index, or `u32::MAX` if `fd` is not
+    /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` is not
     /// registered as one.
     pub direct_fd_idx: u32,
     /// Which operation this future performs.
@@ -1531,7 +1533,7 @@ impl DtactIoFuture {
     /// Construct a not-yet-submitted op. Submission happens on first
     /// `poll`, not here — see `impl Future for DtactIoFuture`.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub const fn new(
         worker_idx: usize,
         fd: u32,
         direct_fd_idx: u32,
@@ -1558,7 +1560,7 @@ impl DtactIoFuture {
         }
     }
 
-    fn create_io_request(&self, slot_idx: usize) -> IoRequest {
+    const fn create_io_request(&self, slot_idx: usize) -> IoRequest {
         match self.op {
             OpCode::SendTo => IoRequest::SendTo {
                 fd: self.fd,
@@ -1650,105 +1652,105 @@ impl Future for DtactIoFuture {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(target_os = "linux")]
         {
-            let slot_idx = match self.slot_idx {
-                Some(idx) => idx,
-                None => {
-                    let state = &WORKERS.get().unwrap()[self.worker_idx];
-                    let idx = match state.free_slots.pop() {
-                        Some(i) => i as usize,
-                        None => {
-                            if let Some(wait_idx) = state.free_wait_slots.pop() {
-                                let wait_slot = &state.wait_slots[wait_idx as usize];
+            let slot_idx = if let Some(idx) = self.slot_idx {
+                idx
+            } else {
+                let state = &WORKERS.get().unwrap()[self.worker_idx];
+                let idx = match state.free_slots.pop() {
+                    Some(i) => i as usize,
+                    None => {
+                        if let Some(wait_idx) = state.free_wait_slots.pop() {
+                            let wait_slot = &state.wait_slots[wait_idx as usize];
+                            wait_slot
+                                .waker_data
+                                .store(cx.waker().data().cast_mut(), Ordering::Relaxed);
+                            wait_slot.waker_vtable.store(
+                                std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable())
+                                    .cast_mut(),
+                                Ordering::Relaxed,
+                            );
+                            state.waiting_queue.push(wait_idx);
+
+                            if let Some(i) = state.free_slots.pop() {
                                 wait_slot
                                     .waker_data
-                                    .store(cx.waker().data() as *mut (), Ordering::Relaxed);
-                                wait_slot.waker_vtable.store(
-                                    cx.waker().vtable() as *const RawWakerVTable as *mut _,
-                                    Ordering::Relaxed,
-                                );
-                                state.waiting_queue.push(wait_idx);
-
-                                if let Some(i) = state.free_slots.pop() {
-                                    wait_slot
-                                        .waker_data
-                                        .store(std::ptr::null_mut(), Ordering::Relaxed);
-                                    wait_slot
-                                        .waker_vtable
-                                        .store(std::ptr::null_mut(), Ordering::Relaxed);
-                                    i as usize
-                                } else {
-                                    return Poll::Pending;
-                                }
+                                    .store(std::ptr::null_mut(), Ordering::Relaxed);
+                                wait_slot
+                                    .waker_vtable
+                                    .store(std::ptr::null_mut(), Ordering::Relaxed);
+                                i as usize
                             } else {
-                                cx.waker().wake_by_ref();
                                 return Poll::Pending;
                             }
+                        } else {
+                            cx.waker().wake_by_ref();
+                            return Poll::Pending;
                         }
-                    };
+                    }
+                };
 
-                    let slot = &state.slots[idx];
-                    slot.completed.store(false, Ordering::Relaxed);
-                    slot.dropped.store(false, Ordering::Relaxed);
-                    slot.origin_fd.store(self.fd, Ordering::Relaxed);
-                    // Store the raw waker details.
+                let slot = &state.slots[idx];
+                slot.completed.store(false, Ordering::Relaxed);
+                slot.dropped.store(false, Ordering::Relaxed);
+                slot.origin_fd.store(self.fd, Ordering::Relaxed);
+                // Store the raw waker details.
+                slot.lock_waker();
+                slot.waker_data
+                    .store(cx.waker().data().cast_mut(), Ordering::Relaxed);
+                slot.waker_vtable.store(
+                    std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable()).cast_mut(),
+                    Ordering::Relaxed,
+                );
+                slot.unlock_waker();
+
+                let req = self.create_io_request(idx);
+                let q_idx = get_or_init_local_allocator().unwrap_or(0);
+                let queue = &state.queues[q_idx];
+
+                if queue.push(req).is_err() {
+                    // Queue full — reset slot and retry next poll.
                     slot.lock_waker();
                     slot.waker_data
-                        .store(cx.waker().data() as *mut (), Ordering::Relaxed);
-                    slot.waker_vtable.store(
-                        cx.waker().vtable() as *const RawWakerVTable as *mut _,
-                        Ordering::Relaxed,
-                    );
+                        .store(std::ptr::null_mut(), Ordering::Relaxed);
+                    slot.waker_vtable
+                        .store(std::ptr::null_mut(), Ordering::Relaxed);
                     slot.unlock_waker();
-
-                    let req = self.create_io_request(idx);
-                    let q_idx = get_or_init_local_allocator().unwrap_or(0);
-                    let queue = &state.queues[q_idx];
-
-                    if queue.push(req).is_err() {
-                        // Queue full — reset slot and retry next poll.
-                        slot.lock_waker();
-                        slot.waker_data
-                            .store(std::ptr::null_mut(), Ordering::Relaxed);
-                        slot.waker_vtable
-                            .store(std::ptr::null_mut(), Ordering::Relaxed);
-                        slot.unlock_waker();
-                        state.free_slots.push(idx as u32);
-                        wake_next_waiting_fiber(state);
-                        cx.waker().wake_by_ref();
-                        return Poll::Pending;
-                    }
-
-                    // Paired with the io-worker's Dekker-style re-check
-                    // (see `run_linux_worker_loop`): this must be a
-                    // SeqCst load with a fence between the queue push
-                    // above and this load, otherwise the push and this
-                    // load can be observed out of order (StoreLoad
-                    // reorder) and we could skip the wakeup right as the
-                    // io-worker is about to go to sleep without ever
-                    // seeing the new queue entry — a permanent lost
-                    // wakeup / deadlock.
-                    fence(Ordering::SeqCst);
-                    if state.is_sleeping.load(Ordering::SeqCst) {
-                        unsafe {
-                            let _ = libc::write(
-                                state.wake_eventfd,
-                                &1u64 as *const u64 as *const libc::c_void,
-                                8,
-                            );
-                        }
-                    }
-
-                    io_trace!(
-                        "[dtact-io] t={} slot={} fd={} op={:?} A_submit",
-                        trace_now_us(),
-                        idx,
-                        self.fd,
-                        self.op
-                    );
-
-                    self.slot_idx = Some(idx);
-                    idx
+                    state.free_slots.push(idx as u32);
+                    wake_next_waiting_fiber(state);
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
                 }
+
+                // Paired with the io-worker's Dekker-style re-check
+                // (see `run_linux_worker_loop`): this must be a
+                // SeqCst load with a fence between the queue push
+                // above and this load, otherwise the push and this
+                // load can be observed out of order (StoreLoad
+                // reorder) and we could skip the wakeup right as the
+                // io-worker is about to go to sleep without ever
+                // seeing the new queue entry — a permanent lost
+                // wakeup / deadlock.
+                fence(Ordering::SeqCst);
+                if state.is_sleeping.load(Ordering::SeqCst) {
+                    unsafe {
+                        let _ = libc::write(
+                            state.wake_eventfd,
+                            std::ptr::from_ref::<u64>(&1u64).cast::<libc::c_void>(),
+                            8,
+                        );
+                    }
+                }
+
+                io_trace!(
+                    "[dtact-io] t={} slot={} fd={} op={:?} A_submit",
+                    trace_now_us(),
+                    idx,
+                    self.fd,
+                    self.op
+                );
+
+                self.slot_idx = Some(idx);
+                idx
             };
 
             let state = &WORKERS.get().unwrap()[self.worker_idx];
@@ -1782,8 +1784,9 @@ impl Future for DtactIoFuture {
             } else {
                 // Still pending — update the waker if the waker changed
                 // (e.g. the fiber migrated to a different scheduler core).
-                let new_data = cx.waker().data() as *mut ();
-                let new_vtable = cx.waker().vtable() as *const RawWakerVTable as *mut _;
+                let new_data = cx.waker().data().cast_mut();
+                let new_vtable =
+                    std::ptr::from_ref::<RawWakerVTable>(cx.waker().vtable()).cast_mut();
 
                 slot.lock_waker();
                 let old_data = slot.waker_data.load(Ordering::Relaxed);
@@ -1966,7 +1969,7 @@ impl Drop for DtactIoFuture {
                 unsafe {
                     let _ = libc::write(
                         state.wake_eventfd,
-                        &1u64 as *const u64 as *const libc::c_void,
+                        std::ptr::from_ref::<u64>(&1u64).cast::<libc::c_void>(),
                         8,
                     );
                 }
@@ -2044,7 +2047,7 @@ impl DtactTcpStream {
         let res = unsafe {
             let r = libc::read(
                 self.inner.as_raw_fd(),
-                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.as_mut_ptr().cast::<libc::c_void>(),
                 buf.len(),
             );
             if r > 0 {
@@ -2095,7 +2098,7 @@ impl DtactTcpStream {
         let res = unsafe {
             let r = libc::write(
                 self.inner.as_raw_fd(),
-                buf.as_ptr() as *const libc::c_void,
+                buf.as_ptr().cast::<libc::c_void>(),
                 buf.len(),
             );
             if r >= 0 {
@@ -2119,7 +2122,7 @@ impl DtactTcpStream {
             fd: self.inner.as_raw_fd() as u32,
             direct_fd_idx: self.direct_fd_idx,
             op: OpCode::Write,
-            buf_ptr: buf.as_ptr() as *mut u8,
+            buf_ptr: buf.as_ptr().cast_mut(),
             len: buf.len(),
             offset: 0,
             addr: None,
@@ -2167,7 +2170,7 @@ impl DtactTcpStream {
         let connect_res = unsafe {
             libc::connect(
                 fd,
-                &libc_addr as *const libc::sockaddr_storage as *const libc::sockaddr,
+                (&raw const libc_addr).cast::<libc::sockaddr>(),
                 addr_len,
             )
         };
@@ -2198,7 +2201,7 @@ impl DtactTcpStream {
             events: libc::POLLOUT,
             revents: 0,
         };
-        let poll_res = unsafe { libc::poll(&mut pollfd, 1, 0) };
+        let poll_res = unsafe { libc::poll(&raw mut pollfd, 1, 0) };
         if poll_res > 0 {
             if (pollfd.revents & libc::POLLOUT) != 0 {
                 let mut err_code: libc::c_int = 0;
@@ -2208,8 +2211,8 @@ impl DtactTcpStream {
                         fd,
                         libc::SOL_SOCKET,
                         libc::SO_ERROR,
-                        &mut err_code as *mut libc::c_int as *mut libc::c_void,
-                        &mut err_len,
+                        (&raw mut err_code).cast::<libc::c_void>(),
+                        &raw mut err_len,
                     )
                 };
                 if sockopt_res == 0 && err_code == 0 {
@@ -2313,8 +2316,8 @@ impl DtactTcpListener {
             let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
             let r = libc::accept(
                 self.inner.as_raw_fd(),
-                &mut addr as *mut libc::sockaddr_storage as *mut libc::sockaddr,
-                &mut len,
+                (&raw mut addr).cast::<libc::sockaddr>(),
+                &raw mut len,
             );
             if r >= 0 {
                 Ok((r, addr, len))
@@ -2380,7 +2383,7 @@ impl Drop for DtactTcpListener {
 // 10b. HIGH-LEVEL API: DtactUdpSocket
 // =========================================================================
 
-/// Async UDP socket driven by the native backend (io_uring `SendMsg`/`RecvMsg`
+/// Async UDP socket driven by the native backend (`io_uring` `SendMsg`/`RecvMsg`
 /// on Linux, `sendmsg`/`recvmsg` via the mio/kqueue reactor elsewhere).
 ///
 /// Supports the connectionless (`send_to`/`recv_from`) and connected
@@ -2639,25 +2642,27 @@ impl Drop for DtactUdpSocket {
 
 /// Register `fd` with the dtact-io driver.
 ///
-/// We intentionally skip io_uring fixed-file registration here.
-/// `register_files_update` (io_uring_register) returns EBUSY under SQPOLL
+/// We intentionally skip `io_uring` fixed-file registration here.
+/// `register_files_update` (`io_uring_register`) returns EBUSY under SQPOLL
 /// when called concurrently with the io worker's submit/wait loop, and
 /// serialising it with a mutex would either deadlock (if called from inside
 /// a fiber) or severely harm throughput.  Fixed files provide only ~5%
 /// throughput gain; correctness takes priority.
 ///
 /// `u32::MAX` is the sentinel the io-path already uses for "raw fd" mode.
-fn register_fd_sync(_state: &WorkerState, _fd: RawFd) -> std::io::Result<u32> {
+const fn register_fd_sync(_state: &WorkerState, _fd: RawFd) -> std::io::Result<u32> {
     Ok(u32::MAX)
 }
 
 /// Nothing to release when we aren't using fixed files.
-fn unregister_fd_sync(_state: &WorkerState, _direct_fd_idx: u32) {}
+const fn unregister_fd_sync(_state: &WorkerState, _direct_fd_idx: u32) {}
 
 // =========================================================================
 // 12. HELPER CONVERTER FUNCTIONS
 // =========================================================================
-fn socket_addr_to_libc(addr: std::net::SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
+const fn socket_addr_to_libc(
+    addr: std::net::SocketAddr,
+) -> (libc::sockaddr_storage, libc::socklen_t) {
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     let len = match addr {
         std::net::SocketAddr::V4(a) => {
@@ -2671,8 +2676,8 @@ fn socket_addr_to_libc(addr: std::net::SocketAddr) -> (libc::sockaddr_storage, l
             };
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &sin as *const libc::sockaddr_in as *const u8,
-                    &mut storage as *mut libc::sockaddr_storage as *mut u8,
+                    (&raw const sin).cast::<u8>(),
+                    (&raw mut storage).cast::<u8>(),
                     std::mem::size_of::<libc::sockaddr_in>(),
                 );
             }
@@ -2690,8 +2695,8 @@ fn socket_addr_to_libc(addr: std::net::SocketAddr) -> (libc::sockaddr_storage, l
             };
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    &sin6 as *const libc::sockaddr_in6 as *const u8,
-                    &mut storage as *mut libc::sockaddr_storage as *mut u8,
+                    (&raw const sin6).cast::<u8>(),
+                    (&raw mut storage).cast::<u8>(),
                     std::mem::size_of::<libc::sockaddr_in6>(),
                 );
             }
@@ -2707,17 +2712,17 @@ fn sockaddr_storage_to_socketaddr(
     storage: &libc::sockaddr_storage,
     _len: libc::socklen_t,
 ) -> std::net::SocketAddr {
-    match storage.ss_family as libc::c_int {
+    match libc::c_int::from(storage.ss_family) {
         libc::AF_INET => {
             // Safety: ss_family confirmed to be AF_INET.
-            let sin = unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
+            let sin = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_in>() };
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
             let port = u16::from_be(sin.sin_port);
             std::net::SocketAddr::V4(std::net::SocketAddrV4::new(ip, port))
         }
         libc::AF_INET6 => {
             // Safety: ss_family confirmed to be AF_INET6.
-            let sin6 = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
+            let sin6 = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_in6>() };
             let ip = std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr);
             let port = u16::from_be(sin6.sin6_port);
             std::net::SocketAddr::V6(std::net::SocketAddrV6::new(

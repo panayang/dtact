@@ -85,4 +85,4 @@ extra_bindings = []
 crates = []
 all_features = true
 default_features = true
-features = ["hw-acceleration", "hypervisor", "windows-root", "windows"]
+features = []

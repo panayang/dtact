@@ -77,7 +77,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
     );
 }
 
-/// Switches execution context while preserving floating-point and Windows TIB state (x86_64).
+/// Switches execution context while preserving floating-point and Windows TIB state (`x86_64`).
 ///
 /// Complies with the Windows x64 ABI by preserving callee-saved registers
 /// (rbx, rbp, rdi, rsi, r12-r15), XMM6-XMM15, MXCSR, and the Thread Information Block (TIB).
@@ -87,8 +87,8 @@ pub unsafe extern "C" fn switch_context_cross_thread_float(
 /// * `restore` (rdx): Pointer to `Registers`.
 ///
 /// # Safety
-/// * Updates `gs:[0x00]` (ExceptionList), `gs:[0x08]` (StackBase), `gs:[0x10]` (StackLimit),
-///   and `gs:[0x1478]` (DeallocationStack) to reflect the new fiber stack.
+/// * Updates `gs:[0x00]` (`ExceptionList`), `gs:[0x08]` (`StackBase`), `gs:[0x10]` (`StackLimit`),
+///   and `gs:[0x1478]` (`DeallocationStack`) to reflect the new fiber stack.
 /// * `Registers` must be 64-byte aligned; XMM slots at offsets 128-272 are 16-byte aligned,
 ///   satisfying MOVAPS requirements.
 #[cfg(all(target_arch = "x86_64", windows))]
@@ -583,7 +583,7 @@ pub unsafe extern "C" fn switch_context_cross_thread_no_float(
     );
 }
 
-/// Switches execution context preserving Windows TIB state, no float (Windows x86_64).
+/// Switches execution context preserving Windows TIB state, no float (Windows `x86_64`).
 ///
 /// Preserves the Windows TIB/TEB metadata and callee-saved GPRs only.
 /// No XMM or MXCSR state is saved; fibers using this variant must not rely on
@@ -972,7 +972,7 @@ pub unsafe extern "C" fn switch_context_same_thread_float(
     );
 }
 
-/// Context switch for same-thread fibers with TIB and float state (Windows x86_64).
+/// Context switch for same-thread fibers with TIB and float state (Windows `x86_64`).
 ///
 /// Preserves the Windows TIB/TEB metadata, callee-saved GPRs (rbx, rbp, rdi, rsi,
 /// r12-r15), XMM6-XMM15, and MXCSR per the Windows x64 ABI.
@@ -1472,7 +1472,7 @@ pub unsafe extern "C" fn switch_context_same_thread_no_float(
     );
 }
 
-/// Fastest same-thread context switch with TIB, no float (Windows x86_64).
+/// Fastest same-thread context switch with TIB, no float (Windows `x86_64`).
 ///
 /// Preserves the Windows TIB/TEB metadata and callee-saved GPRs only.
 /// No XMM or MXCSR state is saved; fibers using this variant must not rely on
