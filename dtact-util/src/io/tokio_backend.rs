@@ -436,6 +436,18 @@ impl DtactTcpStream {
     }
 }
 
+impl crate::io::AsyncRead for DtactTcpStream {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+impl crate::io::AsyncWrite for DtactTcpStream {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
 /// Tokio-backed TCP listener. Mirrors the native backend's
 /// `DtactTcpListener` API surface.
 pub struct DtactTcpListener {
@@ -471,6 +483,164 @@ impl DtactTcpListener {
         let (stream, addr) = TokioFutureWrapper { inner: fut }.await?;
         stream.set_nodelay(true)?;
         Ok((DtactTcpStream { inner: stream }, addr))
+    }
+}
+
+// =========================================================================
+// HIGH-LEVEL API: DtactUnixStream / DtactUnixListener  (tokio backend)
+// =========================================================================
+// Unix-only (matches `tokio::net::unix`'s own availability, and is broader
+// than the native backend's Linux-only `DtactUnixStream`/`DtactUnixListener`
+// — see `io::native`'s module doc for why macOS/BSD isn't wired up there
+// yet). Thin wrappers over `tokio::net::UnixStream`/`UnixListener`, same
+// shape as `DtactTcpStream`/`DtactTcpListener` above minus `TCP_NODELAY`
+// (no Unix-domain-socket equivalent to disable).
+
+/// Tokio-backed Unix-domain-socket stream. Mirrors the native backend's
+/// `DtactUnixStream` API surface.
+#[cfg(unix)]
+pub struct DtactUnixStream {
+    inner: tokio::net::UnixStream,
+}
+
+#[cfg(unix)]
+impl DtactUnixStream {
+    /// Wrap an existing `std::os::unix::net::UnixStream`, switching it to
+    /// non-blocking mode.
+    ///
+    /// # Errors
+    /// Returns an error if the OS refuses to set the socket non-blocking.
+    pub fn from_std(stream: std::os::unix::net::UnixStream) -> std::io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UnixStream::from_std(stream)?;
+        Ok(Self { inner })
+    }
+
+    /// Read into `buf`, waiting on tokio's reactor for readability between
+    /// `WouldBlock` retries rather than busy-polling.
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying socket other than
+    /// `WouldBlock`, which is retried internally.
+    pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_read(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.readable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Write `buf`, waiting on tokio's reactor for writability between
+    /// `WouldBlock` retries rather than busy-polling.
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying socket other than
+    /// `WouldBlock`, which is retried internally.
+    pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_write(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.writable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Connect to the filesystem path `path`.
+    ///
+    /// # Errors
+    /// Returns any error from `tokio::net::UnixStream::connect` (e.g.
+    /// `NotFound`/`ConnectionRefused` if nothing is listening at `path`).
+    pub async fn connect(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let handle = runtime_handle();
+        let fut = {
+            let _guard = handle.enter();
+            tokio::net::UnixStream::connect(path)
+        };
+        let inner = TokioFutureWrapper { inner: fut }.await?;
+        Ok(Self { inner })
+    }
+
+    /// The connected peer's credentials (PID/UID/GID). Thin wrapper over
+    /// `tokio::net::UnixStream::peer_cred` — a plain synchronous syscall
+    /// under the hood, not routed through the reactor.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying syscall fails (e.g. the
+    /// socket was closed concurrently).
+    pub fn peer_cred(&self) -> std::io::Result<tokio::net::unix::UCred> {
+        self.inner.peer_cred()
+    }
+}
+
+#[cfg(unix)]
+impl crate::io::AsyncRead for DtactUnixStream {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+#[cfg(unix)]
+impl crate::io::AsyncWrite for DtactUnixStream {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
+/// Tokio-backed Unix-domain-socket listener. Mirrors the native backend's
+/// `DtactUnixListener` API surface.
+#[cfg(unix)]
+pub struct DtactUnixListener {
+    inner: tokio::net::UnixListener,
+}
+
+#[cfg(unix)]
+impl DtactUnixListener {
+    /// Bind a new listener to the filesystem path `path`. `path` must not
+    /// already exist — like `std::os::unix::net::UnixListener::bind`,
+    /// this does not remove a stale socket file left behind by a
+    /// previous run.
+    ///
+    /// # Errors
+    /// Returns any error from binding the underlying OS socket (e.g.
+    /// `AddrInUse` if `path` already exists).
+    pub fn bind(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UnixListener::bind(path)?;
+        Ok(Self { inner })
+    }
+
+    /// Wrap an existing `std::os::unix::net::UnixListener`, switching it
+    /// to non-blocking mode.
+    ///
+    /// # Errors
+    /// Returns an error if the OS refuses to set the socket non-blocking.
+    pub fn from_std(listener: std::os::unix::net::UnixListener) -> std::io::Result<Self> {
+        listener.set_nonblocking(true)?;
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UnixListener::from_std(listener)?;
+        Ok(Self { inner })
+    }
+
+    /// Accept a single incoming connection.
+    ///
+    /// # Errors
+    /// Returns any error surfaced by the OS while accepting (e.g. the
+    /// listener was closed, or a transient per-connection accept failure).
+    pub async fn accept(&self) -> std::io::Result<(DtactUnixStream, tokio::net::unix::SocketAddr)> {
+        let fut = {
+            let _guard = runtime_handle().enter();
+            self.inner.accept()
+        };
+        let (stream, addr) = TokioFutureWrapper { inner: fut }.await?;
+        Ok((DtactUnixStream { inner: stream }, addr))
     }
 }
 
@@ -598,6 +768,132 @@ impl DtactUdpSocket {
     /// # Errors
     /// Returns any error from the underlying `recv`, including if the socket
     /// is not connected.
+    pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_recv(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.readable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+}
+
+/// Async Unix-domain datagram socket — tokio-backend equivalent of the
+/// native `DtactUnixDatagram`, a thin wrapper over
+/// [`tokio::net::UnixDatagram`].
+///
+/// Mirrors [`DtactUdpSocket`]'s connectionless/connected split. Unlike
+/// the native backend (which has to hand-parse a raw `sockaddr_un` into
+/// its own address type), `recv_from` here just returns tokio's own
+/// `tokio::net::unix::SocketAddr` directly.
+#[cfg(unix)]
+pub struct DtactUnixDatagram {
+    inner: tokio::net::UnixDatagram,
+}
+
+#[cfg(unix)]
+impl DtactUnixDatagram {
+    /// Bind a new datagram socket to the filesystem path `path`.
+    ///
+    /// # Errors
+    /// Returns any error from binding the underlying OS socket or
+    /// registering it with the reactor.
+    pub fn bind(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UnixDatagram::bind(path)?;
+        Ok(Self { inner })
+    }
+
+    /// Create an unbound datagram socket (matches
+    /// `tokio::net::UnixDatagram::unbound`).
+    ///
+    /// # Errors
+    /// Returns any error from creating the underlying OS socket or
+    /// registering it with the reactor.
+    pub fn unbound() -> std::io::Result<Self> {
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::UnixDatagram::unbound()?;
+        Ok(Self { inner })
+    }
+
+    /// Send `buf` as a single datagram to the socket bound at `target`,
+    /// returning the number of bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `sendto`.
+    pub async fn send_to(
+        &self,
+        buf: &[u8],
+        target: impl AsRef<std::path::Path>,
+    ) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_send_to(buf, target.as_ref()) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.writable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Receive a single datagram into `buf`, returning the byte count and
+    /// the peer address it came from.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recvfrom`.
+    pub async fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> std::io::Result<(usize, tokio::net::unix::SocketAddr)> {
+        loop {
+            match self.inner.try_recv_from(buf) {
+                Ok(pair) => return Ok(pair),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.readable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Connect this socket to the path `target` so
+    /// [`send`](Self::send)/[`recv`](Self::recv) can omit the peer
+    /// address.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `connect`.
+    pub async fn connect(&self, target: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.inner.connect(target)
+    }
+
+    /// Send `buf` to the connected peer, returning the number of bytes
+    /// sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `send`, including if the
+    /// socket is not connected.
+    pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            match self.inner.try_send(buf) {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            let fut = self.inner.writable();
+            TokioFutureWrapper { inner: fut }.await?;
+        }
+    }
+
+    /// Receive a datagram from the connected peer into `buf`, returning
+    /// the byte count.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recv`, including if the
+    /// socket is not connected.
     pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
             match self.inner.try_recv(buf) {
@@ -783,5 +1079,232 @@ impl tokio::io::AsyncWrite for DtactCompat<DtactTcpStream> {
 
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Poll::Ready(Ok(()))
+    }
+}
+
+/// Resolve `host` (a `"host:port"` string) to one or more `SocketAddr`s.
+///
+/// Via tokio's own async resolver, without blocking the calling task's
+/// thread. Thin wrapper over `tokio::net::lookup_host` — matches the
+/// native backend's `lookup_host` signature (a plain iterator, not
+/// tokio's own `LookupHost` type) so call-sites port across backends with
+/// a single feature flag.
+///
+/// # Errors
+/// Returns whatever `tokio::net::lookup_host` returns (e.g. `host:port`
+/// doesn't parse, or the name doesn't resolve).
+pub async fn lookup_host(
+    host: impl tokio::net::ToSocketAddrs,
+) -> std::io::Result<impl Iterator<Item = std::net::SocketAddr>> {
+    let fut = {
+        let _guard = runtime_handle().enter();
+        tokio::net::lookup_host(host)
+    };
+    let resolved = TokioFutureWrapper { inner: fut }.await?;
+    Ok(resolved.collect::<Vec<_>>().into_iter())
+}
+
+// =========================================================================
+// HIGH-LEVEL API: named pipes  (tokio backend, Windows only)
+// =========================================================================
+// Thin wrappers over `tokio::net::windows::named_pipe`, mirroring the
+// native backend's `DtactNamedPipeServer`/`DtactNamedPipeClient` shape
+// (including the "no persistent listener, create one server instance per
+// client" semantics — see that module's doc for the rationale, identical
+// here since it's inherent to Windows named pipes, not a native-backend
+// simplification).
+
+/// One named-pipe connection — the read/write half shared by
+/// [`DtactNamedPipeServer`] (after a client connects) and
+/// [`DtactNamedPipeClient`].
+#[cfg(windows)]
+pub struct DtactNamedPipeHandle {
+    inner: NamedPipeInner,
+}
+
+#[cfg(windows)]
+enum NamedPipeInner {
+    Server(tokio::net::windows::named_pipe::NamedPipeServer),
+    Client(tokio::net::windows::named_pipe::NamedPipeClient),
+}
+
+#[cfg(windows)]
+impl DtactNamedPipeHandle {
+    /// Read into `buf`, returning the number of bytes read (`0` = the
+    /// peer closed its end).
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying pipe other than
+    /// `WouldBlock`, which is retried internally.
+    pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let result = match &self.inner {
+                NamedPipeInner::Server(s) => s.try_read(buf),
+                NamedPipeInner::Client(c) => c.try_read(buf),
+            };
+            match result {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            // Awaited inside each arm (not hoisted into a shared `let
+            // fut = match ...`) because `NamedPipeServer::readable()` and
+            // `NamedPipeClient::readable()` return distinct opaque
+            // `impl Future` types — `TokioFutureWrapper` of one doesn't
+            // unify with `TokioFutureWrapper` of the other even though
+            // both eventually resolve to the same `io::Result<()>`.
+            match &self.inner {
+                NamedPipeInner::Server(s) => {
+                    TokioFutureWrapper {
+                        inner: s.readable(),
+                    }
+                    .await?
+                }
+                NamedPipeInner::Client(c) => {
+                    TokioFutureWrapper {
+                        inner: c.readable(),
+                    }
+                    .await?
+                }
+            }
+        }
+    }
+
+    /// Write from `buf`, returning the number of bytes written.
+    ///
+    /// # Errors
+    /// Returns any I/O error surfaced by the underlying pipe other than
+    /// `WouldBlock`, which is retried internally.
+    pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            let result = match &self.inner {
+                NamedPipeInner::Server(s) => s.try_write(buf),
+                NamedPipeInner::Client(c) => c.try_write(buf),
+            };
+            match result {
+                Ok(n) => return Ok(n),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+            // See the matching comment in `read` above for why this is
+            // awaited per-arm rather than hoisted out of the `match`.
+            match &self.inner {
+                NamedPipeInner::Server(s) => {
+                    TokioFutureWrapper {
+                        inner: s.writable(),
+                    }
+                    .await?
+                }
+                NamedPipeInner::Client(c) => {
+                    TokioFutureWrapper {
+                        inner: c.writable(),
+                    }
+                    .await?
+                }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl crate::io::AsyncRead for DtactNamedPipeHandle {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+#[cfg(windows)]
+impl crate::io::AsyncWrite for DtactNamedPipeHandle {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
+/// A single named-pipe server instance, before a client has connected.
+///
+/// Create one per client you intend to accept — see this module's doc.
+#[cfg(windows)]
+pub struct DtactNamedPipeServer {
+    inner: tokio::net::windows::named_pipe::NamedPipeServer,
+}
+
+#[cfg(windows)]
+impl DtactNamedPipeServer {
+    /// Create a new duplex, byte-mode pipe instance named `name` (e.g.
+    /// `r"\\.\pipe\my-app"`).
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying `CreateNamedPipeW` fails
+    /// (e.g. `name` is malformed).
+    pub fn create(name: &str) -> std::io::Result<Self> {
+        let _guard = runtime_handle().enter();
+        let inner = tokio::net::windows::named_pipe::ServerOptions::new().create(name)?;
+        Ok(Self { inner })
+    }
+
+    /// Wait for a client to connect to this pipe instance.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying `ConnectNamedPipe`
+    /// completion reports one.
+    pub async fn connect(self) -> std::io::Result<DtactNamedPipeHandle> {
+        let fut = {
+            let _guard = runtime_handle().enter();
+            self.inner.connect()
+        };
+        TokioFutureWrapper { inner: fut }.await?;
+        Ok(DtactNamedPipeHandle {
+            inner: NamedPipeInner::Server(self.inner),
+        })
+    }
+}
+
+/// A named-pipe client. Connects to an already-`create`d server instance
+/// by name.
+#[cfg(windows)]
+pub struct DtactNamedPipeClient;
+
+#[cfg(windows)]
+impl DtactNamedPipeClient {
+    /// Connect to the server pipe instance named `name`, retrying while
+    /// every existing instance is busy — `tokio::net::windows::named_pipe`
+    /// already implements this retry internally in `ClientOptions::open`.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying `CreateFileW` fails for
+    /// any reason other than transient busy (e.g. `NotFound` if no server
+    /// is listening at `name` at all).
+    ///
+    /// # Panics
+    /// Panics if the OS refuses to spawn the connect-retry thread (fatal
+    /// resource exhaustion) — same class of failure every other native
+    /// backend in this crate treats as unrecoverable at thread-spawn time.
+    pub async fn connect(name: &str) -> std::io::Result<DtactNamedPipeHandle> {
+        let (tx, rx) = crate::sync::oneshot::channel();
+        let name_owned = name.to_string();
+        let handle_rt = runtime_handle();
+        // `ClientOptions::open`'s internal retry-on-busy loop blocks the
+        // calling thread, so run it on a throwaway one rather than
+        // stalling the awaiting task's thread — same rationale as
+        // `crate::io::lookup_host`. `open()` itself must run inside the
+        // tokio runtime context to register the resulting handle with
+        // tokio's reactor, hence entering `handle_rt` on this thread too.
+        std::thread::Builder::new()
+            .name("dtact-io-namedpipe-connect".into())
+            .spawn(move || {
+                let _guard = handle_rt.enter();
+                let result =
+                    tokio::net::windows::named_pipe::ClientOptions::new().open(&name_owned);
+                let _ = tx.send(result);
+            })
+            .expect("failed to spawn dtact-io named-pipe connect thread");
+        let inner = rx.await.unwrap_or_else(|_| {
+            Err(std::io::Error::other(
+                "dtact-io: named-pipe connect thread panicked before sending a result",
+            ))
+        })?;
+        Ok(DtactNamedPipeHandle {
+            inner: NamedPipeInner::Client(inner),
+        })
     }
 }

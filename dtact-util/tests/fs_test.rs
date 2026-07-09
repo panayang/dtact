@@ -252,3 +252,148 @@ fn test_fs_slot_pool_exhaustion_falls_back_correctly() {
 
     block_on(dtact_util::fs::remove_file(&path)).unwrap();
 }
+
+/// Exercises the free functions added alongside `metadata`/`read_dir`/
+/// `create_dir_all`/`remove_file`: `write`/`read`/`read_to_string`,
+/// `copy`, `rename`, `create_dir`/`remove_dir`/`remove_dir_all`,
+/// `hard_link`, `canonicalize`, `try_exists`, `set_permissions`, and
+/// `symlink_metadata`. Unix-only `symlink`/Windows-only
+/// `symlink_dir`/`symlink_file` are covered separately below (creating
+/// symlinks needs elevated privileges/Developer Mode on Windows, so that
+/// one's allowed to fail there rather than asserted unconditionally).
+#[test]
+fn test_fs_free_functions() {
+    dtact_util::fs::init(2);
+
+    let dir = std::env::temp_dir().join(format!("dtact-fs-test-free-fns-{}", std::process::id()));
+    block_on(dtact_util::fs::create_dir_all(&dir)).unwrap();
+
+    block_on(async {
+        // write / read / read_to_string
+        let path = dir.join("hello.txt");
+        dtact_util::fs::write(&path, b"hello dtact-fs free functions")
+            .await
+            .unwrap();
+        let bytes = dtact_util::fs::read(&path).await.unwrap();
+        assert_eq!(bytes, b"hello dtact-fs free functions");
+        let s = dtact_util::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(s, "hello dtact-fs free functions");
+
+        // try_exists
+        assert!(dtact_util::fs::try_exists(&path).await.unwrap());
+        assert!(
+            !dtact_util::fs::try_exists(dir.join("does-not-exist"))
+                .await
+                .unwrap()
+        );
+
+        // copy
+        let copy_path = dir.join("hello-copy.txt");
+        let n = dtact_util::fs::copy(&path, &copy_path).await.unwrap();
+        assert_eq!(n, bytes.len() as u64);
+        assert_eq!(dtact_util::fs::read(&copy_path).await.unwrap(), bytes);
+
+        // hard_link
+        let link_path = dir.join("hello-hardlink.txt");
+        dtact_util::fs::hard_link(&path, &link_path).await.unwrap();
+        assert_eq!(dtact_util::fs::read(&link_path).await.unwrap(), bytes);
+
+        // rename
+        let renamed_path = dir.join("hello-renamed.txt");
+        dtact_util::fs::rename(&copy_path, &renamed_path)
+            .await
+            .unwrap();
+        assert!(!dtact_util::fs::try_exists(&copy_path).await.unwrap());
+        assert!(dtact_util::fs::try_exists(&renamed_path).await.unwrap());
+
+        // canonicalize
+        let canon = dtact_util::fs::canonicalize(&path).await.unwrap();
+        assert!(canon.is_absolute());
+
+        // symlink_metadata (on a plain file, just confirms it doesn't
+        // error and reports the same file — real symlink behavior is
+        // covered in the platform-specific tests below).
+        let meta = dtact_util::fs::symlink_metadata(&path).await.unwrap();
+        assert!(meta.is_file());
+
+        // set_permissions: flip read-only on, then back off, checking
+        // `Permissions::readonly` after each — the concrete bit layout
+        // is platform-specific, `readonly()` isn't.
+        let mut perm = dtact_util::fs::metadata(&path).await.unwrap().permissions();
+        perm.set_readonly(true);
+        dtact_util::fs::set_permissions(&path, perm).await.unwrap();
+        assert!(
+            dtact_util::fs::metadata(&path)
+                .await
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+        let mut perm = dtact_util::fs::metadata(&path).await.unwrap().permissions();
+        perm.set_readonly(false);
+        dtact_util::fs::set_permissions(&path, perm).await.unwrap();
+        assert!(
+            !dtact_util::fs::metadata(&path)
+                .await
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+
+        // create_dir / remove_dir / remove_dir_all
+        let subdir = dir.join("subdir");
+        dtact_util::fs::create_dir(&subdir).await.unwrap();
+        assert!(dtact_util::fs::try_exists(&subdir).await.unwrap());
+        dtact_util::fs::remove_dir(&subdir).await.unwrap();
+        assert!(!dtact_util::fs::try_exists(&subdir).await.unwrap());
+
+        let nested = dir.join("nested/a/b/c");
+        dtact_util::fs::create_dir_all(&nested).await.unwrap();
+        assert!(dtact_util::fs::try_exists(&nested).await.unwrap());
+        dtact_util::fs::remove_dir_all(dir.join("nested"))
+            .await
+            .unwrap();
+        assert!(!dtact_util::fs::try_exists(&nested).await.unwrap());
+
+        let _ = dtact_util::fs::remove_file(&path).await;
+        let _ = dtact_util::fs::remove_file(&link_path).await;
+        let _ = dtact_util::fs::remove_file(&renamed_path).await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn test_fs_symlink_unix() {
+    dtact_util::fs::init(2);
+
+    let dir = std::env::temp_dir().join(format!("dtact-fs-test-symlink-{}", std::process::id()));
+    block_on(dtact_util::fs::create_dir_all(&dir)).unwrap();
+
+    block_on(async {
+        let target = dir.join("target.txt");
+        dtact_util::fs::write(&target, b"symlink target")
+            .await
+            .unwrap();
+        let link = dir.join("link.txt");
+        dtact_util::fs::symlink(&target, &link).await.unwrap();
+
+        // symlink_metadata must report the link itself, not its target.
+        let meta = dtact_util::fs::symlink_metadata(&link).await.unwrap();
+        assert!(meta.file_type().is_symlink());
+
+        // read_link must return the recorded target path.
+        let resolved = dtact_util::fs::read_link(&link).await.unwrap();
+        assert_eq!(resolved, target);
+
+        // Reading through the link must yield the target's contents —
+        // confirms it's a real, followable symlink, not just a file that
+        // happens to report `is_symlink()`.
+        assert_eq!(
+            dtact_util::fs::read(&link).await.unwrap(),
+            b"symlink target"
+        );
+
+        let _ = dtact_util::fs::remove_file(&link).await;
+        let _ = dtact_util::fs::remove_file(&target).await;
+    });
+}

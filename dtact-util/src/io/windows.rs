@@ -1453,6 +1453,18 @@ impl DtactTcpStream {
     }
 }
 
+impl crate::io::AsyncRead for DtactTcpStream {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+impl crate::io::AsyncWrite for DtactTcpStream {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
 /// An async TCP listener backed by IOCP-issued `AcceptEx`.
 pub struct DtactTcpListener {
     inner: std::net::TcpListener,

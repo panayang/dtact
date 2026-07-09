@@ -108,5 +108,7 @@ pub mod signal;
 
 pub mod process;
 
+pub mod sync;
+
 #[cfg(feature = "ffi")]
 pub mod ffi;

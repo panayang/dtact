@@ -355,3 +355,106 @@ fn null_pointer_guard_and_error_message() {
         assert!(last_error().is_some());
     }
 }
+
+#[cfg(unix)]
+fn unix_socket_path(tag: &str) -> CString {
+    let path = std::env::temp_dir().join(format!(
+        "dtact-ffi-uds-{tag}-{}-{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+    CString::new(path.to_str().unwrap()).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn io_unix_stream_echo() {
+    unsafe {
+        dtact_util_io_init(1);
+        let addr = unix_socket_path("stream");
+
+        let listener = dtact_util_io_unix_listener_bind(addr.as_ptr());
+        assert!(!listener.is_null(), "{:?}", last_error());
+
+        let listener_addr = listener as usize;
+        let server = std::thread::spawn(move || {
+            let listener = listener_addr as *mut _;
+            let stream = dtact_util_io_unix_listener_accept(listener);
+            assert!(!stream.is_null());
+
+            // Peer credentials must be this same test process.
+            let mut uid = 0u32;
+            let mut gid = 0u32;
+            let mut pid = 0i32;
+            assert_eq!(
+                dtact_util_io_unix_stream_peer_cred(stream, &mut uid, &mut gid, &mut pid),
+                0
+            );
+            assert_eq!(uid, libc::getuid());
+            assert_eq!(gid, libc::getgid());
+
+            let mut buf = [0u8; 5];
+            let n = dtact_util_io_unix_stream_read(stream, buf.as_mut_ptr(), buf.len());
+            assert_eq!(n, 5);
+            let w = dtact_util_io_unix_stream_write(stream, buf.as_ptr(), n as usize);
+            assert_eq!(w, 5);
+            dtact_util_io_unix_stream_close(stream);
+            dtact_util_io_unix_listener_close(listener);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let client = dtact_util_io_unix_stream_connect(addr.as_ptr());
+        assert!(!client.is_null(), "{:?}", last_error());
+        let msg = b"pingx";
+        assert_eq!(dtact_util_io_unix_stream_write(client, msg.as_ptr(), 5), 5);
+        let mut buf = [0u8; 5];
+        assert_eq!(
+            dtact_util_io_unix_stream_read(client, buf.as_mut_ptr(), 5),
+            5
+        );
+        assert_eq!(&buf, msg);
+        dtact_util_io_unix_stream_close(client);
+
+        server.join().unwrap();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn io_unix_datagram_send_recv_roundtrip() {
+    unsafe {
+        dtact_util_io_init(1);
+        let msg = b"pingx";
+        let a_addr = unix_socket_path("dgram-a");
+        let b_addr = unix_socket_path("dgram-b");
+
+        let a = dtact_util_io_unix_datagram_bind(a_addr.as_ptr());
+        assert!(!a.is_null(), "{:?}", last_error());
+        let b = dtact_util_io_unix_datagram_bind(b_addr.as_ptr());
+        assert!(!b.is_null(), "{:?}", last_error());
+
+        let sent = dtact_util_io_unix_datagram_send_to(b, msg.as_ptr(), msg.len(), a_addr.as_ptr());
+        assert_eq!(sent, msg.len() as isize, "{:?}", last_error());
+
+        let mut buf = [0u8; 16];
+        let mut out_addr = [0i8; 256];
+        let n = dtact_util_io_unix_datagram_recv_from(
+            a,
+            buf.as_mut_ptr(),
+            buf.len(),
+            out_addr.as_mut_ptr(),
+            out_addr.len(),
+        );
+        assert_eq!(n, msg.len() as isize, "{:?}", last_error());
+        assert_eq!(&buf[..n as usize], msg);
+        let peer = CStr::from_ptr(out_addr.as_ptr()).to_str().unwrap();
+        assert_eq!(peer, b_addr.to_str().unwrap());
+
+        dtact_util_io_unix_datagram_close(a);
+        dtact_util_io_unix_datagram_close(b);
+    }
+}

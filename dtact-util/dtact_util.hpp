@@ -212,7 +212,104 @@ struct DtactUdpSocket;
  */
 struct DtactUdpSocket;
 
+/*
+ Async Unix-domain datagram socket.
+
+ Connectionless counterpart to [`DtactUnixStream`], directly analogous
+ to [`DtactUdpSocket`] (same connectionless `send_to`/`recv_from` and
+ connected `connect`/`send`/`recv` pattern, same `SendTo`/`RecvFrom`/
+ `Read`/`Write` submission machinery — only the address family and the
+ `libc::sockaddr_un` construction differ).
+ */
+struct DtactUnixDatagram;
+
+/*
+ Async Unix-domain datagram socket — tokio-backend equivalent of the
+ native `DtactUnixDatagram`, a thin wrapper over
+ [`tokio::net::UnixDatagram`].
+
+ Mirrors [`DtactUdpSocket`]'s connectionless/connected split. Unlike
+ the native backend (which has to hand-parse a raw `sockaddr_un` into
+ its own address type), `recv_from` here just returns tokio's own
+ `tokio::net::unix::SocketAddr` directly.
+ */
+struct DtactUnixDatagram;
+
+/*
+ A lock-free, non-blocking Unix-domain-socket listener registered with
+ the dtact-io driver. Mirrors [`DtactTcpListener`]'s API.
+ */
+struct DtactUnixListener;
+
+/*
+ Tokio-backed Unix-domain-socket listener. Mirrors the native backend's
+ `DtactUnixListener` API surface.
+ */
+struct DtactUnixListener;
+
+/*
+ A lock-free, non-blocking Unix-domain-socket stream registered with
+ the dtact-io driver. Mirrors [`DtactTcpStream`]'s API.
+ */
+struct DtactUnixStream;
+
+/*
+ Tokio-backed Unix-domain-socket stream. Mirrors the native backend's
+ `DtactUnixStream` API surface.
+ */
+struct DtactUnixStream;
+
 extern "C" {
+
+/*
+ Resolve `path` to an absolute path with all intermediate components
+ resolved, writing it (NUL-terminated, truncated if it doesn't fit)
+ into `out` (capacity `out_cap`).
+
+ Returns the untruncated resolved path's byte length on success, or -1
+ on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string; `out`, if non-null, must point to at
+ least `out_cap` writable bytes.
+ */
+ ptrdiff_t dtact_util_fs_canonicalize(const char *aPath, char *aOut, size_t aOutCap) ;
+
+/*
+ Copy the contents (and permission bits) of the file at `from` to `to`,
+ returning the byte count copied, or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
+ be valid NUL-terminated C strings.
+ */
+ int64_t dtact_util_fs_copy(const char *aFrom, const char *aTo) ;
+
+/*
+ Create a single new directory. Unlike
+ [`dtact_util_fs_create_dir_all`], fails if any parent component
+ doesn't already exist. Returns 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_create_dir(const char *aPath) ;
+
+/*
+ Recursively create `path` and any missing parent directories. Returns
+ 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_create_dir_all(const char *aPath) ;
 
 /*
  Close and free a file handle. Passing null is a no-op.
@@ -278,6 +375,17 @@ extern "C" {
  ptrdiff_t dtact_util_fs_file_write(DtactFile *aFile, const uint8_t *aBuf, size_t aLen) ;
 
 /*
+ Create a hard link at `dst` pointing at the same file as `src`.
+ Returns 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+ be valid NUL-terminated C strings.
+ */
+ int32_t dtact_util_fs_hard_link(const char *aSrc, const char *aDst) ;
+
+/*
  Initialize the fs backend with `workers` worker threads. Idempotent.
 
  # Safety
@@ -285,6 +393,164 @@ extern "C" {
  See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  */
  void dtact_util_fs_init(size_t aWorkers) ;
+
+/*
+ Read the entire contents of the file at `path` into `buf` (capacity
+ `len`).
+
+ Returns the file's total byte length (which may exceed `len`, in
+ which case `buf` received only the first `len` bytes) on success, or
+ -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string; `buf`, if non-null, must point to at
+ least `len` writable bytes.
+ */
+ ptrdiff_t dtact_util_fs_read(const char *aPath, uint8_t *aBuf, size_t aLen) ;
+
+/*
+ Read the target of the symbolic link at `path` into `out` (capacity
+ `out_cap`), NUL-terminated and truncated if it doesn't fit.
+
+ Returns the untruncated target's byte length (which may exceed
+ `out_cap`) on success, or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string; `out`, if non-null, must point to at
+ least `out_cap` writable bytes.
+ */
+ ptrdiff_t dtact_util_fs_read_link(const char *aPath, char *aOut, size_t aOutCap) ;
+
+/*
+ Read the entire contents of the file at `path` as UTF-8 text into
+ `out` (capacity `out_cap`), NUL-terminated and truncated if it doesn't
+ fit.
+
+ Returns the untruncated content's byte length on success, or -1 on
+ error (including `InvalidData` if the file isn't valid UTF-8).
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string; `out`, if non-null, must point to at
+ least `out_cap` writable bytes.
+ */
+ ptrdiff_t dtact_util_fs_read_to_string(const char *aPath, char *aOut, size_t aOutCap) ;
+
+/*
+ Remove an empty directory. Fails if `path` is non-empty — see
+ [`dtact_util_fs_remove_dir_all`] for the recursive version. Returns 0
+ on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_remove_dir(const char *aPath) ;
+
+/*
+ Recursively remove a directory and everything under it. Returns 0 on
+ success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_remove_dir_all(const char *aPath) ;
+
+/*
+ Rename (move) the file or directory at `from` to `to`, replacing `to`
+ if it already exists. Returns 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
+ be valid NUL-terminated C strings.
+ */
+ int32_t dtact_util_fs_rename(const char *aFrom, const char *aTo) ;
+
+/*
+ Set `path` read-only (`readonly != 0`) or read-write (`readonly ==
+ 0`).
+
+ A thin, portable slice of `std::fs::Permissions` — the only bit
+ consistently meaningful to set/query across Unix and Windows. Returns
+ 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_set_readonly(const char *aPath, int32_t aReadonly) ;
+
+/*
+ Create a symbolic link at `dst` pointing at `src`. Unix only —
+ Windows callers need [`dtact_util_fs_symlink_dir`]/
+ [`dtact_util_fs_symlink_file`] instead. Returns 0 on success, -1 on
+ error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+ be valid NUL-terminated C strings.
+ */
+ int32_t dtact_util_fs_symlink(const char *aSrc, const char *aDst) ;
+
+/*
+ Create a directory symbolic link at `dst` pointing at `src`. Windows
+ only — see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns
+ 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+ be valid NUL-terminated C strings.
+ */
+ int32_t dtact_util_fs_symlink_dir(const char *aSrc, const char *aDst) ;
+
+/*
+ Create a file symbolic link at `dst` pointing at `src`. Windows only —
+ see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns 0 on
+ success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+ be valid NUL-terminated C strings.
+ */
+ int32_t dtact_util_fs_symlink_file(const char *aSrc, const char *aDst) ;
+
+/*
+ Check whether `path` exists, following symlinks. Returns `1` if it
+ exists, `0` if it doesn't, or `-1` on any other error (e.g.
+ `PermissionDenied` on a parent directory).
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_try_exists(const char *aPath) ;
+
+/*
+ Write `len` bytes from `buf` to the file at `path`, creating it if it
+ doesn't exist and truncating it if it does. Returns 0 on success, -1
+ on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string; `buf` must point to at least `len`
+ readable bytes.
+ */
+ int32_t dtact_util_fs_write(const char *aPath, const uint8_t *aBuf, size_t aLen) ;
 
 /*
  Initialize the TCP runtime with `workers` I/O worker threads. Idempotent;
@@ -458,6 +724,205 @@ ptrdiff_t dtact_util_io_udp_send_to(DtactUdpSocket *aSock,
                                     const uint8_t *aBuf,
                                     size_t aLen,
                                     const char *aTarget)
+;
+
+/*
+ Bind a Unix-domain datagram socket to the filesystem path `addr`.
+ Returns an owning handle or null on error. Free with
+ [`dtact_util_io_unix_datagram_close`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+ valid NUL-terminated C string.
+ */
+ DtactUnixDatagram *dtact_util_io_unix_datagram_bind(const char *aAddr) ;
+
+/*
+ Close and free a Unix-domain datagram socket handle. Passing null is a
+ no-op.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ void dtact_util_io_unix_datagram_close(DtactUnixDatagram *aSock) ;
+
+/*
+ Connect `sock` to the path `addr` so
+ [`dtact_util_io_unix_datagram_send`]/
+ [`dtact_util_io_unix_datagram_recv`] can omit the peer address.
+ Returns 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_io_unix_datagram_connect(DtactUnixDatagram *aSock, const char *aAddr) ;
+
+/*
+ Receive a datagram from the connected peer into `buf`. Returns the
+ byte count received, or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ ptrdiff_t dtact_util_io_unix_datagram_recv(DtactUnixDatagram *aSock, uint8_t *aBuf, size_t aLen) ;
+
+/*
+ Receive a single datagram into `buf` (capacity `len`).
+
+ On success writes the sender's path (or an empty string if unnamed —
+ see [`crate::io::DtactUnixSocketAddr::is_unnamed`]) as a
+ NUL-terminated string into `out_addr` (capacity `out_addr_cap`,
+ truncated if it doesn't fit) and returns the byte count received;
+ returns -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `out_addr`, if
+ non-null, must point to at least `out_addr_cap` writable bytes.
+ */
+
+ptrdiff_t dtact_util_io_unix_datagram_recv_from(DtactUnixDatagram *aSock,
+                                                uint8_t *aBuf,
+                                                size_t aLen,
+                                                char *aOutAddr,
+                                                size_t aOutAddrCap)
+;
+
+/*
+ Send `len` bytes from `buf` to the connected peer (see
+ [`dtact_util_io_unix_datagram_connect`]). Returns the byte count sent,
+ or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+
+ptrdiff_t dtact_util_io_unix_datagram_send(DtactUnixDatagram *aSock,
+                                           const uint8_t *aBuf,
+                                           size_t aLen)
+;
+
+/*
+ Send `len` bytes from `buf` as a single datagram to the socket bound
+ at `target`. Returns the byte count sent, or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `target` must be
+ a valid NUL-terminated C string.
+ */
+
+ptrdiff_t dtact_util_io_unix_datagram_send_to(DtactUnixDatagram *aSock,
+                                              const uint8_t *aBuf,
+                                              size_t aLen,
+                                              const char *aTarget)
+;
+
+/*
+ Block until a client connects, returning an owning stream handle (free
+ with [`dtact_util_io_unix_stream_close`]) or null on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `listener` must
+ be a live handle from [`dtact_util_io_unix_listener_bind`].
+ */
+ DtactUnixStream *dtact_util_io_unix_listener_accept(DtactUnixListener *aListener) ;
+
+/*
+ Bind a Unix-domain-socket listener to the filesystem path `addr`.
+ Returns an owning handle or null on error. Free with
+ [`dtact_util_io_unix_listener_close`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+ valid NUL-terminated C string.
+ */
+ DtactUnixListener *dtact_util_io_unix_listener_bind(const char *aAddr) ;
+
+/*
+ Close and free a Unix-domain-socket listener handle. Passing null is a
+ no-op.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ void dtact_util_io_unix_listener_close(DtactUnixListener *aListener) ;
+
+/*
+ Close and free a Unix-domain-socket stream handle. Passing null is a
+ no-op.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ void dtact_util_io_unix_stream_close(DtactUnixStream *aStream) ;
+
+/*
+ Connect to the Unix-domain-socket path `addr`, blocking until
+ connected. Returns an owning stream handle or null on error. Free with
+ [`dtact_util_io_unix_stream_close`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+ valid NUL-terminated C string.
+ */
+ DtactUnixStream *dtact_util_io_unix_stream_connect(const char *aAddr) ;
+
+/*
+ Fetch `stream`'s connected peer's credentials into `out_uid`/
+ `out_gid`/`out_pid`.
+
+ `out_pid` is set to -1 on platforms that don't report a PID — see
+ [`crate::io::DtactUnixStream::peer_cred`]. Any of the three output
+ pointers may be null to skip that field. Returns 0 on success, -1 on
+ error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `out_uid`/
+ `out_gid`/`out_pid`, if non-null, must each point to one writable
+ value of the matching type.
+ */
+
+int32_t dtact_util_io_unix_stream_peer_cred(DtactUnixStream *aStream,
+                                            uint32_t *aOutUid,
+                                            uint32_t *aOutGid,
+                                            int32_t *aOutPid)
+;
+
+/*
+ Read up to `len` bytes from `stream` into `buf`. Returns the byte
+ count read (0 = orderly shutdown by peer) or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ ptrdiff_t dtact_util_io_unix_stream_read(DtactUnixStream *aStream, uint8_t *aBuf, size_t aLen) ;
+
+/*
+ Write up to `len` bytes from `buf` to `stream`. Returns the byte count
+ written or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+
+ptrdiff_t dtact_util_io_unix_stream_write(DtactUnixStream *aStream,
+                                          const uint8_t *aBuf,
+                                          size_t aLen)
 ;
 
 /*

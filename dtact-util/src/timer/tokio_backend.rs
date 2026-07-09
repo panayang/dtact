@@ -81,7 +81,29 @@ impl DtactInterval {
     pub async fn tick(&mut self) -> Instant {
         self.inner.tick().await.into_std()
     }
+
+    /// The current missed-tick catch-up policy. Thin wrapper over
+    /// `tokio::time::Interval::missed_tick_behavior`.
+    #[must_use]
+    pub fn missed_tick_behavior(&self) -> MissedTickBehavior {
+        self.inner.missed_tick_behavior()
+    }
+
+    /// Change the missed-tick catch-up policy. Thin wrapper over
+    /// `tokio::time::Interval::set_missed_tick_behavior`.
+    pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
+        self.inner.set_missed_tick_behavior(behavior);
+    }
 }
+
+/// Re-exported directly from `tokio::time` — see
+/// `tokio::time::MissedTickBehavior`'s own documentation for the
+/// `Burst`/`Delay`/`Skip` variants. The native backend defines its own
+/// equivalent enum of the same name and shape rather than depending on
+/// tokio, so this is a different concrete type per backend despite
+/// identical semantics — matches how every other primitive in this crate
+/// favors a same-shaped API over exact cross-backend type parity.
+pub use tokio::time::MissedTickBehavior;
 
 /// Convenience free function mirroring `tokio::time::interval`.
 #[must_use]

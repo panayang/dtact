@@ -2,21 +2,24 @@
 //! bridges `std::fs` and platform positional-I/O syscalls (`pread`/`pwrite`
 //! on Unix, `seek_read`/`seek_write` on Windows) into futures.
 //!
+//! **Not the only native fs backend, despite the module name.** Per
+//! `fs::mod`'s `cfg` gates, this module only compiles — and is only used —
+//! on Unix platforms that are neither Linux nor covered by a dedicated
+//! backend, i.e. macOS/BSD today. Linux uses [`super::uring_linux`] (real
+//! `io_uring` opcodes on a dedicated ring) and Windows uses
+//! [`super::iocp_windows`] (real overlapped IOCP). This was accurate when
+//! first written — at the time this thread-pool bridge really was used
+//! unconditionally on every platform — but both of those backends were
+//! added afterward without this doc being updated to match; don't trust
+//! "used unconditionally on all platforms" claims in older comments here,
+//! check `fs::mod`'s `cfg` gates for the current routing instead.
+//!
 //! **Deferred / not lock-free**: unlike the `io` module's io_uring-backed
 //! reactor (SPSC queues, per-slot atomics, zero-lock hot path), this backend
 //! uses a plain `Mutex`-guarded completion slot per operation. Filesystem
 //! syscalls are not competitive with a lock-free dispatch path the way
 //! socket I/O is — the syscall itself dominates — so a mutex here is a
 //! deliberate, correctness-first simplification, not an oversight.
-//!
-//! **Deferred: real io_uring opcodes.** On Linux, `Openat`/`Read`/`Write`/
-//! `Fsync`/`Close`/`Statx` could be submitted directly to the same ring the
-//! `io` module drives instead of going through a blocking-thread pool. That
-//! integration (sharing `WORKERS`/`SpscQueue` from `crate::io::native`) is
-//! substantial additional plumbing and was not implemented in this pass;
-//! this module is the sane, portable, always-correct fallback described in
-//! the task brief ("thread-pool-bridged blocking I/O is fine for fs on
-//! non-Linux") and is used unconditionally on all platforms for now.
 
 use crate::lockfree::OnceSlot;
 use std::future::Future;
@@ -289,6 +292,179 @@ pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
 pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     spawn_blocking(move || std::fs::remove_file(&path)).await
+}
+
+/// Resolve `path` to an absolute path with all intermediate components
+/// (`.`, `..`, symlinks) resolved.
+///
+/// # Errors
+/// Returns whatever `std::fs::canonicalize` returns (e.g. `NotFound` if
+/// `path` doesn't exist).
+pub async fn canonicalize(path: impl Into<PathBuf>) -> io::Result<PathBuf> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::canonicalize(&path)).await
+}
+
+/// Copy the contents (and permission bits) of the file at `from` to `to`,
+/// creating or truncating `to`, returning the byte count copied.
+///
+/// # Errors
+/// Returns whatever `std::fs::copy` returns (e.g. `NotFound` if `from`
+/// doesn't exist).
+pub async fn copy(from: impl Into<PathBuf>, to: impl Into<PathBuf>) -> io::Result<u64> {
+    let from = from.into();
+    let to = to.into();
+    spawn_blocking(move || std::fs::copy(&from, &to)).await
+}
+
+/// Create a single new directory. Unlike [`create_dir_all`], fails if any
+/// parent component doesn't already exist.
+///
+/// # Errors
+/// Returns whatever `std::fs::create_dir` returns (e.g. `NotFound` if a
+/// parent component is missing, `AlreadyExists` if `path` already
+/// exists).
+pub async fn create_dir(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::create_dir(&path)).await
+}
+
+/// Create a hard link at `dst` pointing at the same inode as `src`.
+///
+/// # Errors
+/// Returns whatever `std::fs::hard_link` returns (e.g. `NotFound` if
+/// `src` doesn't exist, or an error if `src`/`dst` are on different
+/// filesystems).
+pub async fn hard_link(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    let src = src.into();
+    let dst = dst.into();
+    spawn_blocking(move || std::fs::hard_link(&src, &dst)).await
+}
+
+/// Read the entire contents of the file at `path` into a `Vec<u8>`.
+///
+/// # Errors
+/// Returns whatever `std::fs::read` returns (e.g. `NotFound`,
+/// `PermissionDenied`).
+pub async fn read(path: impl Into<PathBuf>) -> io::Result<Vec<u8>> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::read(&path)).await
+}
+
+/// Read the target of the symbolic link at `path`.
+///
+/// # Errors
+/// Returns whatever `std::fs::read_link` returns (e.g. `NotFound`, or an
+/// error if `path` isn't actually a symlink).
+pub async fn read_link(path: impl Into<PathBuf>) -> io::Result<PathBuf> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::read_link(&path)).await
+}
+
+/// Read the entire contents of the file at `path` into a `String`.
+///
+/// # Errors
+/// Returns whatever `std::fs::read_to_string` returns (e.g. `NotFound`,
+/// or an `InvalidData` error if the file isn't valid UTF-8).
+pub async fn read_to_string(path: impl Into<PathBuf>) -> io::Result<String> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::read_to_string(&path)).await
+}
+
+/// Remove an empty directory. Fails if `path` is non-empty — see
+/// [`remove_dir_all`] for the recursive version.
+///
+/// # Errors
+/// Returns whatever `std::fs::remove_dir` returns (e.g. `NotFound`, or an
+/// error if the directory isn't empty).
+pub async fn remove_dir(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::remove_dir(&path)).await
+}
+
+/// Recursively remove a directory and everything under it.
+///
+/// # Errors
+/// Returns whatever `std::fs::remove_dir_all` returns (e.g. `NotFound`,
+/// `PermissionDenied`).
+pub async fn remove_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::remove_dir_all(&path)).await
+}
+
+/// Rename (move) the file or directory at `from` to `to`, replacing `to`
+/// if it already exists (platform-dependent semantics — see
+/// `std::fs::rename`'s own documentation for the exact cross-platform
+/// caveats, e.g. renaming across filesystems).
+///
+/// # Errors
+/// Returns whatever `std::fs::rename` returns.
+pub async fn rename(from: impl Into<PathBuf>, to: impl Into<PathBuf>) -> io::Result<()> {
+    let from = from.into();
+    let to = to.into();
+    spawn_blocking(move || std::fs::rename(&from, &to)).await
+}
+
+/// Set `path`'s permission bits to `perm`.
+///
+/// # Errors
+/// Returns whatever `std::fs::set_permissions` returns (e.g. `NotFound`,
+/// `PermissionDenied`).
+pub async fn set_permissions(
+    path: impl Into<PathBuf>,
+    perm: std::fs::Permissions,
+) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::set_permissions(&path, perm)).await
+}
+
+/// Create a symbolic link at `dst` pointing at `src`.
+///
+/// # Errors
+/// Returns whatever `std::os::unix::fs::symlink` returns (e.g.
+/// `AlreadyExists` if `dst` already exists).
+pub async fn symlink(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    let src = src.into();
+    let dst = dst.into();
+    spawn_blocking(move || std::os::unix::fs::symlink(&src, &dst)).await
+}
+
+/// Query `path`'s metadata *without* following a trailing symlink (unlike
+/// [`metadata`], which does).
+///
+/// # Errors
+/// Returns whatever `std::fs::symlink_metadata` returns (e.g.
+/// `NotFound`).
+pub async fn symlink_metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::symlink_metadata(&path)).await
+}
+
+/// Check whether `path` exists, following symlinks. Unlike a bare
+/// `metadata().is_ok()` check, a permission error while checking is
+/// propagated as `Err` rather than silently read as "doesn't exist" —
+/// see `std::fs::exists`'s own documentation for the exact distinction.
+///
+/// # Errors
+/// Returns an `io::Error` for any failure *other than* "doesn't exist"
+/// (e.g. `PermissionDenied` on a parent directory).
+pub async fn try_exists(path: impl Into<PathBuf>) -> io::Result<bool> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::exists(&path)).await
+}
+
+/// Write `contents` to the file at `path`, creating it if it doesn't
+/// exist and truncating it if it does (equivalent to `create` + a single
+/// `write_all`).
+///
+/// # Errors
+/// Returns whatever `std::fs::write` returns (e.g. `PermissionDenied`).
+pub async fn write(
+    path: impl Into<PathBuf>,
+    contents: impl AsRef<[u8]> + Send + 'static,
+) -> io::Result<()> {
+    let path = path.into();
+    spawn_blocking(move || std::fs::write(&path, contents)).await
 }
 
 #[allow(dead_code)]

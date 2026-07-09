@@ -147,3 +147,194 @@ pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
 pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
     tokio::fs::remove_file(path.into()).await
 }
+
+/// Resolve `path` to an absolute path with all intermediate components
+/// resolved.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::canonicalize` returns, e.g. `NotFound`.
+pub async fn canonicalize(path: impl Into<PathBuf>) -> io::Result<PathBuf> {
+    tokio::fs::canonicalize(path.into()).await
+}
+
+/// Copy the contents (and permission bits) of the file at `from` to `to`,
+/// returning the byte count copied.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::copy` returns, e.g. `NotFound` if `from`
+/// doesn't exist.
+pub async fn copy(from: impl Into<PathBuf>, to: impl Into<PathBuf>) -> io::Result<u64> {
+    tokio::fs::copy(from.into(), to.into()).await
+}
+
+/// Create a single new directory. Unlike [`create_dir_all`], fails if any
+/// parent component doesn't already exist.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::create_dir` returns, e.g. `AlreadyExists`.
+pub async fn create_dir(path: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::create_dir(path.into()).await
+}
+
+/// Create a hard link at `dst` pointing at the same file as `src`.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::hard_link` returns, e.g. `NotFound` if
+/// `src` doesn't exist.
+pub async fn hard_link(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::hard_link(src.into(), dst.into()).await
+}
+
+/// Read the entire contents of the file at `path` into a `Vec<u8>`.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::read` returns, e.g. `NotFound`.
+pub async fn read(path: impl Into<PathBuf>) -> io::Result<Vec<u8>> {
+    tokio::fs::read(path.into()).await
+}
+
+/// Read the target of the symbolic link at `path`.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::read_link` returns, e.g. `NotFound`, or
+/// an error if `path` isn't actually a symlink.
+pub async fn read_link(path: impl Into<PathBuf>) -> io::Result<PathBuf> {
+    tokio::fs::read_link(path.into()).await
+}
+
+/// Read the entire contents of the file at `path` into a `String`.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::read_to_string` returns, e.g. an
+/// `InvalidData` error if the file isn't valid UTF-8.
+pub async fn read_to_string(path: impl Into<PathBuf>) -> io::Result<String> {
+    tokio::fs::read_to_string(path.into()).await
+}
+
+/// Remove an empty directory. Fails if `path` is non-empty — see
+/// [`remove_dir_all`] for the recursive version.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::remove_dir` returns, e.g. `NotFound`, or
+/// an error if the directory isn't empty.
+pub async fn remove_dir(path: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::remove_dir(path.into()).await
+}
+
+/// Recursively remove a directory and everything under it.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::remove_dir_all` returns, e.g. `NotFound`.
+pub async fn remove_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::remove_dir_all(path.into()).await
+}
+
+/// Rename (move) the file or directory at `from` to `to`.
+///
+/// Replaces `to` if it already exists — see `std::fs::rename`'s own
+/// documentation for cross-platform caveats (`tokio::fs::rename` shares
+/// the same semantics, it just runs on the blocking pool).
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::rename` returns.
+pub async fn rename(from: impl Into<PathBuf>, to: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::rename(from.into(), to.into()).await
+}
+
+/// Set `path`'s permission bits to `perm`.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::set_permissions` returns, e.g.
+/// `NotFound`.
+pub async fn set_permissions(
+    path: impl Into<PathBuf>,
+    perm: std::fs::Permissions,
+) -> io::Result<()> {
+    tokio::fs::set_permissions(path.into(), perm).await
+}
+
+/// Create a symbolic link at `dst` pointing at `src`.
+///
+/// Unix only — Windows has separate [`symlink_dir`]/[`symlink_file`]
+/// instead (a symlink on Windows must know up front whether it targets a
+/// directory or a file).
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::symlink` returns, e.g. `AlreadyExists` if
+/// `dst` already exists.
+#[cfg(unix)]
+pub async fn symlink(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::symlink(src.into(), dst.into()).await
+}
+
+/// Create a directory symbolic link at `dst` pointing at `src`. Windows
+/// only — see [`symlink`] for the Unix equivalent.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::symlink_dir` returns, e.g.
+/// `AlreadyExists` if `dst` already exists, or a permissions error —
+/// creating symlinks on Windows normally requires either an elevated
+/// process or Developer Mode enabled.
+#[cfg(windows)]
+pub async fn symlink_dir(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::symlink_dir(src.into(), dst.into()).await
+}
+
+/// Create a file symbolic link at `dst` pointing at `src`. Windows only —
+/// see [`symlink`] for the Unix equivalent.
+///
+/// # Errors
+///
+/// Same as [`symlink_dir`], for a file target instead of a directory.
+#[cfg(windows)]
+pub async fn symlink_file(src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> io::Result<()> {
+    tokio::fs::symlink_file(src.into(), dst.into()).await
+}
+
+/// Query `path`'s metadata *without* following a trailing symlink (unlike
+/// [`metadata`], which does).
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::symlink_metadata` returns, e.g.
+/// `NotFound`.
+pub async fn symlink_metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
+    tokio::fs::symlink_metadata(path.into()).await
+}
+
+/// Check whether `path` exists, following symlinks.
+///
+/// A permission error while checking is propagated as `Err` rather than
+/// silently read as "doesn't exist" — see `std::fs::exists`'s own
+/// documentation for the exact distinction `tokio::fs::try_exists`
+/// shares.
+///
+/// # Errors
+///
+/// Returns an `io::Error` for any failure *other than* "doesn't exist".
+pub async fn try_exists(path: impl Into<PathBuf>) -> io::Result<bool> {
+    tokio::fs::try_exists(path.into()).await
+}
+
+/// Write `contents` to the file at `path`, creating it if it doesn't
+/// exist and truncating it if it does.
+///
+/// # Errors
+///
+/// Returns whatever `tokio::fs::write` returns, e.g. `PermissionDenied`.
+pub async fn write(path: impl Into<PathBuf>, contents: impl AsRef<[u8]>) -> io::Result<()> {
+    tokio::fs::write(path.into(), contents).await
+}

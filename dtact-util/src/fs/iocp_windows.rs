@@ -691,3 +691,213 @@ pub fn remove_file(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<
     let path = path.into();
     std::future::ready(std::fs::remove_file(&path))
 }
+
+/// Resolve `path` to an absolute path with all intermediate components
+/// (`.`, `..`, symlinks/junctions) resolved.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::canonicalize` returns, e.g. `NotFound`.
+pub fn canonicalize(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<PathBuf>> {
+    let path = path.into();
+    std::future::ready(std::fs::canonicalize(&path))
+}
+
+/// Copy the contents (and permission bits) of the file at `from` to `to`,
+/// returning the byte count copied.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::copy` returns, e.g. `NotFound` if `from`
+/// doesn't exist.
+pub fn copy(
+    from: impl Into<PathBuf>,
+    to: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<u64>> {
+    let from = from.into();
+    let to = to.into();
+    std::future::ready(std::fs::copy(&from, &to))
+}
+
+/// Create a single new directory. Unlike [`create_dir_all`], fails if any
+/// parent component doesn't already exist.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::create_dir` returns, e.g. `AlreadyExists`.
+pub fn create_dir(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<()>> {
+    let path = path.into();
+    std::future::ready(std::fs::create_dir(&path))
+}
+
+/// Create a hard link at `dst` pointing at the same file as `src`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::hard_link` returns, e.g. `NotFound` if
+/// `src` doesn't exist.
+pub fn hard_link(
+    src: impl Into<PathBuf>,
+    dst: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<()>> {
+    let src = src.into();
+    let dst = dst.into();
+    std::future::ready(std::fs::hard_link(&src, &dst))
+}
+
+/// Read the entire contents of the file at `path` into a `Vec<u8>`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::read` returns, e.g. `NotFound`.
+pub fn read(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<Vec<u8>>> {
+    let path = path.into();
+    std::future::ready(std::fs::read(&path))
+}
+
+/// Read the target of the symbolic link at `path`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::read_link` returns, e.g. `NotFound`, or an
+/// error if `path` isn't actually a symlink.
+pub fn read_link(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<PathBuf>> {
+    let path = path.into();
+    std::future::ready(std::fs::read_link(&path))
+}
+
+/// Read the entire contents of the file at `path` into a `String`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::read_to_string` returns, e.g. an
+/// `InvalidData` error if the file isn't valid UTF-8.
+pub fn read_to_string(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<String>> {
+    let path = path.into();
+    std::future::ready(std::fs::read_to_string(&path))
+}
+
+/// Remove an empty directory. Fails if `path` is non-empty — see
+/// [`remove_dir_all`] for the recursive version.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::remove_dir` returns, e.g. `NotFound`, or an
+/// error if the directory isn't empty.
+pub fn remove_dir(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<()>> {
+    let path = path.into();
+    std::future::ready(std::fs::remove_dir(&path))
+}
+
+/// Recursively remove a directory and everything under it.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::remove_dir_all` returns, e.g. `NotFound`.
+pub fn remove_dir_all(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<()>> {
+    let path = path.into();
+    std::future::ready(std::fs::remove_dir_all(&path))
+}
+
+/// Rename (move) the file or directory at `from` to `to`.
+///
+/// Replaces `to` if it already exists — see `std::fs::rename`'s own
+/// documentation for cross-platform caveats (e.g. renaming across
+/// volumes).
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::rename` returns.
+pub fn rename(
+    from: impl Into<PathBuf>,
+    to: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<()>> {
+    let from = from.into();
+    let to = to.into();
+    std::future::ready(std::fs::rename(&from, &to))
+}
+
+/// Set `path`'s permission bits to `perm`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::set_permissions` returns, e.g. `NotFound`.
+pub fn set_permissions(
+    path: impl Into<PathBuf>,
+    perm: std::fs::Permissions,
+) -> impl Future<Output = io::Result<()>> {
+    let path = path.into();
+    std::future::ready(std::fs::set_permissions(&path, perm))
+}
+
+/// Create a directory symbolic link at `dst` pointing at `src`.
+///
+/// # Errors
+///
+/// Returns whatever `std::os::windows::fs::symlink_dir` returns, e.g.
+/// `AlreadyExists` if `dst` already exists, or a permissions error —
+/// creating symlinks on Windows normally requires either an elevated
+/// process or Developer Mode enabled.
+pub fn symlink_dir(
+    src: impl Into<PathBuf>,
+    dst: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<()>> {
+    let src = src.into();
+    let dst = dst.into();
+    std::future::ready(std::os::windows::fs::symlink_dir(&src, &dst))
+}
+
+/// Create a file symbolic link at `dst` pointing at `src`.
+///
+/// # Errors
+///
+/// Same as [`symlink_dir`], for a file target instead of a directory.
+pub fn symlink_file(
+    src: impl Into<PathBuf>,
+    dst: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<()>> {
+    let src = src.into();
+    let dst = dst.into();
+    std::future::ready(std::os::windows::fs::symlink_file(&src, &dst))
+}
+
+/// Query `path`'s metadata *without* following a trailing symlink/junction
+/// (unlike [`metadata`], which does).
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::symlink_metadata` returns, e.g. `NotFound`.
+pub fn symlink_metadata(
+    path: impl Into<PathBuf>,
+) -> impl Future<Output = io::Result<std::fs::Metadata>> {
+    let path = path.into();
+    std::future::ready(std::fs::symlink_metadata(&path))
+}
+
+/// Check whether `path` exists, following symlinks/junctions.
+///
+/// A permission error while checking is propagated as `Err` rather than
+/// silently read as "doesn't exist" — see `std::fs::exists`'s own
+/// documentation for the exact distinction.
+///
+/// # Errors
+///
+/// Returns an `io::Error` for any failure *other than* "doesn't exist".
+pub fn try_exists(path: impl Into<PathBuf>) -> impl Future<Output = io::Result<bool>> {
+    let path = path.into();
+    std::future::ready(std::fs::exists(&path))
+}
+
+/// Write `contents` to the file at `path`, creating it if it doesn't
+/// exist and truncating it if it does.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::write` returns, e.g. `PermissionDenied`.
+pub fn write(
+    path: impl Into<PathBuf>,
+    contents: impl AsRef<[u8]>,
+) -> impl Future<Output = io::Result<()>> {
+    let path = path.into();
+    std::future::ready(std::fs::write(&path, contents))
+}

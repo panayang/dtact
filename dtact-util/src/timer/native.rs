@@ -239,16 +239,44 @@ pub fn sleep(duration: Duration) -> DtactSleep {
     DtactSleep::new(duration)
 }
 
+/// Configures how [`DtactInterval::tick`] catches up after missing one
+/// or more ticks.
+///
+/// A tick is "missed" when the interval isn't polled promptly enough —
+/// e.g. the caller was busy doing other work. Mirrors
+/// `tokio::time::MissedTickBehavior`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MissedTickBehavior {
+    /// Fire every missed tick back-to-back with no delay between them
+    /// until caught up, then resume the original cadence. `next` always
+    /// advances by exactly one `period` per `tick()` call, so a caller
+    /// that fell behind sees a burst of immediately-ready `tick()`
+    /// calls rather than any ticks being silently dropped. The default,
+    /// matching `tokio::time::MissedTickBehavior`'s own default.
+    #[default]
+    Burst,
+    /// Skip every missed tick: the next scheduled time jumps straight to
+    /// the next period boundary that's still in the future, rather than
+    /// firing once for each one that was missed.
+    Skip,
+    /// Reset the schedule relative to when the late tick actually fired,
+    /// not the original cadence — the next tick is `period` after *now*,
+    /// not after the missed tick's originally-scheduled time.
+    Delay,
+}
+
 /// A repeating timer. `tick()` is a plain async method mirroring
 /// `tokio::time::Interval::tick`.
 pub struct DtactInterval {
     period: Duration,
     next: Instant,
+    missed_tick_behavior: MissedTickBehavior,
 }
 
 impl DtactInterval {
     /// Build an interval firing every `period`, starting one `period`
-    /// from now.
+    /// from now, with the default [`MissedTickBehavior::Burst`] catch-up
+    /// policy (change it via [`Self::set_missed_tick_behavior`]).
     ///
     /// # Panics
     ///
@@ -264,21 +292,45 @@ impl DtactInterval {
         Self {
             period,
             next: Instant::now() + period,
+            missed_tick_behavior: MissedTickBehavior::default(),
         }
+    }
+
+    /// The current missed-tick catch-up policy.
+    #[must_use]
+    pub const fn missed_tick_behavior(&self) -> MissedTickBehavior {
+        self.missed_tick_behavior
+    }
+
+    /// Change the missed-tick catch-up policy. Takes effect starting
+    /// from the next [`Self::tick`] call — doesn't retroactively change
+    /// how the interval caught up (or didn't) from any prior lateness.
+    pub const fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
+        self.missed_tick_behavior = behavior;
     }
 
     /// Wait for the next tick, returning the `Instant` it fired at.
     pub async fn tick(&mut self) -> Instant {
         DtactSleep::until(self.next).await;
         let fired_at = self.next;
-        // Advance by whole periods to avoid drift accumulating from
-        // scheduling jitter (MissedTickBehavior::Burst semantics).
-        let now = Instant::now();
-        let mut next = self.next + self.period;
-        while next <= now {
-            next += self.period;
+        match self.missed_tick_behavior {
+            MissedTickBehavior::Burst => {
+                self.next += self.period;
+            }
+            MissedTickBehavior::Skip => {
+                // Advance by whole periods to the next boundary still in
+                // the future, rather than firing once per missed tick.
+                let now = Instant::now();
+                let mut next = self.next + self.period;
+                while next <= now {
+                    next += self.period;
+                }
+                self.next = next;
+            }
+            MissedTickBehavior::Delay => {
+                self.next = Instant::now() + self.period;
+            }
         }
-        self.next = next;
         fired_at
     }
 }

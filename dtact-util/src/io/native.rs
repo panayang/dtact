@@ -2501,6 +2501,18 @@ impl Drop for DtactTcpStream {
     }
 }
 
+impl crate::io::AsyncRead for DtactTcpStream {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+impl crate::io::AsyncWrite for DtactTcpStream {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
 /// A lock-free, non-blocking TCP listener registered with the dtact-io
 /// driver. Mirrors the Windows backend's `DtactTcpListener` API so callers
 /// can switch platforms without code changes.
@@ -2909,6 +2921,925 @@ impl DtactUdpSocket {
 }
 
 impl Drop for DtactUdpSocket {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+// =========================================================================
+// 10c. HIGH-LEVEL API: DtactUnixStream / DtactUnixListener
+// =========================================================================
+// Unix-domain-socket counterpart to `DtactTcpStream`/`DtactTcpListener` —
+// same `Read`/`Write`/`Accept`/`Connect` `DtactIoFuture` submission
+// machinery (it only ever cared about the raw fd and an `OpCode`, never
+// the address family), same fast-path-syscall-before-going-async shape.
+// The only real differences from TCP are address handling (a filesystem
+// path via `libc::sockaddr_un`, not `sockaddr_in`/`sockaddr_in6`) and that
+// there's no `TCP_NODELAY` equivalent to disable — Unix domain sockets
+// have no Nagle's-algorithm-style batching to begin with.
+//
+// Available on every Unix this file compiles for (this whole file is
+// already `cfg(all(feature = "native", unix))`, per `io::mod`) — both the
+// Linux `io_uring` path and the mio/kqueue fallback path drive
+// `DtactIoFuture` purely off a raw fd + `OpCode`, so nothing here needed
+// Linux-specific syscalls beyond what `unix_path_to_libc` already handles
+// portably (it reads `sockaddr_un::sun_path`'s actual length from the
+// platform's own `libc` struct rather than hardcoding Linux's 108-byte
+// value, so it's correct on macOS/BSD's shorter `sun_path` too). Windows
+// has no Unix-domain-socket analogue at all; use
+// `crate::io::DtactNamedPipe` there instead.
+
+/// A lock-free, non-blocking Unix-domain-socket stream registered with
+/// the dtact-io driver. Mirrors [`DtactTcpStream`]'s API.
+pub struct DtactUnixStream {
+    inner: std::os::unix::net::UnixStream,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+impl DtactUnixStream {
+    /// Register an existing non-blocking `UnixStream` with the dtact-io
+    /// driver. See [`DtactTcpStream::from_std`] for the registration
+    /// mechanics (identical here, minus the `TCP_NODELAY` call — Unix
+    /// domain sockets have nothing analogous to disable).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking` fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    pub fn from_std(stream: std::os::unix::net::UnixStream) -> std::io::Result<Self> {
+        let fd = stream.as_raw_fd();
+        stream.set_nonblocking(true)?;
+
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+        let worker_idx = fd as usize % num_workers;
+        let state = &WORKERS.get().unwrap()[worker_idx];
+
+        let direct_fd_idx = register_fd_sync(state, fd);
+
+        Ok(Self {
+            inner: stream,
+            direct_fd_idx,
+            worker_idx,
+        })
+    }
+
+    /// Read into `buf`, returning `Ok(0)` immediately for an empty buffer
+    /// without issuing a syscall. See [`DtactTcpStream::read`] for the
+    /// fast-path-syscall-before-going-async rationale (identical here).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying read reports one; `Ok(0)`
+    /// signals EOF, not an error.
+    pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let res = unsafe {
+            let r = libc::read(
+                self.inner.as_raw_fd(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            );
+            match r.cmp(&0) {
+                std::cmp::Ordering::Greater => Ok(r as usize),
+                std::cmp::Ordering::Equal => Ok(0), // EOF
+                std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
+            }
+        };
+
+        match res {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(e);
+                }
+            }
+        }
+
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Read,
+            buf_ptr: buf.as_mut_ptr(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+        .map(|n| n.min(buf.len()))
+    }
+
+    /// Write `buf`, returning `Ok(0)` immediately for an empty buffer
+    /// without issuing a syscall. See [`DtactTcpStream::write`] for the
+    /// fast-path rationale (identical here).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying write reports one (e.g.
+    /// `BrokenPipe` if the peer closed the connection).
+    pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let res = unsafe {
+            let r = libc::write(
+                self.inner.as_raw_fd(),
+                buf.as_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            );
+            if r >= 0 {
+                Ok(r as usize)
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        };
+
+        match res {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(e);
+                }
+            }
+        }
+
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Write,
+            buf_ptr: buf.as_ptr().cast_mut(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+    }
+
+    /// Create a new non-blocking Unix domain socket and connect to the
+    /// filesystem path `path`, registering the result with the dtact-io
+    /// driver. See [`DtactTcpStream::connect`] for the direct-connect /
+    /// `EINPROGRESS` / async-fallback sequencing (identical here, modulo
+    /// address family).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if socket creation, `set_nonblocking`, the
+    /// `connect(2)` syscall (or its `io_uring` completion), or `path`
+    /// itself (e.g. too long for `sockaddr_un::sun_path`) fails — e.g.
+    /// `ConnectionRefused`/`NotFound` if nothing is listening at `path`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    #[allow(clippy::too_many_lines)]
+    pub async fn connect(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let (libc_addr, addr_len) = unix_path_to_libc(path.as_ref())?;
+
+        let fd = unsafe {
+            libc::socket(
+                libc::AF_UNIX,
+                libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+                0,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // `from_raw_fd` takes ownership; the socket is closed on Drop.
+        let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+        let worker_idx = fd as usize % num_workers;
+        let state = &WORKERS.get().unwrap()[worker_idx];
+        let direct_fd_idx = register_fd_sync(state, fd);
+
+        // Try direct connect first.
+        let connect_res = unsafe {
+            libc::connect(
+                fd,
+                (&raw const libc_addr).cast::<libc::sockaddr>(),
+                addr_len,
+            )
+        };
+        if connect_res == 0 {
+            return Ok(Self {
+                inner: stream,
+                direct_fd_idx,
+                worker_idx,
+            });
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EINPROGRESS) {
+            return Err(err);
+        }
+
+        // One non-blocking `poll` check before going async — see the
+        // comment in `DtactTcpStream::connect` for why (connect latency
+        // for a local Unix socket is dominated by the peer's own accept
+        // loop scheduling, not spinnable away).
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        let poll_res = unsafe { libc::poll(&raw mut pollfd, 1, 0) };
+        if poll_res > 0 {
+            if (pollfd.revents & libc::POLLOUT) != 0 {
+                let mut err_code: libc::c_int = 0;
+                let mut err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+                let sockopt_res = unsafe {
+                    libc::getsockopt(
+                        fd,
+                        libc::SOL_SOCKET,
+                        libc::SO_ERROR,
+                        (&raw mut err_code).cast::<libc::c_void>(),
+                        &raw mut err_len,
+                    )
+                };
+                if sockopt_res == 0 && err_code == 0 {
+                    return Ok(Self {
+                        inner: stream,
+                        direct_fd_idx,
+                        worker_idx,
+                    });
+                }
+                let os_err = if err_code != 0 {
+                    err_code
+                } else {
+                    libc::ECONNREFUSED
+                };
+                return Err(std::io::Error::from_raw_os_error(os_err));
+            } else if (pollfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "connect failed",
+                ));
+            }
+        }
+
+        let connect_res = DtactIoFuture {
+            worker_idx,
+            fd: fd as u32,
+            direct_fd_idx,
+            op: OpCode::Connect,
+            buf_ptr: std::ptr::null_mut(),
+            len: 0,
+            offset: 0,
+            addr: Some(libc_addr),
+            addr_len,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await;
+
+        match connect_res {
+            Ok(_) => Ok(Self {
+                inner: stream,
+                direct_fd_idx,
+                worker_idx,
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The connected peer's credentials (PID/UID/GID), as recorded by the
+    /// kernel at `connect(2)`/`accept(2)` time — not queryable/spoofable
+    /// after the fact by the peer itself, which is what makes this useful
+    /// for authorization over a local socket.
+    ///
+    /// A plain synchronous syscall (`getsockopt(SO_PEERCRED)` on Linux,
+    /// `getpeereid(2)` elsewhere), not routed through the driver — same
+    /// "cheap enough to not need the ring" judgment call as
+    /// `DtactTcpStream`'s `local_addr`-shaped helpers.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying syscall fails (e.g. the
+    /// socket was closed concurrently).
+    pub fn peer_cred(&self) -> std::io::Result<DtactUCred> {
+        peer_cred_impl(self.inner.as_raw_fd())
+    }
+}
+
+impl Drop for DtactUnixStream {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+impl crate::io::AsyncRead for DtactUnixStream {
+    async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.read(buf).await
+    }
+}
+
+impl crate::io::AsyncWrite for DtactUnixStream {
+    async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write(buf).await
+    }
+}
+
+/// A lock-free, non-blocking Unix-domain-socket listener registered with
+/// the dtact-io driver. Mirrors [`DtactTcpListener`]'s API.
+pub struct DtactUnixListener {
+    inner: std::os::unix::net::UnixListener,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+impl DtactUnixListener {
+    /// Bind a new listener to the filesystem path `path` and register it
+    /// with the driver. `path` must not already exist — like
+    /// `std::os::unix::net::UnixListener::bind`, this does not remove a
+    /// stale socket file left behind by a previous run.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `bind(2)` fails (e.g.
+    /// `AddrInUse` if `path` already exists) or registration fails.
+    pub fn bind(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let listener = std::os::unix::net::UnixListener::bind(path)?;
+        Self::from_std(listener)
+    }
+
+    /// Register an existing non-blocking `UnixListener` with the dtact-io
+    /// driver (see [`DtactTcpListener::from_std`] for the mechanics).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking` fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    pub fn from_std(listener: std::os::unix::net::UnixListener) -> std::io::Result<Self> {
+        let fd = listener.as_raw_fd();
+        listener.set_nonblocking(true)?;
+
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+        let worker_idx = fd as usize % num_workers;
+        let state = &WORKERS.get().unwrap()[worker_idx];
+
+        let direct_fd_idx = register_fd_sync(state, fd);
+
+        Ok(Self {
+            inner: listener,
+            direct_fd_idx,
+            worker_idx,
+        })
+    }
+
+    /// Accept a new connection, registering the accepted stream with the
+    /// dtact-io driver.
+    ///
+    /// Unlike [`DtactTcpListener::accept`], the peer address is fetched
+    /// via a `getpeername`-equivalent (`UnixStream::peer_addr`) rather
+    /// than hand-decoded from the raw `accept(2)`/`io_uring` result —
+    /// Unix domain socket peer addresses are frequently unnamed (a client
+    /// that didn't `bind()` before `connect()`, the common case), so
+    /// there's no meaningful "avoid an extra syscall" win to chase here
+    /// the way there is for TCP's always-populated IP/port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `accept(2)`/`io_uring`
+    /// accept completion reports one, or if registering the new stream
+    /// with the driver fails.
+    pub async fn accept(
+        &self,
+    ) -> std::io::Result<(DtactUnixStream, std::os::unix::net::SocketAddr)> {
+        // One direct attempt before going async — see the comment in
+        // `DtactTcpListener::accept` for why.
+        let res = unsafe {
+            libc::accept(
+                self.inner.as_raw_fd(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if res >= 0 {
+            unsafe { libc::fcntl(res, libc::F_SETFL, libc::O_NONBLOCK) };
+            let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(res) };
+            let peer_addr = stream.peer_addr()?;
+            let client_stream = DtactUnixStream::from_std(stream)?;
+            return Ok((client_stream, peer_addr));
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(err);
+        }
+
+        let res = DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Accept,
+            buf_ptr: std::ptr::null_mut(),
+            len: 0,
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await?;
+
+        let client_fd = res as RawFd;
+        unsafe { libc::fcntl(client_fd, libc::F_SETFL, libc::O_NONBLOCK) };
+        let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(client_fd) };
+        let peer_addr = stream.peer_addr()?;
+        let client_stream = DtactUnixStream::from_std(stream)?;
+        Ok((client_stream, peer_addr))
+    }
+}
+
+impl Drop for DtactUnixListener {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+/// Peer credentials (PID/UID/GID) of a Unix-domain-socket peer, as
+/// reported by [`DtactUnixStream::peer_cred`].
+///
+/// `pid` is `None` on platforms whose peer-credential syscall doesn't
+/// report one (anything but Linux — `getpeereid(2)` elsewhere only
+/// yields uid/gid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DtactUCred {
+    uid: u32,
+    gid: u32,
+    pid: Option<i32>,
+}
+
+impl DtactUCred {
+    /// The peer's user ID.
+    #[must_use]
+    pub const fn uid(&self) -> u32 {
+        self.uid
+    }
+
+    /// The peer's group ID.
+    #[must_use]
+    pub const fn gid(&self) -> u32 {
+        self.gid
+    }
+
+    /// The peer's process ID, where the platform's peer-credential
+    /// syscall reports one (Linux only — see this type's doc).
+    #[must_use]
+    pub const fn pid(&self) -> Option<i32> {
+        self.pid
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn peer_cred_impl(fd: RawFd) -> std::io::Result<DtactUCred> {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let r = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut cred).cast::<libc::c_void>(),
+            &raw mut len,
+        )
+    };
+    if r != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(DtactUCred {
+        uid: cred.uid,
+        gid: cred.gid,
+        pid: Some(cred.pid),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn peer_cred_impl(fd: RawFd) -> std::io::Result<DtactUCred> {
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    let r = unsafe { libc::getpeereid(fd, &raw mut uid, &raw mut gid) };
+    if r != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(DtactUCred {
+        uid,
+        gid,
+        pid: None,
+    })
+}
+
+/// Build a `libc::sockaddr_un` (returned inside a `sockaddr_storage`, like
+/// every other address helper in this module) for `path`.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` if `path` doesn't fit in `sockaddr_un::sun_path`
+/// (108 bytes on Linux, shorter on macOS/BSD, including the NUL
+/// terminator this function adds).
+fn unix_path_to_libc(
+    path: &std::path::Path,
+) -> std::io::Result<(libc::sockaddr_storage, libc::socklen_t)> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    // SAFETY: `sockaddr_storage` is sized/aligned to hold any sockaddr
+    // variant this platform supports, `sockaddr_un` included; casting its
+    // address to `*mut sockaddr_un` and writing through it is exactly what
+    // every other `*_to_libc` helper in this module does for its own
+    // sockaddr variant.
+    let sun_ptr = (&raw mut storage).cast::<libc::sockaddr_un>();
+    let sun_path_cap = unsafe { (*sun_ptr).sun_path.len() };
+    // Reserve one byte for the NUL terminator `sockaddr_un`'s `sun_path`
+    // conventionally carries (matching `std::os::unix::net`'s own
+    // behavior), so `bytes.len() == sun_path_cap` is still rejected.
+    if bytes.len() >= sun_path_cap {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "unix socket path too long for sockaddr_un::sun_path",
+        ));
+    }
+    unsafe {
+        (*sun_ptr).sun_family = libc::AF_UNIX as libc::sa_family_t;
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            (*sun_ptr).sun_path.as_mut_ptr().cast::<u8>(),
+            bytes.len(),
+        );
+    }
+    let len = (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
+    Ok((storage, len))
+}
+
+/// A Unix-domain-socket peer address as reported by `recvfrom(2)`.
+///
+/// Either the filesystem path the peer `bind()`-ed to, or unnamed (a
+/// socket that never called `bind()` before `sendto()`, the common
+/// client-side case).
+///
+/// Not `std::os::unix::net::SocketAddr`: that type has no public
+/// constructor from raw `sockaddr_un` bytes (only from a live syscall
+/// result, e.g. `UnixListener::accept`'s own internal plumbing), and
+/// `recvfrom`'s peer address has to come from the kernel-filled
+/// `msghdr::msg_name` of the completed op — there's no separate syscall
+/// this crate could use to fetch a `std`-constructed one instead the way
+/// [`DtactUnixListener::accept`] does via `UnixStream::peer_addr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DtactUnixSocketAddr(Option<std::path::PathBuf>);
+
+impl DtactUnixSocketAddr {
+    /// The path the peer was bound to, if any.
+    #[must_use]
+    pub fn as_pathname(&self) -> Option<&std::path::Path> {
+        self.0.as_deref()
+    }
+
+    /// `true` if the peer never `bind()`-ed before sending (the common
+    /// case for a datagram socket that only ever calls `send_to`).
+    #[must_use]
+    pub const fn is_unnamed(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+/// Parse a `recvfrom`-filled `sockaddr_un` (inside the generic
+/// `sockaddr_storage` every address helper in this module uses) into a
+/// [`DtactUnixSocketAddr`].
+fn sockaddr_un_to_addr(
+    storage: &libc::sockaddr_storage,
+    len: libc::socklen_t,
+) -> DtactUnixSocketAddr {
+    let family_len = std::mem::size_of::<libc::sa_family_t>();
+    if (len as usize) <= family_len {
+        return DtactUnixSocketAddr(None); // unnamed: no path bytes at all
+    }
+    // SAFETY: `storage` is sized/aligned to hold any sockaddr variant,
+    // `sockaddr_un` included, and `len` (from the completed `recvfrom`)
+    // bounds how much of it the kernel actually filled in.
+    let sun = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_un>() };
+    let path_len = (len as usize) - family_len;
+    let path_len = path_len.min(sun.sun_path.len());
+    // SAFETY: `path_len` was just clamped to `sun_path`'s own length.
+    let bytes = unsafe { std::slice::from_raw_parts(sun.sun_path.as_ptr().cast::<u8>(), path_len) };
+    // `sun_path` is conventionally NUL-terminated for a pathname address;
+    // trim at the first NUL rather than trusting `path_len` to already
+    // exclude it.
+    let bytes = bytes.split(|&b| b == 0).next().unwrap_or(&[]);
+    if bytes.is_empty() {
+        DtactUnixSocketAddr(None)
+    } else {
+        use std::os::unix::ffi::OsStrExt;
+        DtactUnixSocketAddr(Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(
+            bytes,
+        ))))
+    }
+}
+
+// =========================================================================
+// 10d. HIGH-LEVEL API: DtactUnixDatagram
+// =========================================================================
+
+/// Async Unix-domain datagram socket.
+///
+/// Connectionless counterpart to [`DtactUnixStream`], directly analogous
+/// to [`DtactUdpSocket`] (same connectionless `send_to`/`recv_from` and
+/// connected `connect`/`send`/`recv` pattern, same `SendTo`/`RecvFrom`/
+/// `Read`/`Write` submission machinery — only the address family and the
+/// `libc::sockaddr_un` construction differ).
+pub struct DtactUnixDatagram {
+    inner: std::os::unix::net::UnixDatagram,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+impl DtactUnixDatagram {
+    /// Bind a new datagram socket to the filesystem path `path` and
+    /// register it with the driver. `path` must not already exist —
+    /// like `std::os::unix::net::UnixDatagram::bind`, this does not
+    /// remove a stale socket file left behind by a previous run.
+    ///
+    /// # Errors
+    /// Returns any error from binding the OS socket or registering it.
+    pub fn bind(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let sock = std::os::unix::net::UnixDatagram::bind(path)?;
+        Self::from_std(sock)
+    }
+
+    /// Create an unbound datagram socket (matches
+    /// `std::os::unix::net::UnixDatagram::unbound`) — usable for
+    /// `send_to`/`connect` immediately, has no path of its own until (if
+    /// ever) explicitly bound.
+    ///
+    /// # Errors
+    /// Returns any error from creating the OS socket or registering it.
+    pub fn unbound() -> std::io::Result<Self> {
+        let sock = std::os::unix::net::UnixDatagram::unbound()?;
+        Self::from_std(sock)
+    }
+
+    /// Register an existing `std::os::unix::net::UnixDatagram`, taking
+    /// ownership.
+    ///
+    /// # Errors
+    /// Returns any error from switching the socket to non-blocking mode
+    /// or registering it with the driver.
+    ///
+    /// # Panics
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    pub fn from_std(socket: std::os::unix::net::UnixDatagram) -> std::io::Result<Self> {
+        let fd = socket.as_raw_fd();
+        socket.set_nonblocking(true)?;
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+        let worker_idx = fd as usize % num_workers;
+        let state = &WORKERS.get().unwrap()[worker_idx];
+        let direct_fd_idx = register_fd_sync(state, fd);
+        Ok(Self {
+            inner: socket,
+            direct_fd_idx,
+            worker_idx,
+        })
+    }
+
+    /// Send `buf` as a single datagram to the socket bound at `target`,
+    /// returning the number of bytes sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `sendmsg`, `target` path
+    /// resolution included (e.g. too long for `sockaddr_un::sun_path`).
+    pub async fn send_to(
+        &self,
+        buf: &[u8],
+        target: impl AsRef<std::path::Path>,
+    ) -> std::io::Result<usize> {
+        // See `DtactUdpSocket::send_to`'s `SendToState` for why this
+        // wrapper (and its `unsafe impl Send`) exists — identical
+        // reasoning, just a `sockaddr_un` instead of `sockaddr_in`.
+        struct SendToState {
+            storage: libc::sockaddr_storage,
+            iov: libc::iovec,
+            msg: libc::msghdr,
+        }
+        unsafe impl Send for SendToState {}
+
+        let (storage, addr_len) = unix_path_to_libc(target.as_ref())?;
+        let mut state = SendToState {
+            storage,
+            iov: libc::iovec {
+                iov_base: buf.as_ptr().cast_mut().cast::<libc::c_void>(),
+                iov_len: buf.len(),
+            },
+            msg: unsafe { std::mem::zeroed() },
+        };
+        state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+        state.msg.msg_namelen = addr_len;
+        state.msg.msg_iov = &raw mut state.iov;
+        state.msg.msg_iovlen = 1;
+
+        let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const state.msg, 0) };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+
+        let mut fut = DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_fd() as u32,
+            self.direct_fd_idx,
+            OpCode::SendTo,
+            std::ptr::null_mut(),
+            0,
+            0,
+            None,
+            0,
+            None,
+        );
+        fut.msg_ptr = &raw mut state.msg;
+        fut.await
+    }
+
+    /// Receive a single datagram into `buf`, returning the byte count and
+    /// the peer address it came from.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `recvmsg`.
+    pub async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, DtactUnixSocketAddr)> {
+        // See `DtactUdpSocket::recv_from`'s `RecvFromState` for why this
+        // wrapper (and its `unsafe impl Send`) exists.
+        struct RecvFromState {
+            storage: libc::sockaddr_storage,
+            iov: libc::iovec,
+            msg: libc::msghdr,
+        }
+        unsafe impl Send for RecvFromState {}
+
+        let mut state = RecvFromState {
+            storage: unsafe { std::mem::zeroed() },
+            iov: libc::iovec {
+                iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
+                iov_len: buf.len(),
+            },
+            msg: unsafe { std::mem::zeroed() },
+        };
+        state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+        state.msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        state.msg.msg_iov = &raw mut state.iov;
+        state.msg.msg_iovlen = 1;
+
+        let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut state.msg, 0) };
+        if r >= 0 {
+            let from = sockaddr_un_to_addr(&state.storage, state.msg.msg_namelen);
+            return Ok((r as usize, from));
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+
+        let mut fut = DtactIoFuture::new(
+            self.worker_idx,
+            self.inner.as_raw_fd() as u32,
+            self.direct_fd_idx,
+            OpCode::RecvFrom,
+            std::ptr::null_mut(),
+            0,
+            0,
+            None,
+            0,
+            None,
+        );
+        fut.msg_ptr = &raw mut state.msg;
+        let n = fut.await?;
+        let from = sockaddr_un_to_addr(&state.storage, state.msg.msg_namelen);
+        Ok((n, from))
+    }
+
+    /// Connect this socket to the path `target` so
+    /// [`send`](Self::send)/[`recv`](Self::recv) can omit the peer
+    /// address.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying `connect`.
+    pub async fn connect(&self, target: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.inner.connect(target)
+    }
+
+    /// Send `buf` to the connected peer, returning the number of bytes
+    /// sent.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying send.
+    pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let r = unsafe {
+            libc::send(
+                self.inner.as_raw_fd(),
+                buf.as_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                0,
+            )
+        };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Write,
+            buf_ptr: buf.as_ptr().cast_mut(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+    }
+
+    /// Receive a datagram from the connected peer into `buf`, returning
+    /// the byte count.
+    ///
+    /// # Errors
+    /// Returns any error from the underlying recv.
+    pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let r = unsafe {
+            libc::recv(
+                self.inner.as_raw_fd(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                0,
+            )
+        };
+        if r >= 0 {
+            return Ok(r as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Read,
+            buf_ptr: buf.as_mut_ptr(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+    }
+}
+
+impl Drop for DtactUnixDatagram {
     fn drop(&mut self) {
         if let Some(workers) = WORKERS.get()
             && let Some(state) = workers.get(self.worker_idx)

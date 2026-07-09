@@ -39,7 +39,7 @@ const SLACK: Duration = Duration::from_millis(200);
 #[cfg(feature = "native")]
 mod native_tests {
     use super::*;
-    use dtact_util::timer::{DtactInterval, DtactTimeout, sleep, timeout};
+    use dtact_util::timer::{DtactInterval, DtactTimeout, MissedTickBehavior, sleep, timeout};
 
     #[test]
     fn sleep_waits_roughly_the_requested_duration() {
@@ -118,12 +118,45 @@ mod native_tests {
             assert!(result.is_err(), "a zero-duration timeout must elapse");
         });
     }
+
+    #[test]
+    fn missed_tick_behavior_defaults_to_burst_and_is_settable() {
+        let mut interval = DtactInterval::new(Duration::from_millis(20));
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Burst);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Delay);
+    }
+
+    /// Under `Burst`, falling behind by several periods must not skip any
+    /// tick — `tick()` fires immediately (no further waiting) once per
+    /// missed period until caught up.
+    #[test]
+    fn missed_tick_behavior_burst_does_not_skip_ticks() {
+        let period = Duration::from_millis(15);
+        let mut interval = DtactInterval::new(period);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Burst);
+        block_on(async {
+            // Fall behind by ~4 periods before ever calling tick().
+            sleep(period * 4).await;
+            let start = Instant::now();
+            for _ in 0..4 {
+                interval.tick().await;
+            }
+            // All 4 backlog ticks must resolve promptly (no per-tick
+            // waiting), not take ~4 more periods.
+            assert!(
+                start.elapsed() < period * 2,
+                "Burst must fire backlog ticks immediately, took {:?}",
+                start.elapsed()
+            );
+        });
+    }
 }
 
 #[cfg(all(feature = "tokio", not(feature = "native")))]
 mod tokio_tests {
     use super::*;
-    use dtact_util::timer::{DtactInterval, DtactTimeout, sleep, timeout};
+    use dtact_util::timer::{DtactInterval, DtactTimeout, MissedTickBehavior, sleep, timeout};
 
     #[tokio::test]
     async fn sleep_waits_roughly_the_requested_duration() {
@@ -191,5 +224,13 @@ mod tokio_tests {
         let never = std::future::pending::<()>();
         let result = DtactTimeout::new(Duration::ZERO, never).await;
         assert!(result.is_err(), "a zero-duration timeout must elapse");
+    }
+
+    #[tokio::test]
+    async fn missed_tick_behavior_defaults_to_burst_and_is_settable() {
+        let mut interval = DtactInterval::new(Duration::from_millis(20));
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Burst);
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Delay);
     }
 }

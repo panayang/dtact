@@ -90,6 +90,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_Pipes",
 ], optional = true }
 
 [dev-dependencies]
@@ -144,5 +145,10 @@ required-features = ["native"]
 
 [[bench]]
 name = "tcp_roundtrip"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "unix_socket_roundtrip"
 harness = false
 required-features = ["native"]
