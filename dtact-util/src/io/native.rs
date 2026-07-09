@@ -784,6 +784,12 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
     let ring = unsafe { &mut *state.ring.get() };
     let mut eventfd_buf = 0u64;
     let mut eventfd_submitted = false;
+    // Consecutive idle iterations, only tracked/consulted under the `spin`
+    // feature — escalates how long `adaptive_idle_spin` is willing to spin
+    // before falling back to a blocking wait, and resets to 0 the moment
+    // real work shows up.
+    #[cfg(feature = "spin")]
+    let mut idle_streak: u32 = 0;
 
     loop {
         if SHUTDOWN.load(Ordering::Relaxed) {
@@ -914,6 +920,11 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
             }
         }
 
+        #[cfg(feature = "spin")]
+        if folded_wait || pushed_sqe || has_completions {
+            idle_streak = 0;
+        }
+
         if !folded_wait && !pushed_sqe && !has_completions {
             // A bounded busy-poll was tried here (spin on the completion
             // ring/request queues before committing to a blocking
@@ -924,9 +935,31 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
             // regression — UDP roundtrip latency went from ~20µs to
             // 1-18ms, apparently because a spinning thread doesn't get
             // scheduled contiguously under contention the way a blocking
-            // `submit_and_wait` (which yields immediately) does. Reverted;
-            // do not reintroduce without validating under real background
-            // load, not just an idle benchmark box.
+            // `submit_and_wait` (which yields immediately) does. Reverted
+            // by default; do not reintroduce unconditionally without
+            // validating under real background load, not just an idle
+            // benchmark box.
+            //
+            // Under the opt-in `spin` feature (off by default, see
+            // `Cargo.toml`) we retry the same regression with two changes
+            // meant to avoid it: the spin is *adaptive* (escalates only
+            // after repeated idle iterations, so a lightly-loaded worker
+            // never spins) and tightly *bounded* (a few thousand
+            // `spin_loop` hints, roughly single-digit microseconds, not a
+            // busy-wait until a timeout) — a short enough window that a
+            // contended core still yields back promptly via the fallback
+            // blocking `submit_and_wait` below.
+            #[cfg(feature = "spin")]
+            {
+                if adaptive_idle_spin(state, idle_streak) {
+                    continue;
+                }
+            }
+            #[cfg(feature = "spin")]
+            {
+                idle_streak = idle_streak.saturating_add(1);
+            }
+
             state.is_sleeping.store(true, Ordering::SeqCst);
             // Same Dekker-style re-check as the folded-wait path above:
             // `any_pending` was computed earlier in this iteration and may
@@ -954,6 +987,46 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
             state.is_sleeping.store(false, Ordering::Release);
         }
     }
+}
+
+/// Opt-in (`spin` feature) adaptive busy-poll tried right before an
+/// io-worker would otherwise commit to a blocking `submit_and_wait`.
+///
+/// Deliberately conservative on both axes that made the earlier
+/// unconditional version regress (see the call site's comment): it only
+/// spins once the worker has already been idle for a few consecutive
+/// iterations (`idle_streak`) — a worker that's finding real work every
+/// loop never spins at all — and each spin attempt is capped at a few
+/// thousand `spin_loop` hints (roughly single-digit microseconds), so a
+/// core under contention gets back to yielding via the blocking wait
+/// almost as quickly as it would without this feature.
+///
+/// Returns `true` if new work showed up in a submission queue during the
+/// spin, in which case the caller should skip the blocking wait and loop
+/// back around to drain it immediately.
+#[cfg(all(target_os = "linux", feature = "spin"))]
+fn adaptive_idle_spin(state: &WorkerState, idle_streak: u32) -> bool {
+    // Don't spin at all until the worker has genuinely gone idle a few
+    // times in a row — a worker that's busy every iteration should never
+    // pay the spin cost.
+    const ARM_AFTER: u32 = 2;
+    if idle_streak < ARM_AFTER {
+        return false;
+    }
+
+    // Escalate the spin budget with sustained idleness, capped low enough
+    // that even the maximum budget is a few-microsecond affair, not a
+    // real busy-wait.
+    let budget = 256u32.saturating_mul(idle_streak.saturating_sub(ARM_AFTER) + 1);
+    let budget = budget.min(4096);
+
+    for _ in 0..budget {
+        if state.queues.iter().any(|q| !q.is_empty()) {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
 }
 
 #[cfg(target_os = "linux")]

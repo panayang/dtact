@@ -95,7 +95,7 @@ fn sigusr1_self_raise_is_delivered() {
 #[cfg(all(feature = "native", windows))]
 #[test]
 fn ctrl_c_registration_and_drop_do_not_panic() {
-    use dtact_util::signal::{ctrl_break, ctrl_c};
+    use dtact_util::signal::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
 
     // Actually delivering Ctrl+C would terminate this test process, so
     // this only exercises registration + the DeadOnDrop path — real
@@ -104,9 +104,18 @@ fn ctrl_c_registration_and_drop_do_not_panic() {
     let a = ctrl_c();
     let b = ctrl_c();
     let c = ctrl_break();
+    // Same story for the three teardown-adjacent events: registering (and
+    // dropping) must not panic or install anything that misbehaves absent
+    // a real close/logoff/shutdown notification.
+    let d = ctrl_close();
+    let e = ctrl_logoff();
+    let f = ctrl_shutdown();
     drop(a);
     drop(b);
     drop(c);
+    drop(d);
+    drop(e);
+    drop(f);
 
     // Registering again after drops must still work (registry slots are
     // leaked-not-reused by design, but that must not corrupt anything).
@@ -151,9 +160,18 @@ async fn tokio_backend_registers_without_panicking() {
     #[cfg(unix)]
     {
         let _s = dtact_util::signal::sigusr1();
+        // The generic `register(SignalKind)` entry point (mirrors the
+        // native backend's arbitrary-signal-number `DtactSignalStream::new`)
+        // must also work for a signal that has no named convenience
+        // wrapper here.
+        let _quit = dtact_util::signal::register(dtact_util::signal::SignalKind::quit())
+            .expect("register(SIGQUIT) must succeed");
     }
     #[cfg(windows)]
     {
         let _s = dtact_util::signal::ctrl_c();
+        let _close = dtact_util::signal::ctrl_close();
+        let _logoff = dtact_util::signal::ctrl_logoff();
+        let _shutdown = dtact_util::signal::ctrl_shutdown();
     }
 }

@@ -3,8 +3,10 @@
 //! The exposed surface is deliberately per-platform, matching what the
 //! native backend actually compiles (see `signal/mod.rs`'s `cfg` gates):
 //!
-//! - **Windows**: [`dtact_util_signal_ctrl_c`] / [`dtact_util_signal_ctrl_break`]
-//!   (there is no general POSIX-signal delivery on Windows).
+//! - **Windows**: [`dtact_util_signal_ctrl_c`] / [`dtact_util_signal_ctrl_break`] /
+//!   [`dtact_util_signal_ctrl_close`] / [`dtact_util_signal_ctrl_logoff`] /
+//!   [`dtact_util_signal_ctrl_shutdown`] (there is no general POSIX-signal
+//!   delivery on Windows).
 //! - **Unix**: [`dtact_util_signal_register`] for an arbitrary signal number
 //!   (`SIGINT`, `SIGTERM`, `SIGUSR1`, ...).
 //!
@@ -53,6 +55,45 @@ pub unsafe extern "C" fn dtact_util_signal_ctrl_c() -> *mut DtactSignalStream {
 pub unsafe extern "C" fn dtact_util_signal_ctrl_break() -> *mut DtactSignalStream {
     clear_last_error();
     Box::into_raw(Box::new(crate::signal::ctrl_break()))
+}
+
+/// Register a listener for console-window-close (`CTRL_CLOSE_EVENT`),
+/// returning an owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_signal_ctrl_close() -> *mut DtactSignalStream {
+    clear_last_error();
+    Box::into_raw(Box::new(crate::signal::ctrl_close()))
+}
+
+/// Register a listener for user-logoff (`CTRL_LOGOFF_EVENT`), returning an
+/// owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_signal_ctrl_logoff() -> *mut DtactSignalStream {
+    clear_last_error();
+    Box::into_raw(Box::new(crate::signal::ctrl_logoff()))
+}
+
+/// Register a listener for system-shutdown (`CTRL_SHUTDOWN_EVENT`),
+/// returning an owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_signal_ctrl_shutdown() -> *mut DtactSignalStream {
+    clear_last_error();
+    Box::into_raw(Box::new(crate::signal::ctrl_shutdown()))
 }
 
 /// Block until this signal is next delivered.

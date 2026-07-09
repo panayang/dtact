@@ -49,6 +49,16 @@ compat = ["dep:tokio", "dep:futures-io", "dep:libc"]
 # style. Off by default; implies `native` since it wraps the native backends.
 ffi = ["native"]
 
+# Opt-in, Linux-only: before an idle `io` worker commits to a blocking
+# `submit_and_wait`, spin-poll its request queues for a short, adaptively
+# bounded window instead. Off by default — an earlier unconditional version
+# of this idea regressed UDP roundtrip latency badly under real background
+# CPU contention (see the comment at the call site in
+# `src/io/native.rs::run_linux_worker_loop`); this feature exists for
+# callers who have measured their own workload and want to trade some CPU
+# for lower steady-state IO latency, not as a default-on optimization.
+spin = []
+
 [dependencies]
 mio = { version = "1.2", features = [
     "os-poll",

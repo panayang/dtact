@@ -2,17 +2,6 @@
 //! (`OpenAt`/`Read`/`Write`/`Fsync`/`Close`) submitted to a single
 //! dedicated ring, instead of `native.rs`'s thread-pool fallback.
 //!
-//! **Not compiled or run on this development sandbox (Windows).** Written
-//! carefully against the pinned `io-uring = "0.7"` crate's documented API,
-//! mirroring the same "one worker thread owns the reactor, ops cross a
-//! queue as `Arc`-shared op-state with a leaked strong ref smuggled through
-//! `user_data`" shape already used and *tested* in
-//! `fs::iocp_windows`. The maintainer's Linux pass needs to compile-check
-//! this before trusting it — see the crate-level README note added
-//! alongside this file's commit for exactly what to verify first
-//! (buffer lifetime across the submit/complete boundary, `AT_FDCWD`
-//! path handling, and `O_DIRECT`/alignment requirements if ever enabled).
-//!
 //! **Per-op state is a preallocated slot, not a fresh allocation.**
 //! [`init_fs`] carves out a fixed `Box<[OpState]>` arena (sized by
 //! `ring_depth`) up front, handed out/reclaimed via a

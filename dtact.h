@@ -11,10 +11,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#ifdef __cplusplus
-namespace dtact {
-#endif  // __cplusplus
-
 /*
  Number of tasks in a single `TaskChunk`.
  */
@@ -255,10 +251,6 @@ void dtact_shutdown(void)
 
 #ifdef __cplusplus
 }  // extern "C"
-#endif  // __cplusplus
-
-#ifdef __cplusplus
-}  // namespace dtact
 #endif  // __cplusplus
 
 #endif  /* DTACT_H */

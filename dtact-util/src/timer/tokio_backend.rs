@@ -10,8 +10,17 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 /// A future that completes once, after the given [`Duration`] has elapsed.
+///
+/// Stores the inner `tokio::time::Sleep` inline (structurally pinned)
+/// rather than in a `Box`. `Sleep` is `!Unpin` (it links itself into
+/// tokio's timer wheel), but it doesn't need to be heap-allocated to be
+/// pinned — only to be pinned *without* pinning its owner, which nothing
+/// here requires. Every [`sleep`]/[`DtactSleep::new`] call is a plausible
+/// hot path (e.g. per-connection timeouts under the short-lived-connection
+/// workloads this backend targets), so avoiding one allocation per call is
+/// worth the small amount of unsafe pin-projection boilerplate.
 pub struct DtactSleep {
-    inner: Pin<Box<tokio::time::Sleep>>,
+    inner: tokio::time::Sleep,
 }
 
 impl DtactSleep {
@@ -20,7 +29,7 @@ impl DtactSleep {
     #[must_use]
     pub fn new(duration: Duration) -> Self {
         Self {
-            inner: Box::pin(tokio::time::sleep(duration)),
+            inner: tokio::time::sleep(duration),
         }
     }
 
@@ -28,7 +37,7 @@ impl DtactSleep {
     #[must_use]
     pub fn until(deadline: Instant) -> Self {
         Self {
-            inner: Box::pin(tokio::time::sleep_until(deadline.into())),
+            inner: tokio::time::sleep_until(deadline.into()),
         }
     }
 }
@@ -37,7 +46,11 @@ impl Future for DtactSleep {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        self.get_mut().inner.as_mut().poll(cx)
+        // SAFETY: `inner` is never moved out of `self` (no public API
+        // exposes `&mut inner` outside a pinned context), so projecting
+        // the pin onto it upholds the structural-pinning contract.
+        let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+        inner.poll(cx)
     }
 }
 
@@ -101,15 +114,19 @@ impl From<tokio::time::error::Elapsed> for TimeoutError {
 /// Wraps a future with a deadline: resolves to `Ok(F::Output)` if the inner
 /// future completes first, or `Err(TimeoutError)` if the deadline elapses
 /// first.
+///
+/// Stores the inner `tokio::time::Timeout<F>` inline rather than in a
+/// `Box` — see [`DtactSleep`]'s doc for why that heap allocation is
+/// avoidable here too.
 pub struct DtactTimeout<F> {
-    inner: Pin<Box<tokio::time::Timeout<F>>>,
+    inner: tokio::time::Timeout<F>,
 }
 
 impl<F: Future> DtactTimeout<F> {
     /// Wrap `inner` with a `duration` deadline, measured from now.
     pub fn new(duration: Duration, inner: F) -> Self {
         Self {
-            inner: Box::pin(tokio::time::timeout(duration, inner)),
+            inner: tokio::time::timeout(duration, inner),
         }
     }
 }
@@ -118,11 +135,9 @@ impl<F: Future> Future for DtactTimeout<F> {
     type Output = Result<F::Output, TimeoutError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.get_mut()
-            .inner
-            .as_mut()
-            .poll(cx)
-            .map(|r| r.map_err(TimeoutError::from))
+        // SAFETY: same structural-pinning contract as `DtactSleep::poll`.
+        let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+        inner.poll(cx).map(|r| r.map_err(TimeoutError::from))
     }
 }
 

@@ -25,7 +25,6 @@ errors.tmp
 examples/c_async
 bench.md
 examples/c_async.exe
-src/lib.rs
 windows_fixes.patch
 clean_fixes.patch
 examples/dtact.dll
@@ -53,3 +52,6 @@ perf.data
 perf.data.old
 strace01.tmp
 report.tmp
+examples/c_dtact_util.exe
+examples/dtact_util.dll
+examples/c_dtact_util

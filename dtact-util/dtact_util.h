@@ -11,10 +11,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#ifdef __cplusplus
-namespace dtact_util {
-#endif  // __cplusplus
-
 /*
  Stdio bitmask flag: route the child's stderr through a pipe.
  */
@@ -45,6 +41,33 @@ namespace dtact_util {
  are synchronous since they're fast, non-blocking syscalls.
  */
 typedef struct DtactChild DtactChild;
+
+/*
+ One end of a child process's stderr pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stderr` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+typedef struct DtactChildStderr DtactChildStderr;
+
+/*
+ One end of a child process's stdin pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stdin` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+typedef struct DtactChildStdin DtactChildStdin;
+
+/*
+ One end of a child process's stdout pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stdout` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+typedef struct DtactChildStdout DtactChildStdout;
 
 /*
  An open file whose reads/writes are dispatched as real overlapped IOCP
@@ -101,9 +124,14 @@ typedef struct DtactSignalStream DtactSignalStream;
 typedef struct DtactSignalStream DtactSignalStream;
 
 /*
- A stream of occurrences of one Windows console-control event
- (`Ctrl+C` or `Ctrl+Break`), backed by tokio's console-handler
- reactor integration instead of dtact-signal's own registry.
+ A stream of occurrences of one Windows console-control event.
+
+ Covers `Ctrl+C`, `Ctrl+Break`, window-close, logoff, and shutdown,
+ backed by tokio's console-handler reactor integration instead of
+ dtact-signal's own registry. Mirrors the native backend's
+ `DtactSignalStream` — same five events, see its module doc for
+ what each one means and the grace-period caveat that applies to
+ the latter three.
  */
 typedef struct DtactSignalStream DtactSignalStream;
 
@@ -491,7 +519,7 @@ ptrdiff_t dtact_util_io_udp_send_to(struct DtactUdpSocket *aSock,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- DtactChildStderr *dtact_util_process_child_take_stderr(struct DtactChild *aChild) ;
+ struct DtactChildStderr *dtact_util_process_child_take_stderr(struct DtactChild *aChild) ;
 
 /*
  Take ownership of the child's stdin pipe (only if spawned with
@@ -501,7 +529,7 @@ ptrdiff_t dtact_util_io_udp_send_to(struct DtactUdpSocket *aSock,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- DtactChildStdin *dtact_util_process_child_take_stdin(struct DtactChild *aChild) ;
+ struct DtactChildStdin *dtact_util_process_child_take_stdin(struct DtactChild *aChild) ;
 
 /*
  Take ownership of the child's stdout pipe (only if spawned with
@@ -511,7 +539,7 @@ ptrdiff_t dtact_util_io_udp_send_to(struct DtactUdpSocket *aSock,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- DtactChildStdout *dtact_util_process_child_take_stdout(struct DtactChild *aChild) ;
+ struct DtactChildStdout *dtact_util_process_child_take_stdout(struct DtactChild *aChild) ;
 
 /*
  Block until the child exits, writing its exit code into `*out_code`.
@@ -564,7 +592,7 @@ struct DtactChild *dtact_util_process_spawn(const char *aProgram,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- void dtact_util_process_stderr_free(DtactChildStderr *aStderr) ;
+ void dtact_util_process_stderr_free(struct DtactChildStderr *aStderr) ;
 
 /*
  Read up to `len` bytes from the child's stderr into `buf`. Returns the
@@ -574,7 +602,11 @@ struct DtactChild *dtact_util_process_spawn(const char *aProgram,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_process_stderr_read(DtactChildStderr *aStderr, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_process_stderr_read(struct DtactChildStderr *aStderr,
+                                         uint8_t *aBuf,
+                                         size_t aLen)
+;
 
 /*
  Close (free) the child's stdin pipe, letting the child observe EOF.
@@ -584,7 +616,7 @@ struct DtactChild *dtact_util_process_spawn(const char *aProgram,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- void dtact_util_process_stdin_close(DtactChildStdin *aStdin) ;
+ void dtact_util_process_stdin_close(struct DtactChildStdin *aStdin) ;
 
 /*
  Write `len` bytes from `buf` to the child's stdin. Returns the byte count
@@ -595,7 +627,7 @@ struct DtactChild *dtact_util_process_spawn(const char *aProgram,
  See the [`crate::ffi`] module-level Safety contract.
  */
 
-ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
+ptrdiff_t dtact_util_process_stdin_write(struct DtactChildStdin *aStdin,
                                          const uint8_t *aBuf,
                                          size_t aLen)
 ;
@@ -607,7 +639,7 @@ ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- void dtact_util_process_stdout_free(DtactChildStdout *aStdout) ;
+ void dtact_util_process_stdout_free(struct DtactChildStdout *aStdout) ;
 
 /*
  Read up to `len` bytes from the child's stdout into `buf`. Returns the
@@ -617,7 +649,11 @@ ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_process_stdout_read(DtactChildStdout *aStdout, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_process_stdout_read(struct DtactChildStdout *aStdout,
+                                         uint8_t *aBuf,
+                                         size_t aLen)
+;
 
 /*
  Register a listener for Ctrl+Break (`CTRL_BREAK_EVENT`), returning an
@@ -638,6 +674,36 @@ ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
  See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  */
  struct DtactSignalStream *dtact_util_signal_ctrl_c(void) ;
+
+/*
+ Register a listener for console-window-close (`CTRL_CLOSE_EVENT`),
+ returning an owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ struct DtactSignalStream *dtact_util_signal_ctrl_close(void) ;
+
+/*
+ Register a listener for user-logoff (`CTRL_LOGOFF_EVENT`), returning an
+ owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ struct DtactSignalStream *dtact_util_signal_ctrl_logoff(void) ;
+
+/*
+ Register a listener for system-shutdown (`CTRL_SHUTDOWN_EVENT`),
+ returning an owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ struct DtactSignalStream *dtact_util_signal_ctrl_shutdown(void) ;
 
 /*
  Free a signal listener handle. Passing null is a no-op.
@@ -761,10 +827,6 @@ int32_t dtact_util_stream_pair_create(size_t aCapacity,
 
 #ifdef __cplusplus
 }  // extern "C"
-#endif  // __cplusplus
-
-#ifdef __cplusplus
-}  // namespace dtact_util
 #endif  // __cplusplus
 
 #endif  /* DTACT_UTIL_H */

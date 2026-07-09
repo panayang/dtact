@@ -191,6 +191,67 @@ fn io_udp_send_recv_roundtrip() {
 }
 
 #[test]
+fn io_udp_connected_send_recv_roundtrip() {
+    unsafe {
+        dtact_util_io_init(1);
+
+        let msg = b"connd";
+        let std_a = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let a_port = std_a.local_addr().unwrap().port();
+        drop(std_a);
+        let std_b = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let b_port = std_b.local_addr().unwrap().port();
+        drop(std_b);
+
+        let a_bind = CString::new(format!("127.0.0.1:{a_port}")).unwrap();
+        let a = dtact_util_io_udp_bind(a_bind.as_ptr());
+        assert!(!a.is_null(), "{:?}", last_error());
+        let b_bind = CString::new(format!("127.0.0.1:{b_port}")).unwrap();
+        let b = dtact_util_io_udp_bind(b_bind.as_ptr());
+        assert!(!b.is_null(), "{:?}", last_error());
+
+        assert_eq!(
+            dtact_util_io_udp_connect(a, b_bind.as_ptr()),
+            0,
+            "{:?}",
+            last_error()
+        );
+        assert_eq!(
+            dtact_util_io_udp_connect(b, a_bind.as_ptr()),
+            0,
+            "{:?}",
+            last_error()
+        );
+
+        let sent = dtact_util_io_udp_send(a, msg.as_ptr(), msg.len());
+        assert_eq!(sent, msg.len() as isize, "{:?}", last_error());
+
+        let mut buf = [0u8; 16];
+        let n = dtact_util_io_udp_recv(b, buf.as_mut_ptr(), buf.len());
+        assert_eq!(n, msg.len() as isize, "{:?}", last_error());
+        assert_eq!(&buf[..n as usize], msg);
+
+        dtact_util_io_udp_close(a);
+        dtact_util_io_udp_close(b);
+    }
+}
+
+#[test]
+fn io_listener_bind_rejects_bad_address() {
+    unsafe {
+        dtact_util_io_init(1);
+        let bad = CString::new("not-an-address").unwrap();
+        let listener = dtact_util_io_listener_bind(bad.as_ptr());
+        assert!(listener.is_null());
+        let msg = last_error().expect("bad address must record an error");
+        assert!(
+            msg.to_lowercase().contains("invalid"),
+            "message was {msg:?}"
+        );
+    }
+}
+
+#[test]
 fn process_spawn_wait() {
     unsafe {
         dtact_util_process_init(2);

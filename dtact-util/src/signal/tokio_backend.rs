@@ -10,7 +10,8 @@ pub use windows::*;
 #[cfg(unix)]
 mod unix {
     use std::io;
-    use tokio::signal::unix::{Signal, SignalKind, signal};
+    pub use tokio::signal::unix::SignalKind;
+    use tokio::signal::unix::{Signal, signal};
 
     /// A stream of occurrences of one Unix signal.
     ///
@@ -27,6 +28,21 @@ mod unix {
         pub async fn recv(&mut self) {
             self.0.recv().await;
         }
+    }
+
+    /// Register a listener for an arbitrary [`SignalKind`], not just the
+    /// six convenience wrappers below.
+    ///
+    /// Mirrors the native backend's `DtactSignalStream::new(sig:
+    /// libc::c_int)`, which accepts any raw signal number for the same
+    /// reason (e.g. `SIGQUIT`, `SIGWINCH`, `SIGALRM`, or any platform-
+    /// specific signal this module doesn't have a named wrapper for).
+    ///
+    /// # Errors
+    /// Returns whatever `tokio::signal::unix::signal` returns (e.g. an
+    /// invalid signal number, or the OS refusing to install the handler).
+    pub fn register(kind: SignalKind) -> io::Result<DtactSignalStream> {
+        make(kind)
     }
 
     fn make(kind: SignalKind) -> io::Result<DtactSignalStream> {
@@ -87,16 +103,24 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use tokio::signal::windows::{CtrlBreak, CtrlC};
+    use tokio::signal::windows::{CtrlBreak, CtrlC, CtrlClose, CtrlLogoff, CtrlShutdown};
 
-    /// A stream of occurrences of one Windows console-control event
-    /// (`Ctrl+C` or `Ctrl+Break`), backed by tokio's console-handler
-    /// reactor integration instead of dtact-signal's own registry.
+    /// A stream of occurrences of one Windows console-control event.
+    ///
+    /// Covers `Ctrl+C`, `Ctrl+Break`, window-close, logoff, and shutdown,
+    /// backed by tokio's console-handler reactor integration instead of
+    /// dtact-signal's own registry. Mirrors the native backend's
+    /// `DtactSignalStream` — same five events, see its module doc for
+    /// what each one means and the grace-period caveat that applies to
+    /// the latter three.
     pub struct DtactSignalStream(CtrlWrapper);
 
     enum CtrlWrapper {
         C(CtrlC),
         Break(CtrlBreak),
+        Close(CtrlClose),
+        Logoff(CtrlLogoff),
+        Shutdown(CtrlShutdown),
     }
 
     impl DtactSignalStream {
@@ -107,6 +131,15 @@ mod windows {
                     s.recv().await;
                 }
                 CtrlWrapper::Break(s) => {
+                    s.recv().await;
+                }
+                CtrlWrapper::Close(s) => {
+                    s.recv().await;
+                }
+                CtrlWrapper::Logoff(s) => {
+                    s.recv().await;
+                }
+                CtrlWrapper::Shutdown(s) => {
                     s.recv().await;
                 }
             }
@@ -136,6 +169,46 @@ mod windows {
         DtactSignalStream(CtrlWrapper::Break(
             tokio::signal::windows::ctrl_break()
                 .expect("dtact-signal: failed to register Ctrl+Break handler"),
+        ))
+    }
+
+    /// Register a listener for the console-window-close
+    /// (`CTRL_CLOSE_EVENT`) event.
+    ///
+    /// # Panics
+    /// Panics if the OS refuses to install the console-control handler.
+    #[must_use]
+    pub fn ctrl_close() -> DtactSignalStream {
+        DtactSignalStream(CtrlWrapper::Close(
+            tokio::signal::windows::ctrl_close()
+                .expect("dtact-signal: failed to register Ctrl+Close handler"),
+        ))
+    }
+
+    /// Register a listener for the user-logoff (`CTRL_LOGOFF_EVENT`)
+    /// event. Not delivered to services — see `tokio::signal::windows`'s
+    /// documentation of the same restriction.
+    ///
+    /// # Panics
+    /// Panics if the OS refuses to install the console-control handler.
+    #[must_use]
+    pub fn ctrl_logoff() -> DtactSignalStream {
+        DtactSignalStream(CtrlWrapper::Logoff(
+            tokio::signal::windows::ctrl_logoff()
+                .expect("dtact-signal: failed to register Ctrl+Logoff handler"),
+        ))
+    }
+
+    /// Register a listener for the system-shutdown
+    /// (`CTRL_SHUTDOWN_EVENT`) event.
+    ///
+    /// # Panics
+    /// Panics if the OS refuses to install the console-control handler.
+    #[must_use]
+    pub fn ctrl_shutdown() -> DtactSignalStream {
+        DtactSignalStream(CtrlWrapper::Shutdown(
+            tokio::signal::windows::ctrl_shutdown()
+                .expect("dtact-signal: failed to register Ctrl+Shutdown handler"),
         ))
     }
 }

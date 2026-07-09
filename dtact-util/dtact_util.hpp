@@ -12,8 +12,6 @@
 #include <ostream>
 #include <new>
 
-namespace dtact_util {
-
 /*
  Stdio bitmask flag: route the child's stderr through a pipe.
  */
@@ -44,6 +42,33 @@ constexpr static const size_t MAX_LISTENERS = 16;
  are synchronous since they're fast, non-blocking syscalls.
  */
 struct DtactChild;
+
+/*
+ One end of a child process's stderr pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stderr` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+struct DtactChildStderr;
+
+/*
+ One end of a child process's stdin pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stdin` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+struct DtactChildStdin;
+
+/*
+ One end of a child process's stdout pipe.
+
+ Exclusively owned by whoever holds it (returned by `take_stdout` on
+ `DtactChild`) — each async op temporarily moves the handle into a pool
+ closure and gets it back in the result, never shared behind a lock.
+ */
+struct DtactChildStdout;
 
 /*
  An open file whose reads/writes are dispatched as real overlapped IOCP
@@ -100,9 +125,14 @@ struct DtactSignalStream;
 struct DtactSignalStream;
 
 /*
- A stream of occurrences of one Windows console-control event
- (`Ctrl+C` or `Ctrl+Break`), backed by tokio's console-handler
- reactor integration instead of dtact-signal's own registry.
+ A stream of occurrences of one Windows console-control event.
+
+ Covers `Ctrl+C`, `Ctrl+Break`, window-close, logoff, and shutdown,
+ backed by tokio's console-handler reactor integration instead of
+ dtact-signal's own registry. Mirrors the native backend's
+ `DtactSignalStream` — same five events, see its module doc for
+ what each one means and the grace-period caveat that applies to
+ the latter three.
  */
 struct DtactSignalStream;
 
@@ -633,6 +663,36 @@ ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
  DtactSignalStream *dtact_util_signal_ctrl_c() ;
 
 /*
+ Register a listener for console-window-close (`CTRL_CLOSE_EVENT`),
+ returning an owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ DtactSignalStream *dtact_util_signal_ctrl_close() ;
+
+/*
+ Register a listener for user-logoff (`CTRL_LOGOFF_EVENT`), returning an
+ owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ DtactSignalStream *dtact_util_signal_ctrl_logoff() ;
+
+/*
+ Register a listener for system-shutdown (`CTRL_SHUTDOWN_EVENT`),
+ returning an owning handle. Free with [`dtact_util_signal_free`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
+ */
+ DtactSignalStream *dtact_util_signal_ctrl_shutdown() ;
+
+/*
  Free a signal listener handle. Passing null is a no-op.
 
  # Safety
@@ -749,7 +809,5 @@ ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
  void dtact_util_timer_sleep_ms(uint64_t aMillis) ;
 
 }  // extern "C"
-
-}  // namespace dtact_util
 
 #endif  // DTACT_UTIL_H

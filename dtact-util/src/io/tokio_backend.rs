@@ -263,10 +263,6 @@ impl Future for DtactIoFuture {
     type Output = std::io::Result<usize>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Always enter the tokio runtime context so AsyncFd can register
-        // with the reactor even when polled from a dtact fiber.
-        let _guard = runtime_handle().enter();
-
         // SAFETY: DtactIoFuture is !Unpin only through PhantomPinned; the
         // fields we mutate here (async_fd) are not structurally pinned.
         let this = unsafe { self.get_unchecked_mut() };
@@ -282,12 +278,26 @@ impl Future for DtactIoFuture {
         let addr_len = this.addr_len;
 
         // ── Phase 1: first attempt, no registration yet ─────────────────
+        //
+        // Entering the runtime context here used to wrap the *entire*
+        // poll, including this phase's syscall attempt — which never
+        // touches tokio at all (`try_syscall` is a raw `libc` call) and,
+        // for any op that completes without blocking, was the only work
+        // this poll did. `AsyncFd::new` (below) does need an active
+        // `Handle` (it calls `Handle::current()` internally to register
+        // with the reactor), so entry is still required there — just
+        // scoped to the one call that needs it instead of every poll,
+        // including the common no-reactor-needed fast path.
         if this.async_fd.is_none() {
             match Self::try_syscall(fd, op, buf_ptr, len, addr_ptr, addr_len) {
                 Ok(n) => return Poll::Ready(Ok(n)),
                 Err(ref e) if Self::is_blocking_error(e) => {
                     // Register with the tokio reactor.
-                    match tokio::io::unix::AsyncFd::new(fd) {
+                    let afd = {
+                        let _guard = runtime_handle().enter();
+                        tokio::io::unix::AsyncFd::new(fd)
+                    };
+                    match afd {
                         Ok(afd) => this.async_fd = Some(afd),
                         Err(e) => return Poll::Ready(Err(e)),
                     }
@@ -295,6 +305,15 @@ impl Future for DtactIoFuture {
                 Err(e) => return Poll::Ready(Err(e)),
             }
         }
+
+        // ── Phase 2 doesn't re-enter the runtime ─────────────────────────
+        // `AsyncFd` captured its own driver `Handle` at registration time
+        // above (`poll_read_ready`/`poll_write_ready` read that stored
+        // handle, not `Handle::current()`), so no thread-local runtime
+        // context is needed here — verified against `future_test.rs`'s
+        // `test_io_future_complex`, which drives this future from a
+        // from-scratch executor that never itself enters the tokio
+        // runtime, only relying on whatever this `poll` does internally.
 
         // ── Phase 2: wait for reactor readiness then retry ───────────────
         let is_read_op = matches!(op, OpCode::Read | OpCode::Accept);
