@@ -115,14 +115,15 @@ enum Slot {
 
 fn acquire_slot() -> Slot {
     let pool = slot_pool();
-    if let Some(idx) = pool.free.pop() {
-        pool.slots[idx as usize]
-            .result
-            .store(PENDING, Ordering::Relaxed);
-        Slot::Pooled(idx)
-    } else {
-        Slot::Heap(Box::new(OpState::fresh()))
-    }
+    pool.free.pop().map_or_else(
+        || Slot::Heap(Box::new(OpState::fresh())),
+        |idx| {
+            pool.slots[idx as usize]
+                .result
+                .store(PENDING, Ordering::Relaxed);
+            Slot::Pooled(idx)
+        },
+    )
 }
 
 /// Wraps a raw `squeue::Entry` so it can cross the pending-submit queue to
@@ -159,12 +160,13 @@ fn ring() -> &'static Ring {
     })
 }
 
-/// Configure and eagerly start the fs-io_uring subsystem: `ring_depth`
-/// sized preallocated op slots (see module doc) plus the submit-queue
-/// worker thread. `workers`/`buffer_pool_size`/`chunk_size`/`pin_cpus`
-/// mirror `crate::io::native::init_runtime`'s signature for consistency
-/// across this crate's native backends but are unused here today:
-/// submission is single-worker-thread by design, and there's no
+/// Configure and eagerly start the fs-io_uring subsystem.
+///
+/// Preallocates `ring_depth` op slots (see module doc) and starts the
+/// submit-queue worker thread. `workers`/`buffer_pool_size`/`chunk_size`/
+/// `pin_cpus` mirror `crate::io::native::init_runtime`'s signature for
+/// consistency across this crate's native backends but are unused here
+/// today: submission is single-worker-thread by design, and there's no
 /// `IORING_REGISTER_BUFFERS`-backed buffer pool yet (see the module doc's
 /// "zero-copy" note).
 pub fn init_fs(
@@ -300,6 +302,68 @@ impl Drop for IoOp {
     }
 }
 
+/// Direct positional read on the calling thread.
+///
+/// Regular files served from the page cache complete a `pread(2)`
+/// immediately without ever blocking, so issuing the syscall inline avoids
+/// the entire cross-thread ring round-trip — `MpmcStack` push, worker
+/// unpark, `submit_and_wait`, and the wake back — that otherwise dominates
+/// small/medium file-op latency (a single `dtact-fs-uring` worker also
+/// serializes every op, which the direct path sidesteps). Returns `None`
+/// only if the syscall would block (`EAGAIN`, possible only for a
+/// non-regular fd such as a pipe), signalling the caller to fall back to
+/// the ring; `EINTR` is retried transparently.
+#[inline]
+fn try_pread(fd: i32, buf: &mut [u8], offset: u64) -> Option<io::Result<usize>> {
+    loop {
+        let n = unsafe {
+            libc::pread(
+                fd,
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                offset as libc::off_t,
+            )
+        };
+        if n >= 0 {
+            return Some(Ok(n as usize));
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            // Interrupted before any transfer — retry the syscall.
+            Some(libc::EINTR) => {}
+            Some(libc::EAGAIN) => return None,
+            _ => return Some(Err(err)),
+        }
+    }
+}
+
+/// Direct positional write on the calling thread — the write-side twin of
+/// [`try_pread`]; see its doc for the rationale. Returns `None` on `EAGAIN`
+/// to fall back to the ring.
+#[inline]
+fn try_pwrite(fd: i32, buf: &[u8], offset: u64) -> Option<io::Result<usize>> {
+    loop {
+        let n = unsafe {
+            libc::pwrite(
+                fd,
+                buf.as_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                offset as libc::off_t,
+            )
+        };
+        if n >= 0 {
+            return Some(Ok(n as usize));
+        }
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            // Interrupted before any transfer — retry the syscall.
+            Some(libc::EINTR) => {}
+            Some(libc::EAGAIN) => return None,
+            _ => return Some(Err(err)),
+        }
+    }
+}
+
 fn decode(res: i64) -> io::Result<i32> {
     if res < 0 {
         Err(io::Error::from_raw_os_error(-res as i32))
@@ -343,6 +407,12 @@ async fn open_impl(path: &Path, flags: i32, mode: u32) -> io::Result<DtactFile> 
 
 impl DtactFile {
     /// Open an existing file for reading via a ring-submitted `Openat`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Openat` completion
+    /// reports one — most commonly `NotFound` if `path` doesn't exist, or
+    /// `PermissionDenied` if it exists but isn't readable.
     pub async fn open(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         open_impl(&path, libc::O_RDONLY, 0).await
@@ -350,6 +420,12 @@ impl DtactFile {
 
     /// Create (truncating if it already exists) a file for reading and
     /// writing via a ring-submitted `Openat`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Openat` completion
+    /// reports one, e.g. `PermissionDenied` if the containing directory
+    /// isn't writable.
     pub async fn create(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
         open_impl(&path, libc::O_RDWR | libc::O_CREAT | libc::O_TRUNC, 0o644).await
@@ -358,6 +434,12 @@ impl DtactFile {
     /// Generic open honoring an arbitrary [`std::fs::OpenOptions`]. See
     /// the doc comment inline below for why this falls back to a
     /// synchronous `open()` rather than a pure-uring one.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever `std::fs::OpenOptions::open` returns for `path`
+    /// with `opts` applied (e.g. `NotFound`, `PermissionDenied`,
+    /// `AlreadyExists` depending on which `OpenOptions` flags are set).
     pub async fn open_with(
         path: impl Into<PathBuf>,
         opts: std::fs::OpenOptions,
@@ -382,8 +464,20 @@ impl DtactFile {
     /// Read at the file's shared cursor, advancing it by the number of
     /// bytes actually read. `buf` is handed back (resized to what was
     /// filled) so the caller can reuse its allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Read` completion reports
+    /// one; a short read (including `0` at EOF) is a normal `Ok`, not an
+    /// error.
     pub async fn read(&self, mut buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
+        // Fast path: direct pread on the calling thread (see `try_pread`).
+        if let Some(res) = try_pread(self.fd, &mut buf, offset) {
+            let n = res?;
+            self.cursor.fetch_add(n as i64, Ordering::Relaxed);
+            return Ok((n, buf));
+        }
         let entry = opcode::Read::new(types::Fd(self.fd), buf.as_mut_ptr(), buf.len() as u32)
             .offset(offset)
             .build();
@@ -395,8 +489,19 @@ impl DtactFile {
     /// Write at the file's shared cursor, advancing it by the number of
     /// bytes actually written. `buf` is handed back so the caller can
     /// reuse its allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Write` completion
+    /// reports one (e.g. disk full, or the fd was closed concurrently).
     pub async fn write(&self, buf: Vec<u8>) -> io::Result<(usize, Vec<u8>)> {
         let offset = self.cursor.load(Ordering::Relaxed) as u64;
+        // Fast path: direct pwrite on the calling thread (see `try_pwrite`).
+        if let Some(res) = try_pwrite(self.fd, &buf, offset) {
+            let n = res?;
+            self.cursor.fetch_add(n as i64, Ordering::Relaxed);
+            return Ok((n, buf));
+        }
         let entry = opcode::Write::new(types::Fd(self.fd), buf.as_ptr(), buf.len() as u32)
             .offset(offset)
             .build();
@@ -408,7 +513,16 @@ impl DtactFile {
     /// Positional read: submits its own SQE with an explicit offset, so
     /// concurrent `read_at`/`write_at` calls on the same handle are safe
     /// (no shared cursor involved).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::read`].
     pub async fn read_at(&self, mut buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
+        // Fast path: direct pread on the calling thread (see `try_pread`).
+        if let Some(res) = try_pread(self.fd, &mut buf, offset) {
+            let n = res?;
+            return Ok((n, buf));
+        }
         let entry = opcode::Read::new(types::Fd(self.fd), buf.as_mut_ptr(), buf.len() as u32)
             .offset(offset)
             .build();
@@ -418,7 +532,16 @@ impl DtactFile {
 
     /// Positional write: submits its own SQE with an explicit offset, so
     /// concurrent `read_at`/`write_at` calls on the same handle are safe.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::write`].
     pub async fn write_at(&self, buf: Vec<u8>, offset: u64) -> io::Result<(usize, Vec<u8>)> {
+        // Fast path: direct pwrite on the calling thread (see `try_pwrite`).
+        if let Some(res) = try_pwrite(self.fd, &buf, offset) {
+            let n = res?;
+            return Ok((n, buf));
+        }
         let entry = opcode::Write::new(types::Fd(self.fd), buf.as_ptr(), buf.len() as u32)
             .offset(offset)
             .build();
@@ -427,6 +550,11 @@ impl DtactFile {
     }
 
     /// Flush all buffered writes to disk via a ring-submitted `Fsync`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Fsync` completion
+    /// reports one (e.g. the underlying device was removed).
     pub async fn sync_all(&self) -> io::Result<()> {
         let entry = opcode::Fsync::new(types::Fd(self.fd)).build();
         submit(entry).await?;
@@ -434,6 +562,11 @@ impl DtactFile {
     }
 
     /// File metadata (size, timestamps, permissions, ...).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `fstat` fails (e.g. the
+    /// fd was closed concurrently).
     pub async fn metadata(&self) -> io::Result<std::fs::Metadata> {
         // `Statx` needs a scratch `statx` buffer plus a conversion to
         // `std::fs::Metadata`, which has no public constructor from raw
@@ -451,6 +584,11 @@ impl DtactFile {
 
     /// Explicitly close this file via a ring-submitted `Close`, rather
     /// than waiting for `Drop` (which closes synchronously instead).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `Close` completion
+    /// reports one.
     pub async fn close(self) -> io::Result<()> {
         let entry = opcode::Close::new(types::Fd(self.fd)).build();
         submit(entry).await?;
@@ -470,6 +608,11 @@ impl Drop for DtactFile {
 /// Metadata for the file/directory at `path`. Delegates to
 /// `std::fs::metadata` (a single synchronous syscall — not worth
 /// dispatching through the ring).
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::metadata` returns, e.g. `NotFound` if
+/// `path` doesn't exist.
 pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata> {
     let path = path.into();
     std::fs::metadata(&path)
@@ -477,6 +620,12 @@ pub async fn metadata(path: impl Into<PathBuf>) -> io::Result<std::fs::Metadata>
 
 /// List the entries of directory `path`. Delegates to
 /// `std::fs::read_dir`, eagerly collecting all entries.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::read_dir` returns for opening the
+/// directory, or whatever the first failing entry's `io::Result` returns
+/// while collecting.
 pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<std::fs::DirEntry>> {
     let path: PathBuf = path.into();
     std::fs::read_dir(&path)?.collect()
@@ -484,12 +633,21 @@ pub async fn read_dir(path: impl Into<PathBuf>) -> io::Result<Vec<std::fs::DirEn
 
 /// Recursively create `path` and any missing parent directories.
 /// Delegates to `std::fs::create_dir_all`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::create_dir_all` returns, e.g.
+/// `PermissionDenied`.
 pub async fn create_dir_all(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     std::fs::create_dir_all(&path)
 }
 
 /// Remove the file at `path`. Delegates to `std::fs::remove_file`.
+///
+/// # Errors
+///
+/// Returns whatever `std::fs::remove_file` returns, e.g. `NotFound`.
 pub async fn remove_file(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     std::fs::remove_file(&path)

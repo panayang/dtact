@@ -34,10 +34,10 @@ fn runtime_handle() -> tokio::runtime::Handle {
 /// (e.g. the OS refuses to spawn its worker threads).
 pub fn init_runtime(
     workers: usize,
+    _ring_depth: u32,
     _buffer_pool_size: usize,
     _chunk_size: usize,
     _pin_cpus: &[usize],
-    _ring_depth: u32,
 ) {
     TOKIO_RUNTIME.get_or_init(|| {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -54,7 +54,7 @@ pub fn init_runtime(
 ///
 /// Equivalent to `init_runtime(workers, 0, 0, &[], 0)`.
 pub fn init(workers: usize) {
-    init_runtime(workers, 0, 0, &[], 0);
+    init_runtime(workers, 0, 0, 0, &[]);
 }
 
 /// Gracefully shut down the Tokio runtime, waiting for all spawned
@@ -105,12 +105,17 @@ impl<F: Future> Future for TokioFutureWrapper<F> {
 // types). `DtactTcpStream`/`DtactTcpListener` below already ride on top of
 // `tokio::net`, so they work cross-platform without this type; only the
 // low-level `DtactIoFuture`/`OpCode` API is unavailable on Windows for now.
+/// Which async operation a [`DtactIoFuture`] represents.
 #[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OpCode {
+    /// A socket read.
     Read,
+    /// A socket write.
     Write,
+    /// Accept a new connection on a listening socket.
     Accept,
+    /// Connect to a remote address.
     Connect,
 }
 
@@ -126,15 +131,28 @@ pub enum OpCode {
 /// compatibility only and are ignored by this backend.
 #[cfg(unix)]
 pub struct DtactIoFuture {
+    /// Ignored by this backend — present for API compatibility with the
+    /// native backend's field of the same name.
     pub worker_idx: usize,
+    /// The raw fd this op operates on.
     pub fd: u32,
+    /// Ignored by this backend — present for API compatibility with the
+    /// native backend's field of the same name.
     pub direct_fd_idx: u32,
+    /// Which op this future performs.
     pub op: OpCode,
+    /// Read/Write only: pointer to the caller-supplied buffer.
     pub buf_ptr: *mut u8,
+    /// Read/Write only: length of the buffer at `buf_ptr`.
     pub len: usize,
+    /// Unused by this backend (no positional read/write here); always `0`.
     pub offset: i64,
+    /// Connect only: the remote address to connect to.
     pub addr: Option<libc::sockaddr_storage>,
+    /// Connect only: byte length of the valid prefix of `addr`.
     pub addr_len: libc::socklen_t,
+    /// Ignored by this backend — present for API compatibility with the
+    /// native backend's field of the same name.
     pub slot_idx: Option<usize>,
     // Internal: lazily created on the first WouldBlock.
     async_fd: Option<tokio::io::unix::AsyncFd<std::os::unix::io::RawFd>>,
@@ -147,8 +165,10 @@ unsafe impl Sync for DtactIoFuture {}
 
 #[cfg(unix)]
 impl DtactIoFuture {
+    /// Build a not-yet-submitted future for the given op. The underlying
+    /// syscall is attempted lazily on first [`Future::poll`], not here.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub const fn new(
         worker_idx: usize,
         fd: u32,
         direct_fd_idx: u32,
@@ -187,8 +207,8 @@ impl DtactIoFuture {
         addr_len: libc::socklen_t,
     ) -> std::io::Result<usize> {
         let r = match op {
-            OpCode::Read => unsafe { libc::read(fd, buf_ptr as *mut libc::c_void, len) },
-            OpCode::Write => unsafe { libc::write(fd, buf_ptr as *const libc::c_void, len) },
+            OpCode::Read => unsafe { libc::read(fd, buf_ptr.cast::<libc::c_void>(), len) },
+            OpCode::Write => unsafe { libc::write(fd, buf_ptr.cast::<libc::c_void>(), len) },
             OpCode::Accept => unsafe {
                 libc::accept(fd, std::ptr::null_mut(), std::ptr::null_mut()) as isize
             },
@@ -201,15 +221,15 @@ impl DtactIoFuture {
                         fd,
                         libc::SOL_SOCKET,
                         libc::SO_ERROR,
-                        &mut err as *mut libc::c_int as *mut libc::c_void,
-                        &mut err_len,
+                        (&raw mut err).cast::<libc::c_void>(),
+                        &raw mut err_len,
                     )
                 };
                 if r == 0 && err != 0 {
                     return Err(std::io::Error::from_raw_os_error(err));
                 }
 
-                let r = unsafe { libc::connect(fd, addr as *const libc::sockaddr, addr_len) };
+                let r = unsafe { libc::connect(fd, addr.cast::<libc::sockaddr>(), addr_len) };
                 if r < 0 {
                     let e = std::io::Error::last_os_error();
                     let os_err = e.raw_os_error();
@@ -258,7 +278,7 @@ impl Future for DtactIoFuture {
         let addr_ptr: *const libc::sockaddr_storage = this
             .addr
             .as_ref()
-            .map_or(std::ptr::null(), |a| a as *const _);
+            .map_or(std::ptr::null(), std::ptr::from_ref);
         let addr_len = this.addr_len;
 
         // ── Phase 1: first attempt, no registration yet ─────────────────

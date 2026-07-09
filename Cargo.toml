@@ -3,7 +3,7 @@ members = ["dtact-util", "dtact-macros", "fuzz", "web"]
 
 [package]
 name = "dtact"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
@@ -40,7 +40,7 @@ proptest = "1.6"
 criterion = { version = "0.8", features = ["async_tokio"] }
 tokio = { version = "1.52", features = ["full"] }
 serial_test = "3.0"
-dtact-util = { path = "./dtact-util", version = "0.1" }
+dtact-util = { path = "./dtact-util", version = "0.2" }
 
 [build-dependencies]
 cbindgen = "0.29"

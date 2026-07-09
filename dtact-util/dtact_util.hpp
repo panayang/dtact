@@ -53,7 +53,7 @@ struct DtactFile;
 
 #if defined(DTACT_LINUX)
 /*
- An open file whose ops are submitted as real io_uring SQEs.
+ An open file whose ops are submitted as real `io_uring` SQEs.
  */
 struct DtactFile;
 #endif
@@ -90,10 +90,12 @@ struct DtactSignalStream;
 struct DtactSignalStream;
 
 /*
- A stream of occurrences of one Unix signal, backed by tokio's
- signal-fd/self-pipe reactor integration instead of dtact-signal's
- own registry. Unlike the native backend, each instance owns its own
- OS-level registration rather than sharing a broadcast registry.
+ A stream of occurrences of one Unix signal.
+
+ Backed by tokio's signal-fd/self-pipe reactor integration instead
+ of dtact-signal's own registry. Unlike the native backend, each
+ instance owns its own OS-level registration rather than sharing a
+ broadcast registry.
  */
 struct DtactSignalStream;
 
@@ -148,7 +150,7 @@ struct DtactTcpStream;
 struct DtactTcpStream;
 
 /*
- Async UDP socket driven by the native backend (io_uring `SendMsg`/`RecvMsg`
+ Async UDP socket driven by the native backend (`io_uring` `SendMsg`/`RecvMsg`
  on Linux, `sendmsg`/`recvmsg` via the mio/kqueue reactor elsewhere).
 
  Supports the connectionless (`send_to`/`recv_from`) and connected

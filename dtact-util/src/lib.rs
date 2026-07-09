@@ -63,6 +63,7 @@
 #![allow(
     unsafe_code,
     unused_unsafe,
+    clippy::unused_async,
     private_interfaces,
     clippy::restriction,
     clippy::inline_always,

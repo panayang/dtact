@@ -168,6 +168,12 @@ impl BufferSlice {
         }
     }
 
+    /// Raw pointer to this slice's backing chunk in the global buffer pool.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has initialized
+    /// the global buffer pool.
     #[inline]
     pub fn data(&self) -> *mut u8 {
         GLOBAL_BUFFER_POOL.get().unwrap().get_ptr(self.buf_idx)
@@ -218,67 +224,112 @@ pub enum OpCode {
     RecvFrom,
 }
 
-/// A single io-worker request, submitted across an [`SpscQueue`] from a
-/// fiber's poll to the worker thread that owns the underlying reactor
-/// (`io_uring` ring or mio `Poll`). Not constructed directly by callers —
-/// built internally from a [`DtactIoFuture`]'s fields on first poll.
+/// A single io-worker request, submitted across an [`SpscQueue`].
+///
+/// Sent from a fiber's poll to the worker thread that owns the underlying
+/// reactor (`io_uring` ring or mio `Poll`). Not constructed directly by
+/// callers — built internally from a [`DtactIoFuture`]'s fields on first
+/// poll.
+#[derive(Clone, Copy)]
 pub enum IoRequest {
     /// Read into `buf_ptr[..len]` at `offset` (or the current file
     /// position for sockets, where `offset` is ignored).
     Read {
+        /// The raw fd to read from.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
+        /// Destination buffer.
         buf_ptr: *mut u8,
+        /// Length of the buffer at `buf_ptr`.
         len: usize,
+        /// Positional read offset (ignored for plain socket reads).
         offset: i64,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Write `buf_ptr[..len]` at `offset`.
     Write {
+        /// The raw fd to write to.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
+        /// Source buffer.
         buf_ptr: *const u8,
+        /// Length of the buffer at `buf_ptr`.
         len: usize,
+        /// Positional write offset (ignored for plain socket writes).
         offset: i64,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Accept a new connection on listening socket `fd`.
     Accept {
+        /// The listening socket's raw fd.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Connect socket `fd` to `addr`.
     Connect {
+        /// The socket's raw fd.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
+        /// The remote address to connect to.
         addr: libc::sockaddr_storage,
+        /// Byte length of the valid prefix of `addr`.
         addr_len: libc::socklen_t,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Connectionless UDP send to an explicit peer.
     SendTo {
+        /// The UDP socket's raw fd.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
         /// Caller-owned `msghdr` (see `DtactUdpSocket::send_to`), valid until
         /// the op completes.
         msg_ptr: *mut libc::msghdr,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Connectionless UDP receive, recording the peer address.
     RecvFrom {
+        /// The UDP socket's raw fd.
         fd: u32,
+        /// `io_uring` direct/fixed-file index, or `u32::MAX` if `fd` isn't
+        /// registered as one.
         direct_fd_idx: u32,
         /// Caller-owned `msghdr` whose `msg_name` the kernel fills with the
         /// sender's address; valid until the op completes.
         msg_ptr: *mut libc::msghdr,
+        /// This op's slot in the owning worker's op-slot table.
         slot_idx: usize,
     },
     /// Register `fd` as an `io_uring` direct/fixed file, returning its
     /// direct-fd index as the op's result.
-    RegisterFile { fd: RawFd, slot_idx: usize },
+    RegisterFile {
+        /// The raw fd to register.
+        fd: RawFd,
+        /// This op's slot in the owning worker's op-slot table.
+        slot_idx: usize,
+    },
     /// Release a previously-registered direct/fixed file.
-    UnregisterFile { direct_fd_idx: u32, slot_idx: usize },
+    UnregisterFile {
+        /// The direct/fixed-file index to release.
+        direct_fd_idx: u32,
+        /// This op's slot in the owning worker's op-slot table.
+        slot_idx: usize,
+    },
 }
 
 /// Lock-free waker slot.
@@ -353,10 +404,12 @@ fn wake_next_waiting_fiber(state: &WorkerState) {
     }
 }
 
-/// Per-worker reactor state: the `io_uring` ring (Linux) or mio `Poll`
-/// (other Unix), its op-slot table, and the lock-free queues fibers use
-/// to submit/cancel requests. One of these exists per io-worker thread —
-/// see [`init_runtime`].
+/// Per-worker reactor state.
+///
+/// Holds the `io_uring` ring (Linux) or mio `Poll` (other Unix), its
+/// op-slot table, and the lock-free queues fibers use to submit/cancel
+/// requests. One of these exists per io-worker thread — see
+/// [`init_runtime`].
 pub struct WorkerState {
     #[cfg(target_os = "linux")]
     ring: std::cell::UnsafeCell<io_uring::IoUring>,
@@ -390,15 +443,31 @@ pub struct WorkerState {
     direct_fd_free: TreiberStack,
 }
 
+// SAFETY: `queues: Box<[SpscQueue<IoRequest>]>` holds `IoRequest`s
+// containing raw pointers (`buf_ptr`/`msg_ptr`/etc.), which aren't
+// automatically `Send`. Those pointers are always ownership-transferred,
+// never shared: a fiber pushes an `IoRequest` onto exactly one
+// `SpscQueue`, and only this `WorkerState`'s own single owning io-worker
+// thread ever pops from it (see the `cancel_queue` doc above for the one
+// deliberate MP exception, which doesn't carry raw buffer pointers). The
+// pointed-to buffers themselves are guaranteed to outlive the op by the
+// same contract every `DtactIoFuture` (also `unsafe impl Send`) already
+// relies on.
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for WorkerState {}
 unsafe impl Sync for WorkerState {}
 
+/// Runtime config consulted after startup. Only the two fields read on the
+/// steady-state path live here: `workers` (op fan-out across io-worker
+/// threads) and `pin_cpus` (per-worker core affinity). The
+/// `buffer_pool_size`/`chunk_size`/`ring_depth` knobs from
+/// [`init_runtime`] are consumed eagerly during startup to size the buffer
+/// pool, per-op slot tables, and ring depth — they are never read back
+/// afterwards, so they are deliberately not retained here (retaining them
+/// was dead state that tripped `dead_code`).
 struct GlobalConfig {
     workers: usize,
-    buffer_pool_size: usize,
-    chunk_size: usize,
     pin_cpus: Vec<usize>,
-    ring_depth: u32,
 }
 
 static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
@@ -463,19 +532,35 @@ fn pick_direct_fd_count(desired_max: usize) -> usize {
 // =========================================================================
 // 6. RUNTIME INITIALIZATION
 // =========================================================================
-/// Start the native io reactor: `workers` io-worker threads (`io_uring` on
-/// Linux, kqueue/mio elsewhere), a `buffer_pool_size`-chunk arena sliced
-/// into `chunk_size`-byte buffers, a `ring_depth`-deep in-flight-op slot
-/// table per worker, and optional `pin_cpus` core affinity (index `i`
-/// pins worker `i`; a shorter/empty slice leaves the rest unpinned).
+/// Start the native io reactor.
+///
+/// Spins up `workers` io-worker threads (`io_uring` on Linux, kqueue/mio
+/// elsewhere), a `buffer_pool_size`-chunk arena sliced into `chunk_size`-
+/// byte buffers, a `ring_depth`-deep in-flight-op slot table per worker,
+/// and optional `pin_cpus` core affinity (index `i` pins worker `i`; a
+/// shorter/empty slice leaves the rest unpinned).
 ///
 /// Idempotent: only the first call takes effect, later calls are no-ops
 /// (mirrors [`crate::fs::init_fs`]/[`crate::process::init_process`]).
+///
+/// # Panics
+///
+/// Panics if the OS refuses to create an `eventfd` (Linux) for the
+/// worker-wake mechanism, or if a worker thread fails to spawn — both are
+/// treated as fatal startup failures.
 ///
 /// Argument order — `(workers, ring_depth, buffer_pool_size, chunk_size,
 /// pin_cpus)` — matches every other native backend's five-knob init
 /// function in this crate; see the crate-level doc comment in `crate` for
 /// the full init-API shape this is part of.
+// One-time startup sequencing (config → buffer pool → per-worker ring/
+// slot-table/queue allocation → thread spawn) reads more clearly as one
+// linear function than split across several that would each need most of
+// the same local state threaded through as parameters; this is also
+// Linux-only io_uring setup code that's expensive to verify a refactor of
+// without a Linux box in the loop, so left as-is rather than restructured
+// speculatively.
+#[allow(clippy::too_many_lines)]
 pub fn init_runtime(
     workers: usize,
     ring_depth: u32,
@@ -485,10 +570,7 @@ pub fn init_runtime(
 ) {
     let config = GlobalConfig {
         workers,
-        buffer_pool_size,
-        chunk_size,
         pin_cpus: pin_cpus.to_vec(),
-        ring_depth,
     };
     if GLOBAL_CONFIG.set(config).is_err() {
         return;
@@ -565,17 +647,19 @@ pub fn init_runtime(
             let wake_eventfd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
             assert!(wake_eventfd >= 0, "Failed to create eventfd");
 
-            let (ring, sqpoll_enabled) = match io_uring::IoUring::builder()
+            let (ring, sqpoll_enabled) = io_uring::IoUring::builder()
                 .setup_sqpoll(2000)
                 .build(ring_depth)
-            {
-                Ok(r) => (r, true),
-                Err(_) => (
-                    io_uring::IoUring::new(ring_depth)
-                        .expect("Failed to initialize io_uring fallback"),
-                    false,
-                ),
-            };
+                .map_or_else(
+                    |_| {
+                        (
+                            io_uring::IoUring::new(ring_depth)
+                                .expect("Failed to initialize io_uring fallback"),
+                            false,
+                        )
+                    },
+                    |r| (r, true),
+                );
 
             let initial_fds = vec![-1; direct_fd_count];
             ring.submitter()
@@ -648,9 +732,10 @@ pub fn init_runtime(
     }
 }
 
-/// Shorthand initialiser — `workers` io-worker threads with sane defaults
-/// (64 MiB buffer pool split into 4 KiB chunks, no CPU pinning, a 1024-deep
-/// per-worker op-slot ring). Equivalent to
+/// Shorthand initialiser: `workers` io-worker threads with sane defaults.
+///
+/// 64 MiB buffer pool split into 4 KiB chunks, no CPU pinning, a 1024-deep
+/// per-worker op-slot ring. Equivalent to
 /// `init_runtime(workers, 1024, 65536, 4096, &[])`. Matches
 /// [`crate::fs::init`]/[`crate::process::init`]'s shape.
 pub fn init(workers: usize) {
@@ -681,6 +766,13 @@ pub fn shutdown_runtime() {
 // =========================================================================
 // 7. LINUX SYSTEM CALL DRIVER (io_uring)
 // =========================================================================
+// The per-completion dispatch (decode result → route to slot vs. cancel
+// vs. eventfd wake → wake the right waiter) is inherently one state
+// machine over one `for cqe in cq` loop; splitting it would just move the
+// same branches behind indirection without reducing real complexity, and
+// this is Linux-only io_uring code that's expensive to verify a refactor
+// of without a Linux box in the loop.
+#[allow(clippy::too_many_lines)]
 #[cfg(target_os = "linux")]
 fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
     if let Some(config) = GLOBAL_CONFIG.get()
@@ -718,7 +810,7 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
         for q in &state.queues {
             while let Some(req) = q.pop() {
                 pushed_sqe = true;
-                let _ = submit_linux_request(state, req);
+                let _ = submit_linux_request(state, &req);
             }
         }
 
@@ -823,6 +915,18 @@ fn run_linux_worker_loop(worker_idx: usize, state: &WorkerState) {
         }
 
         if !folded_wait && !pushed_sqe && !has_completions {
+            // A bounded busy-poll was tried here (spin on the completion
+            // ring/request queues before committing to a blocking
+            // `submit_and_wait`, on the theory that a dedicated io-worker
+            // thread can safely spin without blocking any fiber). Measured
+            // on real, non-idle hardware (background load from unrelated
+            // processes competing for the same cores) it was a severe net
+            // regression — UDP roundtrip latency went from ~20µs to
+            // 1-18ms, apparently because a spinning thread doesn't get
+            // scheduled contiguously under contention the way a blocking
+            // `submit_and_wait` (which yields immediately) does. Reverted;
+            // do not reintroduce without validating under real background
+            // load, not just an idle benchmark box.
             state.is_sleeping.store(true, Ordering::SeqCst);
             // Same Dekker-style re-check as the folded-wait path above:
             // `any_pending` was computed earlier in this iteration and may
@@ -861,18 +965,25 @@ unsafe fn push_sqe(
         let res = unsafe { ring.submission().push(sqe) };
         if res == Ok(()) {
             return Ok(());
-        } else {
-            let _ = ring.submit();
-            core::hint::spin_loop();
         }
+        let _ = ring.submit();
+        core::hint::spin_loop();
     }
 }
 
+// One match arm per `IoRequest` variant, each translating that op into an
+// `io_uring` SQE — naturally as many lines as there are variants times a
+// few lines of setup each; splitting per-variant into helper functions
+// (as `Connect` already does via `submit_connect`) is reasonable future
+// cleanup but not done wholesale here to keep this pass's diff focused on
+// UDP support plus the lint/Send fixes, on Linux-only code that's
+// expensive to verify a refactor of without a Linux box in the loop.
+#[allow(clippy::too_many_lines)]
 #[cfg(target_os = "linux")]
-fn submit_linux_request(state: &WorkerState, req: IoRequest) -> Result<(), &'static str> {
+fn submit_linux_request(state: &WorkerState, req: &IoRequest) -> Result<(), &'static str> {
     let ring = unsafe { &mut *state.ring.get() };
 
-    let sqe = match req {
+    let sqe = match *req {
         IoRequest::Read {
             fd,
             direct_fd_idx,
@@ -1493,8 +1604,9 @@ fn complete_mio_slot(state: &WorkerState, slot_idx: usize, res: i32) {
 // =========================================================================
 // 9. DtactIoFuture INTERFACE
 // =========================================================================
-/// A single in-flight async socket op (read/write/accept/connect),
-/// dispatched to the io-worker for `worker_idx` and polled to completion.
+/// A single in-flight async socket op (read/write/accept/connect).
+///
+/// Dispatched to the io-worker for `worker_idx` and polled to completion.
 /// Mirrors the Windows backend's `DtactIoFuture` field-for-field so
 /// higher-level types (`DtactTcpStream`/`DtactTcpListener`) don't need
 /// backend-specific code.
@@ -1649,6 +1761,12 @@ impl DtactIoFuture {
 impl Future for DtactIoFuture {
     type Output = std::io::Result<usize>;
 
+    // Covers every op's first-poll submission, in-flight re-poll, and
+    // op-slot-pool-exhausted/waiting-list fallback path in one state
+    // machine — the natural shape for a hand-written `Future::poll`, and
+    // Linux-only code that's expensive to verify a refactor of without a
+    // Linux box in the loop.
+    #[allow(clippy::too_many_lines)]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         #[cfg(target_os = "linux")]
         {
@@ -2003,6 +2121,17 @@ impl DtactTcpStream {
     /// `io_uring_register_files_update` directly under a per-worker mutex rather
     /// than going through the SPSC queue, which would require a spin-wait and
     /// could deadlock when called from within a dtact fiber.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking`/`set_nodelay` fails, or
+    /// if `io_uring`'s direct-file registration fails (e.g. the per-worker
+    /// direct-fd table is exhausted).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
     pub fn from_std(stream: std::net::TcpStream) -> std::io::Result<Self> {
         let fd = stream.as_raw_fd();
         stream.set_nonblocking(true)?;
@@ -2018,7 +2147,7 @@ impl DtactTcpStream {
         let worker_idx = fd as usize % num_workers;
         let state = &WORKERS.get().unwrap()[worker_idx];
 
-        let direct_fd_idx = register_fd_sync(state, fd)?;
+        let direct_fd_idx = register_fd_sync(state, fd);
 
         Ok(Self {
             inner: stream,
@@ -2029,6 +2158,11 @@ impl DtactTcpStream {
 
     /// Read into `buf`, returning `Ok(0)` immediately for an empty buffer
     /// without issuing a syscall.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `read(2)`/`io_uring` read
+    /// completion reports one; `Ok(0)` signals EOF, not an error.
     pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -2050,12 +2184,10 @@ impl DtactTcpStream {
                 buf.as_mut_ptr().cast::<libc::c_void>(),
                 buf.len(),
             );
-            if r > 0 {
-                Ok(r as usize)
-            } else if r == 0 {
-                Ok(0) // EOF
-            } else {
-                Err(std::io::Error::last_os_error())
+            match r.cmp(&0) {
+                std::cmp::Ordering::Greater => Ok(r as usize),
+                std::cmp::Ordering::Equal => Ok(0), // EOF
+                std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
             }
         };
 
@@ -2088,6 +2220,12 @@ impl DtactTcpStream {
 
     /// Write `buf`, returning `Ok(0)` immediately for an empty buffer
     /// without issuing a syscall.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `write(2)`/`io_uring`
+    /// write completion reports one (e.g. `BrokenPipe` if the peer closed
+    /// the connection).
     pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -2135,6 +2273,24 @@ impl DtactTcpStream {
 
     /// Create a new non-blocking socket and connect to `addr`, registering
     /// the result with the dtact-io driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if socket creation, `set_nonblocking`/
+    /// `set_nodelay`, the `connect(2)` syscall (or its `io_uring`
+    /// completion), or direct-file registration fails — e.g.
+    /// `ConnectionRefused` if nothing is listening at `addr`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
+    // Socket creation, connect submission (both io_uring's `Connect`
+    // opcode and the poll-based non-Linux fallback), and direct-file
+    // registration are all inherently part of one linear "create the
+    // connected stream" sequence; this is also Linux/Unix-only code that's
+    // expensive to verify a refactor of without a Linux box in the loop.
+    #[allow(clippy::too_many_lines)]
     pub async fn connect(addr: std::net::SocketAddr) -> std::io::Result<Self> {
         let domain = match addr {
             std::net::SocketAddr::V4(_) => libc::AF_INET,
@@ -2162,7 +2318,7 @@ impl DtactTcpStream {
 
         // register_fd_sync returns u32::MAX (raw-fd mode) — no queue, no spin,
         // no deadlock risk when called from within a dtact fiber.
-        let direct_fd_idx = register_fd_sync(state, fd)?;
+        let direct_fd_idx = register_fd_sync(state, fd);
 
         let (libc_addr, addr_len) = socket_addr_to_libc(addr);
 
@@ -2221,14 +2377,13 @@ impl DtactTcpStream {
                         direct_fd_idx,
                         worker_idx,
                     });
-                } else {
-                    let os_err = if err_code != 0 {
-                        err_code
-                    } else {
-                        libc::ECONNREFUSED
-                    };
-                    return Err(std::io::Error::from_raw_os_error(os_err));
                 }
+                let os_err = if err_code != 0 {
+                    err_code
+                } else {
+                    libc::ECONNREFUSED
+                };
+                return Err(std::io::Error::from_raw_os_error(os_err));
             } else if (pollfd.revents & (libc::POLLERR | libc::POLLHUP)) != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::ConnectionRefused,
@@ -2286,6 +2441,16 @@ impl DtactTcpListener {
     /// Register an existing non-blocking `TcpListener` with the dtact-io
     /// driver (see `DtactTcpStream::from_std` for the registration
     /// mechanics).
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if `set_nonblocking` fails or if
+    /// `io_uring`'s direct-file registration fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before [`init_runtime`]/[`init`] has been called
+    /// (`WORKERS` not yet initialized).
     pub fn from_std(listener: std::net::TcpListener) -> std::io::Result<Self> {
         let fd = listener.as_raw_fd();
         listener.set_nonblocking(true)?;
@@ -2294,7 +2459,7 @@ impl DtactTcpListener {
         let worker_idx = fd as usize % num_workers;
         let state = &WORKERS.get().unwrap()[worker_idx];
 
-        let direct_fd_idx = register_fd_sync(state, fd)?;
+        let direct_fd_idx = register_fd_sync(state, fd);
 
         Ok(Self {
             inner: listener,
@@ -2305,6 +2470,12 @@ impl DtactTcpListener {
 
     /// Accept a new connection, registering the accepted stream with the
     /// dtact-io driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `io::Error` if the underlying `accept(2)`/`io_uring`
+    /// accept completion reports one, or if registering the new stream
+    /// with the driver fails.
     pub async fn accept(&self) -> std::io::Result<(DtactTcpStream, std::net::SocketAddr)> {
         // One direct attempt before going async — see the comment in
         // `read()` above for why this is no longer a busy-spin loop. An
@@ -2422,7 +2593,7 @@ impl DtactUdpSocket {
         let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
         let worker_idx = fd as usize % num_workers;
         let state = &WORKERS.get().unwrap()[worker_idx];
-        let direct_fd_idx = register_fd_sync(state, fd)?;
+        let direct_fd_idx = register_fd_sync(state, fd);
         Ok(Self {
             inner: socket,
             direct_fd_idx,
@@ -2448,22 +2619,46 @@ impl DtactUdpSocket {
         buf: &[u8],
         target: std::net::SocketAddr,
     ) -> std::io::Result<usize> {
-        // These locals live in this async fn's frame (pinned across the await
-        // below), so the raw pointers in `msg` stay valid until the op
-        // completes.
-        let (mut storage, addr_len) = socket_addr_to_libc(target);
-        let mut iov = libc::iovec {
-            iov_base: buf.as_ptr().cast_mut().cast::<libc::c_void>(),
-            iov_len: buf.len(),
+        // `libc::iovec`/`libc::msghdr` embed a `*mut c_void`, which isn't
+        // `Send` by default — the compiler can't tell that the pointee is
+        // exclusively owned by this op and never touched concurrently, so
+        // without this wrapper the future this `async fn` desugars to
+        // wouldn't be `Send` (needed for a fiber's future to migrate
+        // between dtact's worker threads). `SendToState` bundles the
+        // locals that must stay put across the `.await` below (the kernel
+        // reads through raw pointers inside `msg` for as long as the op is
+        // in flight) so we can assert `Send` once, in one place, rather
+        // than have it fail opaquely at the whole future's boundary.
+        struct SendToState {
+            storage: libc::sockaddr_storage,
+            iov: libc::iovec,
+            msg: libc::msghdr,
+        }
+        // SAFETY: `storage`/`iov`/`msg` are exclusively owned by this
+        // future (part of its own generated state machine, stable once
+        // pinned); the raw pointers they contain point at `storage` and at
+        // the caller's `buf`, never at anything a second thread could
+        // concurrently touch — the same ownership-transfer-via-submission
+        // contract every other `IoRequest` variant already relies on (see
+        // `unsafe impl Send for DtactIoFuture`, above).
+        unsafe impl Send for SendToState {}
+
+        let (storage, addr_len) = socket_addr_to_libc(target);
+        let mut state = SendToState {
+            storage,
+            iov: libc::iovec {
+                iov_base: buf.as_ptr().cast_mut().cast::<libc::c_void>(),
+                iov_len: buf.len(),
+            },
+            msg: unsafe { std::mem::zeroed() },
         };
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_name = std::ptr::addr_of_mut!(storage).cast::<libc::c_void>();
-        msg.msg_namelen = addr_len;
-        msg.msg_iov = &raw mut iov;
-        msg.msg_iovlen = 1;
+        state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+        state.msg.msg_namelen = addr_len;
+        state.msg.msg_iov = &raw mut state.iov;
+        state.msg.msg_iovlen = 1;
 
         // One direct attempt before going async — see `DtactTcpStream::write`.
-        let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const msg, 0) };
+        let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const state.msg, 0) };
         if r >= 0 {
             return Ok(r as usize);
         }
@@ -2484,7 +2679,7 @@ impl DtactUdpSocket {
             0,
             None,
         );
-        fut.msg_ptr = &raw mut msg;
+        fut.msg_ptr = &raw mut state.msg;
         fut.await
     }
 
@@ -2497,20 +2692,34 @@ impl DtactUdpSocket {
         &self,
         buf: &mut [u8],
     ) -> std::io::Result<(usize, std::net::SocketAddr)> {
-        let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-        let mut iov = libc::iovec {
-            iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
-            iov_len: buf.len(),
-        };
-        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-        msg.msg_name = std::ptr::addr_of_mut!(storage).cast::<libc::c_void>();
-        msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        msg.msg_iov = &raw mut iov;
-        msg.msg_iovlen = 1;
+        // See `send_to`'s `SendToState` for why this wrapper (and its
+        // `unsafe impl Send`) exists.
+        struct RecvFromState {
+            storage: libc::sockaddr_storage,
+            iov: libc::iovec,
+            msg: libc::msghdr,
+        }
+        // SAFETY: same reasoning as `send_to`'s `SendToState` — exclusively
+        // owned by this future, pointers only ever point at its own
+        // fields/the caller's `buf`.
+        unsafe impl Send for RecvFromState {}
 
-        let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut msg, 0) };
+        let mut state = RecvFromState {
+            storage: unsafe { std::mem::zeroed() },
+            iov: libc::iovec {
+                iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
+                iov_len: buf.len(),
+            },
+            msg: unsafe { std::mem::zeroed() },
+        };
+        state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+        state.msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        state.msg.msg_iov = &raw mut state.iov;
+        state.msg.msg_iovlen = 1;
+
+        let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut state.msg, 0) };
         if r >= 0 {
-            let from = sockaddr_storage_to_socketaddr(&storage, msg.msg_namelen);
+            let from = sockaddr_storage_to_socketaddr(&state.storage, state.msg.msg_namelen);
             return Ok((r as usize, from));
         }
         let e = std::io::Error::last_os_error();
@@ -2530,9 +2739,9 @@ impl DtactUdpSocket {
             0,
             None,
         );
-        fut.msg_ptr = &raw mut msg;
+        fut.msg_ptr = &raw mut state.msg;
         let n = fut.await?;
-        let from = sockaddr_storage_to_socketaddr(&storage, msg.msg_namelen);
+        let from = sockaddr_storage_to_socketaddr(&state.storage, state.msg.msg_namelen);
         Ok((n, from))
     }
 
@@ -2650,8 +2859,8 @@ impl Drop for DtactUdpSocket {
 /// throughput gain; correctness takes priority.
 ///
 /// `u32::MAX` is the sentinel the io-path already uses for "raw fd" mode.
-const fn register_fd_sync(_state: &WorkerState, _fd: RawFd) -> std::io::Result<u32> {
-    Ok(u32::MAX)
+const fn register_fd_sync(_state: &WorkerState, _fd: RawFd) -> u32 {
+    u32::MAX
 }
 
 /// Nothing to release when we aren't using fixed files.

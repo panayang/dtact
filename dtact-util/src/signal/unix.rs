@@ -63,7 +63,7 @@ fn ensure_pipe_and_reader() {
     let mut fds = [0i32; 2];
     let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
     assert_eq!(rc, 0, "dtact-signal: pipe(2) failed");
-    let (read_fd, write_fd): (RawFd, RawFd) = (fds[0], fds[1]);
+    let (read_fd, write_fd): (RawFd, RawFd) = fds.into();
 
     // CAS so only one thread's pipe/reader actually gets installed even
     // if two registrations race to initialize.

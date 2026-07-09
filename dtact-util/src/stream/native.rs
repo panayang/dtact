@@ -215,7 +215,7 @@ impl futures_io::AsyncRead for DtactStream {
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        DtactStream::poll_read(&self, cx, buf)
+        Self::poll_read(&self, cx, buf)
     }
 }
 
@@ -226,7 +226,7 @@ impl futures_io::AsyncWrite for DtactStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        DtactStream::poll_write(&self, cx, buf)
+        Self::poll_write(&self, cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -246,7 +246,7 @@ impl tokio::io::AsyncRead for DtactStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         let unfilled = buf.initialize_unfilled();
-        match DtactStream::poll_read(&self, cx, unfilled) {
+        match Self::poll_read(&self, cx, unfilled) {
             Poll::Ready(Ok(n)) => {
                 buf.advance(n);
                 Poll::Ready(Ok(()))
@@ -264,7 +264,7 @@ impl tokio::io::AsyncWrite for DtactStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        DtactStream::poll_write(&self, cx, buf)
+        Self::poll_write(&self, cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {

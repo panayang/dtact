@@ -12,10 +12,12 @@ mod unix {
     use std::io;
     use tokio::signal::unix::{Signal, SignalKind, signal};
 
-    /// A stream of occurrences of one Unix signal, backed by tokio's
-    /// signal-fd/self-pipe reactor integration instead of dtact-signal's
-    /// own registry. Unlike the native backend, each instance owns its own
-    /// OS-level registration rather than sharing a broadcast registry.
+    /// A stream of occurrences of one Unix signal.
+    ///
+    /// Backed by tokio's signal-fd/self-pipe reactor integration instead
+    /// of dtact-signal's own registry. Unlike the native backend, each
+    /// instance owns its own OS-level registration rather than sharing a
+    /// broadcast registry.
     pub struct DtactSignalStream(Signal);
 
     impl DtactSignalStream {
@@ -37,6 +39,7 @@ mod unix {
     /// Panics if the OS refuses to install the signal handler (e.g. signal
     /// masking not available, or resource exhaustion registering the
     /// underlying self-pipe).
+    #[must_use]
     pub fn sigint() -> DtactSignalStream {
         make(SignalKind::interrupt()).expect("dtact-signal: failed to register SIGINT handler")
     }
@@ -44,6 +47,7 @@ mod unix {
     ///
     /// # Panics
     /// Panics if the OS refuses to install the signal handler.
+    #[must_use]
     pub fn sigterm() -> DtactSignalStream {
         make(SignalKind::terminate()).expect("dtact-signal: failed to register SIGTERM handler")
     }
@@ -51,6 +55,7 @@ mod unix {
     ///
     /// # Panics
     /// Panics if the OS refuses to install the signal handler.
+    #[must_use]
     pub fn sighup() -> DtactSignalStream {
         make(SignalKind::hangup()).expect("dtact-signal: failed to register SIGHUP handler")
     }
@@ -58,6 +63,7 @@ mod unix {
     ///
     /// # Panics
     /// Panics if the OS refuses to install the signal handler.
+    #[must_use]
     pub fn sigusr1() -> DtactSignalStream {
         make(SignalKind::user_defined1()).expect("dtact-signal: failed to register SIGUSR1 handler")
     }
@@ -65,6 +71,7 @@ mod unix {
     ///
     /// # Panics
     /// Panics if the OS refuses to install the signal handler.
+    #[must_use]
     pub fn sigusr2() -> DtactSignalStream {
         make(SignalKind::user_defined2()).expect("dtact-signal: failed to register SIGUSR2 handler")
     }
@@ -72,6 +79,7 @@ mod unix {
     ///
     /// # Panics
     /// Panics if the OS refuses to install the signal handler.
+    #[must_use]
     pub fn sigchld() -> DtactSignalStream {
         make(SignalKind::child()).expect("dtact-signal: failed to register SIGCHLD handler")
     }

@@ -1,6 +1,6 @@
 [package]
 name = "dtact-util"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 
 authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
@@ -129,5 +129,10 @@ required-features = ["native"]
 
 [[bench]]
 name = "udp_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "tcp_roundtrip"
 harness = false
 required-features = ["native"]

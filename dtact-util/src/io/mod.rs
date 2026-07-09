@@ -1,4 +1,4 @@
-//! I/O primitives: TCP listener/stream, native and `tokio`-backed.
+//! I/O primitives: TCP listener/stream, UDP socket, native and `tokio`-backed.
 //!
 //! The native backend is lock-free (`io_uring` on Linux, IOCP on Windows,
 //! kqueue via mio on macOS/BSD) plus a thin tokio-backed alternative.

@@ -6,12 +6,31 @@
 //! `DtactTcpListener` level instead.
 #![cfg(all(unix, not(feature = "native")))]
 
-use dtact_util::{DtactCompatExt, DtactIoFuture, OpCode, init_runtime, shutdown_runtime};
+use dtact_util::io::{DtactCompatExt, DtactIoFuture, OpCode, init_runtime, shutdown_runtime};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-#[dtact::dtact_init(workers = 4, capacity = 2048, safety = "Safety1")]
+// Minimal single-threaded blocking executor — this test exercises the
+// `tokio` backend's raw `DtactIoFuture`/`.compat()` in isolation and has
+// no need for `dtact`'s own fiber runtime (which isn't even linked in a
+// `--no-default-features --features tokio` build, per this file's own
+// `not(feature = "native")` gate above).
+fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let mut fut = pin!(fut);
+    loop {
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
 #[test]
 fn test_io_future_complex() {
     // Initialize dtact_io runtime
@@ -72,148 +91,152 @@ fn test_io_future_complex() {
     let server_finished_clone = server_finished.clone();
 
     // Spawn server fiber using DtactIoFuture and DtactCompatExt (.compat())
-    dtact::spawn(async move {
-        println!("Server Fiber: waiting for connection via DtactIoFuture...");
-        // Construct the Accept DtactIoFuture
-        let accept_fut = DtactIoFuture::new(
-            0,
-            listener_fd as u32,
-            u32::MAX,
-            OpCode::Accept,
-            std::ptr::null_mut(),
-            0,
-            0,
-            None,
-            0,
-            None,
-        );
+    std::thread::spawn(move || {
+        block_on(async move {
+            println!("Server Fiber: waiting for connection via DtactIoFuture...");
+            // Construct the Accept DtactIoFuture
+            let accept_fut = DtactIoFuture::new(
+                0,
+                listener_fd as u32,
+                u32::MAX,
+                OpCode::Accept,
+                std::ptr::null_mut(),
+                0,
+                0,
+                None,
+                0,
+                None,
+            );
 
-        // Wrap the future in DtactCompat and await it
-        let client_fd = accept_fut.compat().await.expect("Accept failed") as i32;
-        println!("Server Fiber: accepted connection with fd {}", client_fd);
+            // Wrap the future in DtactCompat and await it
+            let client_fd = accept_fut.compat().await.expect("Accept failed") as i32;
+            println!("Server Fiber: accepted connection with fd {}", client_fd);
 
-        // Read message from client using DtactIoFuture
-        let mut read_buf = [0u8; 64];
-        let read_fut = DtactIoFuture::new(
-            0,
-            client_fd as u32,
-            u32::MAX,
-            OpCode::Read,
-            read_buf.as_mut_ptr(),
-            read_buf.len(),
-            0,
-            None,
-            0,
-            None,
-        );
-        let n = read_fut.compat().await.expect("Read failed");
-        println!("Server Fiber: read {} bytes: {:?}", n, &read_buf[..n]);
-        assert_eq!(&read_buf[..n], b"hello from client future");
+            // Read message from client using DtactIoFuture
+            let mut read_buf = [0u8; 64];
+            let read_fut = DtactIoFuture::new(
+                0,
+                client_fd as u32,
+                u32::MAX,
+                OpCode::Read,
+                read_buf.as_mut_ptr(),
+                read_buf.len(),
+                0,
+                None,
+                0,
+                None,
+            );
+            let n = read_fut.compat().await.expect("Read failed");
+            println!("Server Fiber: read {} bytes: {:?}", n, &read_buf[..n]);
+            assert_eq!(&read_buf[..n], b"hello from client future");
 
-        // Write response back to client using DtactIoFuture
-        let resp = b"hello from server future";
-        let write_fut = DtactIoFuture::new(
-            0,
-            client_fd as u32,
-            u32::MAX,
-            OpCode::Write,
-            resp.as_ptr() as *mut u8,
-            resp.len(),
-            0,
-            None,
-            0,
-            None,
-        );
-        let w = write_fut.compat().await.expect("Write failed");
-        println!("Server Fiber: wrote {} bytes", w);
-        assert_eq!(w, resp.len());
+            // Write response back to client using DtactIoFuture
+            let resp = b"hello from server future";
+            let write_fut = DtactIoFuture::new(
+                0,
+                client_fd as u32,
+                u32::MAX,
+                OpCode::Write,
+                resp.as_ptr() as *mut u8,
+                resp.len(),
+                0,
+                None,
+                0,
+                None,
+            );
+            let w = write_fut.compat().await.expect("Write failed");
+            println!("Server Fiber: wrote {} bytes", w);
+            assert_eq!(w, resp.len());
 
-        // Close client fd
-        unsafe {
-            libc::close(client_fd);
-        }
+            // Close client fd
+            unsafe {
+                libc::close(client_fd);
+            }
 
-        server_finished_clone.store(1, Ordering::SeqCst);
+            server_finished_clone.store(1, Ordering::SeqCst);
+        })
     });
 
     let client_finished = Arc::new(AtomicU32::new(0));
     let client_finished_clone = client_finished.clone();
 
     // Spawn client fiber
-    dtact::spawn(async move {
-        println!("Client Fiber: connecting to {}...", local_addr);
-        // Create client raw socket
-        let client_fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-        assert!(client_fd >= 0);
-        // Set non-blocking
-        let flags = unsafe { libc::fcntl(client_fd, libc::F_GETFL, 0) };
-        unsafe {
-            libc::fcntl(client_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
+    std::thread::spawn(move || {
+        block_on(async move {
+            println!("Client Fiber: connecting to {}...", local_addr);
+            // Create client raw socket
+            let client_fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+            assert!(client_fd >= 0);
+            // Set non-blocking
+            let flags = unsafe { libc::fcntl(client_fd, libc::F_GETFL, 0) };
+            unsafe {
+                libc::fcntl(client_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
 
-        let (libc_addr, addr_len) = to_libc_addr(local_addr);
+            let (libc_addr, addr_len) = to_libc_addr(local_addr);
 
-        // Connect future
-        let connect_fut = DtactIoFuture::new(
-            0,
-            client_fd as u32,
-            u32::MAX,
-            OpCode::Connect,
-            std::ptr::null_mut(),
-            0,
-            0,
-            Some(libc_addr),
-            addr_len,
-            None,
-        );
-        connect_fut.compat().await.expect("Connect failed");
-        println!("Client Fiber: connected successfully with fd {}", client_fd);
+            // Connect future
+            let connect_fut = DtactIoFuture::new(
+                0,
+                client_fd as u32,
+                u32::MAX,
+                OpCode::Connect,
+                std::ptr::null_mut(),
+                0,
+                0,
+                Some(libc_addr),
+                addr_len,
+                None,
+            );
+            connect_fut.compat().await.expect("Connect failed");
+            println!("Client Fiber: connected successfully with fd {}", client_fd);
 
-        // Write message
-        let msg = b"hello from client future";
-        let write_fut = DtactIoFuture::new(
-            0,
-            client_fd as u32,
-            u32::MAX,
-            OpCode::Write,
-            msg.as_ptr() as *mut u8,
-            msg.len(),
-            0,
-            None,
-            0,
-            None,
-        );
-        let w = write_fut.compat().await.expect("Write failed");
-        assert_eq!(w, msg.len());
+            // Write message
+            let msg = b"hello from client future";
+            let write_fut = DtactIoFuture::new(
+                0,
+                client_fd as u32,
+                u32::MAX,
+                OpCode::Write,
+                msg.as_ptr() as *mut u8,
+                msg.len(),
+                0,
+                None,
+                0,
+                None,
+            );
+            let w = write_fut.compat().await.expect("Write failed");
+            assert_eq!(w, msg.len());
 
-        // Read response
-        let mut read_buf = [0u8; 64];
-        let read_fut = DtactIoFuture::new(
-            0,
-            client_fd as u32,
-            u32::MAX,
-            OpCode::Read,
-            read_buf.as_mut_ptr(),
-            read_buf.len(),
-            0,
-            None,
-            0,
-            None,
-        );
-        let n = read_fut.compat().await.expect("Read failed");
-        println!(
-            "Client Fiber: read response {} bytes: {:?}",
-            n,
-            &read_buf[..n]
-        );
-        assert_eq!(&read_buf[..n], b"hello from server future");
+            // Read response
+            let mut read_buf = [0u8; 64];
+            let read_fut = DtactIoFuture::new(
+                0,
+                client_fd as u32,
+                u32::MAX,
+                OpCode::Read,
+                read_buf.as_mut_ptr(),
+                read_buf.len(),
+                0,
+                None,
+                0,
+                None,
+            );
+            let n = read_fut.compat().await.expect("Read failed");
+            println!(
+                "Client Fiber: read response {} bytes: {:?}",
+                n,
+                &read_buf[..n]
+            );
+            assert_eq!(&read_buf[..n], b"hello from server future");
 
-        // Close client fd
-        unsafe {
-            libc::close(client_fd);
-        }
+            // Close client fd
+            unsafe {
+                libc::close(client_fd);
+            }
 
-        client_finished_clone.store(1, Ordering::SeqCst);
+            client_finished_clone.store(1, Ordering::SeqCst);
+        })
     });
 
     // Wait for completion

@@ -1,3 +1,9 @@
+//! Uses `dtact::spawn` directly (rather than this crate's own executor),
+//! so this whole file only makes sense — and only compiles, since `dtact`
+//! is an optional dependency gated the same way — under the `native`
+//! feature.
+#![cfg(feature = "native")]
+
 use dtact_util::io::{DtactTcpListener, DtactTcpStream, init_runtime};
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -162,6 +168,13 @@ fn test_io_connect_refused_when_nothing_listening() {
 /// Zero-length reads/writes must be handled as an immediate no-op success
 /// (matching `std`/`tokio` convention) rather than issuing a real syscall
 /// that could block or misbehave for a 0-byte transfer.
+///
+/// Calls `dtact_autostart()` directly (rather than a second
+/// `#[dtact::dtact_init(...)]`, which the macro only allows one of per
+/// module) to make sure dtact's own global runtime is initialized before
+/// `dtact::spawn` below, regardless of test execution order relative to
+/// `test_io_driver_tcp` (whose `#[dtact::dtact_init]` generates this
+/// function).
 #[test]
 fn test_io_zero_length_read_write() {
     dtact_autostart();

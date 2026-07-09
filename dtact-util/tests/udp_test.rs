@@ -90,7 +90,7 @@ mod tokio_tests {
 
     #[test]
     fn udp_send_recv_roundtrip() {
-        init_runtime(2, 0, 0, &[], 0);
+        init_runtime(2, 0, 0, 0, &[]);
         get_runtime_handle().block_on(async {
             let a = DtactUdpSocket::bind("127.0.0.1:0".parse().unwrap())
                 .await
@@ -111,7 +111,7 @@ mod tokio_tests {
 
     #[test]
     fn udp_connected_send_recv() {
-        init_runtime(2, 0, 0, &[], 0);
+        init_runtime(2, 0, 0, 0, &[]);
         get_runtime_handle().block_on(async {
             let a = DtactUdpSocket::bind("127.0.0.1:0".parse().unwrap())
                 .await
