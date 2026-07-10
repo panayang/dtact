@@ -55,3 +55,6 @@ report.tmp
 examples/c_dtact_util.exe
 examples/dtact_util.dll
 examples/c_dtact_util
+
+paper/ACM-Reference-Format.bst
+paper/acmart.cls
