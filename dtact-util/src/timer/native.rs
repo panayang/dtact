@@ -48,12 +48,14 @@ const TICK: Duration = Duration::from_millis(1);
 const PENDING: i32 = 0;
 const DONE: i32 = 1;
 
+#[repr(align(64))]
 struct SleepState {
     /// PENDING (0) or DONE (1) — see constants above.
     status: AtomicI32,
     waker: AtomicWakerSlot,
 }
 
+#[repr(align(64))]
 struct Node {
     state: Arc<SleepState>,
     /// Remaining full rotations before this node is eligible to fire.
@@ -64,6 +66,7 @@ struct Node {
     rounds: AtomicUsize,
 }
 
+#[repr(align(64))]
 struct Wheel {
     buckets: Box<[MpmcStack<Arc<Node>>]>,
     /// Absolute tick counter, advanced only by the single worker thread.

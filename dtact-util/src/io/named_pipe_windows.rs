@@ -56,6 +56,7 @@ const WAKE_KEY: usize = 0;
 const PIPE_KEY: usize = 1;
 const PENDING: i64 = i64::MIN;
 
+#[repr(align(64))]
 struct Port {
     handle: HANDLE,
 }
@@ -105,6 +106,7 @@ unsafe impl Send for OpState {}
 unsafe impl Sync for OpState {}
 
 #[allow(dead_code)]
+#[repr(align(64))]
 struct SlotPool {
     slots: Box<[OpState]>,
     free: TreiberStack,
@@ -198,16 +200,19 @@ fn worker_loop() {
     }
 }
 
+#[repr(align(64))]
 enum Slot {
     Pooled { shard_idx: usize, slot_idx: u32 },
     Heap(Box<OpState>),
 }
 
+#[repr(align(64))]
 struct Shard {
     slots: Box<[OpState]>,
     free: TreiberStack,
 }
 
+#[repr(align(64))]
 struct ShardedSlotPool {
     shards: Box<[Shard]>,
 }
@@ -275,6 +280,7 @@ fn acquire_slot() -> Slot {
     )
 }
 
+#[repr(align(64))]
 struct IoOp {
     slot: Slot,
 }
@@ -345,6 +351,7 @@ impl Drop for IoOp {
     }
 }
 
+#[repr(align(64))]
 enum IoOpResult {
     Ready(io::Result<usize>),
     Pending(IoOp),
@@ -456,6 +463,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// One named-pipe connection — the read/write half shared by
 /// [`DtactNamedPipeServer`] (after a client connects) and
 /// [`DtactNamedPipeClient`].
+#[repr(align(64))]
 pub struct DtactNamedPipeHandle {
     handle: HANDLE,
 }

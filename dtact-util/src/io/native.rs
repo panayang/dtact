@@ -30,6 +30,7 @@ use crate::lockfree::{BufferPool, SpscQueue, TreiberStack};
 // =========================================================================
 // 3. THREAD-LOCAL SLAB ALLOCATOR & RETURN PATH
 // =========================================================================
+#[repr(align(64))]
 struct LocalAllocator {
     thread_idx: usize,
     local_chunks: Vec<u32>,
@@ -154,6 +155,7 @@ pub fn free_buffer(idx: u32) {
 }
 
 #[doc(hidden)]
+#[repr(align(64))]
 pub struct BufferSlice {
     pub buf_idx: u32,
     pub read_pos: usize,

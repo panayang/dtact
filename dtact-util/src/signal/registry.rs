@@ -33,6 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 /// startup) without the registry needing dynamic growth.
 pub const MAX_LISTENERS: usize = 16;
 
+#[repr(align(64))]
 pub struct ListenerState {
     /// Count of deliveries observed but not yet consumed by `recv()`.
     /// Saturates rather than overflowing under a delivery storm — a
@@ -99,6 +100,7 @@ impl ListenerState {
     }
 }
 
+#[repr(align(64))]
 pub struct ListenerRegistry {
     slots: [AtomicPtr<ListenerState>; MAX_LISTENERS],
     len: AtomicUsize,

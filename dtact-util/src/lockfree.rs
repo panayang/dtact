@@ -275,6 +275,7 @@ const WAKING: usize = 0b10;
 /// does need to store, does so into an inline cell — no heap allocation on
 /// the `register`/`take_and_wake` path at all, unlike an `AtomicPtr<Waker>`
 /// swap-based design.
+#[repr(align(64))]
 pub struct AtomicWakerSlot {
     state: AtomicUsize,
     waker: std::cell::UnsafeCell<Option<Waker>>,
@@ -418,11 +419,13 @@ unsafe impl Sync for AtomicWakerSlot {}
 /// cross-thread handoff queue where ordering within a batch doesn't
 /// matter. See the module-level comment above for the intended use
 /// sites.
+#[repr(align(64))]
 pub struct MpmcStack<T> {
     head: AtomicPtr<Node<T>>,
     len: AtomicUsize,
 }
 
+#[repr(align(64))]
 struct Node<T> {
     value: T,
     next: *mut Self,
@@ -493,6 +496,7 @@ impl<T> MpmcStack<T> {
     /// stack empty. O(1) swap of the head pointer plus an O(n) linked-list
     /// walk to materialize the `Vec` — no CAS retries beyond the single
     /// head swap regardless of `n`.
+    #[inline]
     pub fn drain_all(&self) -> Vec<T> {
         let mut head = self.head.swap(ptr::null_mut(), Ordering::AcqRel);
         let mut out = Vec::new();
@@ -512,18 +516,21 @@ impl<T> MpmcStack<T> {
     /// Whether the stack currently has no elements. Racy under concurrent
     /// push/pop from other threads — a `true` result can be stale by the
     /// time the caller acts on it, same as any lock-free length check.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.head.load(Ordering::Relaxed).is_null()
     }
 
     /// Approximate current length. Racy under concurrent push/pop for the
     /// same reason as [`Self::is_empty`].
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
 
     /// Zero-allocation drainage directly into the existing consumer buffer
     #[allow(non_snake_case)]
+    #[inline]
     pub fn drain_into_vec_deque(&self, target: &mut VecDeque<T>) {
         // Collect from Treiber stack via atomic swap
         let mut current = self.head.swap(std::ptr::null_mut(), Ordering::Acquire);
@@ -684,6 +691,7 @@ impl<T> SpscQueue<T> {
     }
 
     /// Whether the queue currently has no elements.
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         let head = self.head.value.load(Ordering::Relaxed);
         let tail = self.tail.value.load(Ordering::Acquire);
@@ -692,6 +700,7 @@ impl<T> SpscQueue<T> {
 
     /// Whether the queue is currently at capacity (the next [`Self::push`]
     /// would be rejected).
+    #[inline(always)]
     pub fn is_full(&self) -> bool {
         let tail = self.tail.value.load(Ordering::Relaxed);
         let head = self.head.value.load(Ordering::Acquire);
@@ -699,7 +708,7 @@ impl<T> SpscQueue<T> {
     }
 
     /// Number of elements currently queued.
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         let head = self.head.value.load(Ordering::Relaxed);
         let tail = self.tail.value.load(Ordering::Acquire);
@@ -707,6 +716,7 @@ impl<T> SpscQueue<T> {
     }
 
     /// The fixed capacity this queue was constructed with.
+    #[inline(always)]
     pub const fn capacity(&self) -> usize {
         self.capacity
     }
@@ -724,6 +734,7 @@ impl<T: Copy> SpscQueue<T> {
     /// most two `copy_nonoverlapping` runs (the ring may wrap once) and a
     /// single `tail` store. Behaviour is otherwise identical — same
     /// capacity accounting, same `Release` publication of the new tail.
+    #[inline]
     pub fn push_slice(&self, src: &[T]) -> usize {
         let tail = self.tail.value.load(Ordering::Relaxed);
         let head = self.head.value.load(Ordering::Acquire);
@@ -758,6 +769,7 @@ impl<T: Copy> SpscQueue<T> {
     ///
     /// Bulk analogue of [`pop`](Self::pop); see [`push_slice`](Self::push_slice)
     /// for the rationale.
+    #[inline]
     pub fn pop_slice(&self, dst: &mut [T]) -> usize {
         let head = self.head.value.load(Ordering::Relaxed);
         let tail = self.tail.value.load(Ordering::Acquire);
@@ -811,6 +823,7 @@ impl<T> Drop for SpscQueue<T> {
 /// The generalization of the `PENDING`-sentinel-`AtomicI64` pattern used
 /// elsewhere in this crate, for results that aren't a plain integer. See
 /// the module doc above for the exactly-once `set` contract.
+#[repr(align(64))]
 pub struct OnceSlot<T> {
     ptr: AtomicPtr<T>,
     waker: AtomicWakerSlot,
@@ -978,6 +991,7 @@ impl<T> BoundedMpmcQueue<T> {
     ///
     /// # Errors
     /// Returns `value` back, unmodified, if the queue is at `capacity`.
+    #[inline]
     pub fn try_push(&self, value: T) -> Result<(), T> {
         let mut pos = self.enqueue_pos.load(Ordering::Relaxed);
         loop {
@@ -1016,6 +1030,7 @@ impl<T> BoundedMpmcQueue<T> {
 
     /// Pop the oldest pushed value, or `None` if the queue is currently
     /// empty. Never blocks.
+    #[inline]
     pub fn try_pop(&self) -> Option<T> {
         let mut pos = self.dequeue_pos.load(Ordering::Relaxed);
         loop {
@@ -1057,6 +1072,7 @@ impl<T> BoundedMpmcQueue<T> {
     /// [`Self::try_pop_until`] so a drain-everything caller can wait out
     /// an in-flight push rather than mistaking it for "queue empty".
     #[must_use]
+    #[inline(always)]
     pub fn enqueue_snapshot(&self) -> usize {
         self.enqueue_pos.load(Ordering::Acquire)
     }
@@ -1078,6 +1094,7 @@ impl<T> BoundedMpmcQueue<T> {
     /// Looping until `target` is reached closes that window: any slot
     /// below `target` was claimed *before* this call started, so it can
     /// only be transiently unpublished, never permanently absent.
+    #[inline(always)]
     pub fn drain_until(&self, target: usize, mut on_pop: impl FnMut(T)) {
         #[allow(clippy::cast_possible_wrap)]
         while (target.wrapping_sub(self.dequeue_pos.load(Ordering::Relaxed)) as isize) > 0 {
@@ -1091,6 +1108,7 @@ impl<T> BoundedMpmcQueue<T> {
     /// Approximate current length — racy under concurrent push/pop, same
     /// caveat as every other lock-free length check in this module.
     #[must_use]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         let enq = self.enqueue_pos.load(Ordering::Relaxed);
         let deq = self.dequeue_pos.load(Ordering::Relaxed);
@@ -1100,6 +1118,7 @@ impl<T> BoundedMpmcQueue<T> {
     /// Whether the queue currently has no elements. Racy, same caveat as
     /// [`Self::len`].
     #[must_use]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

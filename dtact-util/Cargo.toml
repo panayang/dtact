@@ -46,8 +46,8 @@ compat = ["dep:tokio", "dep:futures-io", "dep:libc"]
 
 # C FFI layer: a blocking/synchronous `extern "C"` surface over all six
 # native primitives (io/fs/process/signal/stream/timer), raw-pointer-handle
-# style. Off by default; implies `native` since it wraps the native backends.
-ffi = ["native"]
+# style. Off by default.
+ffi = []
 
 # Opt-in, Linux-only: before an idle `io` worker commits to a blocking
 # `submit_and_wait`, spin-poll its request queues for a short, adaptively

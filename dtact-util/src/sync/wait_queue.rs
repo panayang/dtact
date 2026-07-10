@@ -57,6 +57,7 @@ const READY_CAPACITY: usize = 256;
 
 /// One registration: a `Waker` plus its own tombstone flag. See the
 /// module doc's "why cancellable" section.
+#[repr(align(64))]
 struct Entry {
     valid: AtomicBool,
     waker: Waker,
@@ -100,6 +101,7 @@ impl WaitQueue {
     /// Register `waker` to be woken by a future [`Self::wake_one`]/
     /// [`Self::wake_all`]. Returns a token to hand back to
     /// [`Self::cancel`] if it turns out not to be needed after all.
+    #[inline(always)]
     pub fn register(&self, waker: &Waker) -> RegistrationToken {
         let entry = Arc::new(Entry {
             valid: AtomicBool::new(true),
@@ -118,6 +120,7 @@ impl WaitQueue {
     // and consuming it here (even though the body only borrows through
     // it) statically prevents a caller from accidentally reusing it.
     #[allow(clippy::unused_self, clippy::needless_pass_by_value)]
+    #[inline(always)]
     pub fn cancel(&self, token: RegistrationToken) {
         token.0.valid.store(false, Ordering::Release);
     }
@@ -127,6 +130,7 @@ impl WaitQueue {
     /// one waiter can make progress at a time (a lock/permit becoming
     /// available) — waking every waiter would just have all but one
     /// immediately re-block.
+    #[inline(always)]
     pub fn wake_one(&self) {
         // Unlike `wake_all`, this must stop at the first *valid* entry —
         // it can't keep draining up to an enqueue snapshot the way
@@ -158,6 +162,7 @@ impl WaitQueue {
     /// Wake and remove every registered waiter. Used where a state change
     /// is relevant to all waiters at once (a barrier releasing, a watch
     /// value changing, a broadcast send).
+    #[inline(always)]
     pub fn wake_all(&self) {
         if let Some(ready) = self.ready.get() {
             // Drain up to a snapshot of the enqueue side taken *now*,
@@ -195,6 +200,7 @@ impl WaitQueue {
     /// closes that gap: once there's contention, every producer joins
     /// the same queue.
     #[must_use]
+    #[inline(always)]
     pub fn has_waiters(&self) -> bool {
         self.ready.get().is_some_and(|r| !r.is_empty()) || !self.overflow.is_empty()
     }

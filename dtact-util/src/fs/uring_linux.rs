@@ -69,6 +69,7 @@ use io_uring::{IoUring, opcode, squeue, types};
 /// needed beyond checking the sign.
 const PENDING: i64 = i64::MIN;
 
+#[repr(align(64))]
 struct OpState {
     result: AtomicI64,
     waker: AtomicWakerSlot,
@@ -87,6 +88,7 @@ impl OpState {
 // Preallocated slot pool — see module doc for the reuse/leak-on-cancel policy.
 // =============================================================================
 
+#[repr(align(64))]
 struct SlotPool {
     slots: Box<[OpState]>,
     free: TreiberStack,
@@ -116,6 +118,7 @@ fn slot_pool() -> &'static SlotPool {
 /// Which allocation a given `IoOp`'s [`OpState`] lives in: a checked-out
 /// pool slot (common case, no allocation), or a one-off heap fallback if
 /// the pool was exhausted.
+#[repr(align(64))]
 enum Slot {
     Pooled(u32),
     Heap(Box<OpState>),
@@ -144,6 +147,7 @@ fn acquire_slot() -> Slot {
 struct SendEntry(squeue::Entry);
 unsafe impl Send for SendEntry {}
 
+#[repr(align(64))]
 struct Ring {
     /// Lock-free MPMC handoff (many task threads push, the single worker
     /// thread drains) — not a `Mutex<Vec<SendEntry>>`.

@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
+#[repr(align(64))]
 struct HalfPipe {
     queue: SpscQueue<u8>,
     read_waker: AtomicWakerSlot,

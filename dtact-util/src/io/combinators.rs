@@ -43,6 +43,7 @@ pub trait AsyncWrite {
 /// [`io::ErrorKind::WriteZero`] if `writer.write` ever reports `0`
 /// written bytes for a nonempty buffer (mirrors `std::io::copy`'s own
 /// handling of a "stuck" writer).
+#[inline]
 pub async fn copy<R: AsyncRead + Sync + ?Sized, W: AsyncWrite + Sync + ?Sized>(
     reader: &R,
     writer: &W,
@@ -114,6 +115,7 @@ impl<T: AsyncRead> BufReader<T> {
     ///
     /// # Errors
     /// Returns whatever the wrapped stream's `read` returns.
+    #[inline]
     pub async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if self.pos == self.filled {
             let n = self.inner.read(&mut self.buf).await?;
@@ -182,6 +184,7 @@ impl<T: AsyncWrite> BufWriter<T> {
     /// # Errors
     /// Returns whatever an internal [`Self::flush`] or the wrapped
     /// stream's `write` returns.
+    #[inline]
     pub async fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         if data.len() >= self.capacity {
             self.flush().await?;
@@ -201,6 +204,7 @@ impl<T: AsyncWrite> BufWriter<T> {
     /// Returns whatever the wrapped stream's `write` returns, or
     /// [`io::ErrorKind::WriteZero`] if it ever reports `0` written bytes
     /// for a nonempty buffer.
+    #[inline(always)]
     pub async fn flush(&mut self) -> io::Result<()> {
         let mut written = 0;
         while written < self.buf.len() {
