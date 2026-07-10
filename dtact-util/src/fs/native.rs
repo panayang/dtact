@@ -36,7 +36,6 @@ struct FsPool {
     sender: mpsc::Sender<Job>,
 }
 
-#[repr(align(64))]
 static FS_POOL: OnceLock<FsPool> = OnceLock::new();
 
 /// Start the fs thread pool with the given number of worker threads.
