@@ -47,15 +47,6 @@
 //! `IORING_OP_ASYNC_CANCEL` submitted for it and waiting on *that*
 //! completion first — not implemented here, same caveat as the Windows
 //! backend's module doc).
-//!
-//! "Zero-copy" here means what it means for `io_uring` in general: the
-//! kernel reads/writes directly into the caller-supplied `Vec<u8>`'s
-//! backing allocation with no intermediate buffer and no thread-pool hop,
-//! not that an extra buffer-pool registration (`IORING_REGISTER_BUFFERS`)
-//! is wired up — that's flagged as a further follow-up, not done in this
-//! pass, since it would require plumbing a shared, indexed buffer pool
-//! through every fs op and could not be validated without a real Linux
-//! kernel to run against.
 
 use crate::lockfree::{AtomicWakerSlot, MpmcStack, TreiberStack};
 use std::ffi::CString;

@@ -7,12 +7,6 @@
 //!   Fsync/Close/Statx) later — see the module doc on `native` for exactly
 //!   what's deferred and why.
 //! - `tokio` (when `native` is off): a thin wrapper over `tokio::fs`.
-//!
-//! Unlike [`crate::io`] (which re-exports flat at the crate root to preserve
-//! the pre-split `dtact-io` public API), `fs` items live under
-//! `dtact_util::fs::*` to keep the growing set of new modules
-//! (`fs`/`process`/`signal`/`stream`/`timer`) from colliding on names like
-//! `init`.
 
 #[cfg(all(feature = "native", windows))]
 mod iocp_windows;
