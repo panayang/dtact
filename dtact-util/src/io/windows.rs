@@ -113,7 +113,7 @@ struct GlobalConfig {
     workers: usize,
 }
 
-static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
+pub(super) static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
 
 // =========================================================================
 // IOCP-specific types

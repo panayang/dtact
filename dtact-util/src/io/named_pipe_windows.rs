@@ -26,6 +26,7 @@
 //! `DtactTcpListener`-style persistent listener Windows named pipes don't
 //! naturally have.
 
+use super::windows::GLOBAL_CONFIG;
 use crate::lockfree::{AtomicWakerSlot, TreiberStack};
 use std::ffi::c_void;
 use std::future::Future;
@@ -240,22 +241,14 @@ fn init_sharded_pool() -> &'static ShardedSlotPool {
 }
 
 fn acquire_slot() -> Slot {
-    let pool = init_sharded_pool();
-    // Resolve which shard belongs to the execution thread context
-    let worker_idx = CURRENT_WORKER_IDX.with(|cell| cell.get()).unwrap_or(0);
-    let shard_idx = worker_idx % pool.shards.len();
-    let shard = &pool.shards[shard_idx];
-
-    shard.free.pop().map_or_else(
+    let pool = slot_pool();
+    pool.free.pop().map_or_else(
         || Slot::Heap(Box::new(OpState::fresh())),
         |idx| {
-            shard.slots[idx as usize]
+            pool.slots[idx as usize]
                 .result
                 .store(PENDING, Ordering::Relaxed);
-            Slot::Pooled {
-                shard_idx,
-                slot_idx: idx,
-            }
+            Slot::Pooled(idx)
         },
     )
 }
@@ -459,7 +452,7 @@ impl DtactNamedPipeHandle {
         if buf.is_empty() {
             return Ok(0);
         }
-        match issue_read_optimized(self.handle, buf) {
+        match issue_read(self.handle, buf) {
             IoOpResult::Ready(res) => res,
             IoOpResult::Pending(fut) => fut.await,
         }
@@ -474,7 +467,7 @@ impl DtactNamedPipeHandle {
         if buf.is_empty() {
             return Ok(0);
         }
-        match issue_write_optimized(self.handle, buf) {
+        match issue_write(self.handle, buf) {
             IoOpResult::Ready(res) => res,
             IoOpResult::Pending(fut) => fut.await,
         }
