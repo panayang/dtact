@@ -12,6 +12,7 @@ use std::task::{Context, Poll};
 /// A notification primitive commonly used to hand-wake another async
 /// task/structure — e.g. signaling "state changed, go re-check" without a
 /// full channel.
+#[repr(align(64))]
 pub struct Notify {
     /// A single-slot "permit": set by `notify_one()` when nothing was
     /// waiting, consumed by the very next `notified().await`.
@@ -38,6 +39,7 @@ impl Notify {
     /// Wake one waiting `notified().await`, or — if none is currently
     /// waiting — store a permit so the *next* `notified().await` returns
     /// immediately without waiting at all.
+    #[inline(always)]
     pub fn notify_one(&self) {
         // Unconditionally store the permit, *then* wake one queued waiter
         // — the same "set flag, then wake the (lock-free) queue" shape
@@ -71,6 +73,7 @@ impl Notify {
     /// Wake every task currently waiting in `notified().await`. Does
     /// *not* store a permit — a task that calls `notified()` after this
     /// returns will wait for a future notification, not this one.
+    #[inline(always)]
     pub fn notify_waiters(&self) {
         self.wait.wake_all();
     }
@@ -85,6 +88,7 @@ impl Notify {
 }
 
 /// Future returned by [`Notify::notified`].
+#[repr(align(64))]
 pub struct Notified<'a> {
     notify: &'a Notify,
 }
@@ -92,6 +96,7 @@ pub struct Notified<'a> {
 impl Future for Notified<'_> {
     type Output = ();
 
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if self
             .notify

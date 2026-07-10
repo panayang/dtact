@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
+#[repr(align(64))]
 struct Shared<T> {
     value: RwLock<T>,
     /// Bumped on every `send`; a `Receiver` compares this against the
@@ -20,6 +21,7 @@ struct Shared<T> {
 
 /// Create a watch channel seeded with `init`.
 #[must_use]
+#[inline]
 pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
     let shared = Arc::new(Shared {
         value: RwLock::new(init),
@@ -36,11 +38,13 @@ pub fn channel<T>(init: T) -> (Sender<T>, Receiver<T>) {
 }
 
 /// The sending half of a [`channel`]. Cheaply [`Clone`]-able.
+#[repr(align(64))]
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
 }
 
 impl<T> Clone for Sender<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         self.shared.sender_count.fetch_add(1, Ordering::AcqRel);
         Self {
@@ -50,6 +54,7 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         if self.shared.sender_count.fetch_sub(1, Ordering::AcqRel) == 1 {
             // Deliberately does NOT bump `version` — closing isn't a
@@ -68,6 +73,7 @@ impl<T> Drop for Sender<T> {
 
 impl<T> Sender<T> {
     /// Replace the current value with `value`, notifying every receiver.
+    #[inline(always)]
     pub fn send(&self, value: T) {
         *self
             .shared
@@ -79,6 +85,7 @@ impl<T> Sender<T> {
     }
 
     /// A read-only snapshot of the current value.
+    #[inline(always)]
     pub fn borrow(&self) -> std::sync::RwLockReadGuard<'_, T> {
         self.shared
             .value
@@ -88,6 +95,7 @@ impl<T> Sender<T> {
 
     /// `true` once every [`Receiver`] has been dropped.
     #[must_use]
+    #[inline(always)]
     pub fn is_closed(&self) -> bool {
         self.shared.receiver_count.load(Ordering::Acquire) == 0
     }
@@ -98,12 +106,14 @@ impl<T> Sender<T> {
 /// [`Clone`]-able — each clone tracks its own "last seen version"
 /// independently, so every receiver (original and clones) sees every
 /// value change via its own [`changed`](Self::changed) calls.
+#[repr(align(64))]
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     seen_version: u64,
 }
 
 impl<T> Clone for Receiver<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         self.shared.receiver_count.fetch_add(1, Ordering::AcqRel);
         Self {
@@ -114,6 +124,7 @@ impl<T> Clone for Receiver<T> {
 }
 
 impl<T> Drop for Receiver<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.shared.receiver_count.fetch_sub(1, Ordering::AcqRel);
     }
@@ -127,6 +138,7 @@ impl<T: Send + Sync> Receiver<T> {
     /// # Errors
     /// Returns [`RecvError`] once every [`Sender`] has been dropped and
     /// there are no further changes to observe.
+    #[inline(always)]
     pub async fn changed(&mut self) -> Result<(), RecvError> {
         std::future::poll_fn(|cx| self.poll_changed(cx)).await
     }
@@ -136,6 +148,7 @@ impl<T> Receiver<T> {
     /// A read-only snapshot of the current value. Does not mark it as
     /// "seen" — a subsequent [`changed`](Self::changed) still resolves
     /// immediately if the value changed before this call.
+    #[inline(always)]
     pub fn borrow(&self) -> std::sync::RwLockReadGuard<'_, T> {
         self.shared
             .value
@@ -146,11 +159,13 @@ impl<T> Receiver<T> {
     /// Like [`borrow`](Self::borrow), but also marks the current value as
     /// seen — a subsequent [`changed`](Self::changed) only resolves on a
     /// value sent *after* this call.
+    #[inline(always)]
     pub fn borrow_and_update(&mut self) -> std::sync::RwLockReadGuard<'_, T> {
         self.seen_version = self.shared.version.load(Ordering::Acquire);
         self.borrow()
     }
 
+    #[inline]
     fn poll_changed(&mut self, cx: &Context<'_>) -> Poll<Result<(), RecvError>> {
         if self.try_observe_change() {
             return Poll::Ready(Ok(()));
@@ -183,6 +198,7 @@ impl<T> Receiver<T> {
         Poll::Pending
     }
 
+    #[inline(always)]
     fn try_observe_change(&mut self) -> bool {
         let current = self.shared.version.load(Ordering::Acquire);
         if current == self.seen_version {
@@ -193,6 +209,7 @@ impl<T> Receiver<T> {
         }
     }
 
+    #[inline(always)]
     fn is_closed(&self) -> bool {
         self.shared.sender_count.load(Ordering::Acquire) == 0
     }
@@ -201,6 +218,7 @@ impl<T> Receiver<T> {
 /// Error returned by [`Receiver::changed`] once every [`Sender`] has been
 /// dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub struct RecvError;
 
 impl std::fmt::Display for RecvError {

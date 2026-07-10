@@ -15,6 +15,7 @@ const INIT: u8 = 2;
 /// Concurrent callers of [`OnceCell::get_or_init`] that race to be first
 /// all wait for the same single initialization to complete rather than
 /// each running their own initializer.
+#[repr(align(64))]
 pub struct OnceCell<T> {
     state: AtomicU8,
     data: UnsafeCell<Option<T>>,
@@ -56,6 +57,7 @@ impl<T> OnceCell<T> {
 
     /// The cell's value, if it's already been initialized.
     #[must_use]
+    #[inline(always)]
     pub fn get(&self) -> Option<&T> {
         (self.state.load(Ordering::Acquire) == INIT)
             // SAFETY: `INIT` observed under Acquire pairs with the
@@ -69,6 +71,7 @@ impl<T> OnceCell<T> {
     /// # Errors
     /// Returns `value` back if the cell was already initialized (or is
     /// concurrently being initialized by [`Self::get_or_init`]).
+    #[inline(always)]
     pub fn set(&self, value: T) -> Result<(), T> {
         if self
             .state
@@ -127,6 +130,7 @@ impl<T> OnceCell<T> {
         }
     }
 
+    #[inline]
     fn poll_wait_for_init(&self, cx: &Context<'_>) -> Poll<()> {
         if self.state.load(Ordering::Acquire) == INIT {
             return Poll::Ready(());
@@ -140,6 +144,7 @@ impl<T> OnceCell<T> {
     }
 
     /// Consume the cell, returning its value if initialized.
+    #[inline(always)]
     pub fn into_inner(self) -> Option<T> {
         self.data.into_inner()
     }

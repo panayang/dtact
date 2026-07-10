@@ -33,6 +33,7 @@ impl<T> Slot<T> {
     }
 }
 
+#[repr(align(64))]
 struct Shared<T> {
     /// Contiguous, pre-allocated ring buffer. Zero heap allocations on the hot path.
     slots: Box<[Slot<T>]>,
@@ -47,6 +48,7 @@ unsafe impl<T: Sync> Sync for Shared<T> {}
 
 /// Create a broadcast channel with a `capacity`-entry backlog.
 #[must_use]
+#[inline]
 pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     let capacity = capacity.max(1);
 
@@ -72,11 +74,13 @@ pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 }
 
 /// The sending half of a [`channel`]. Cheaply [`Clone`]-able.
+#[repr(align(64))]
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
 }
 
 impl<T> Clone for Sender<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         self.shared.sender_count.fetch_add(1, Ordering::AcqRel);
         Self {
@@ -86,6 +90,7 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         if self.shared.sender_count.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.shared.wait.wake_all();
@@ -102,6 +107,7 @@ impl<T: Clone> Sender<T> {
     ///
     /// Returns `SendError` if all downstream receivers have been dropped,
     /// leaving nobody left to consume the payload.
+    #[inline(always)]
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         if self.receiver_count() == 0 {
             return Err(SendError(value));
@@ -139,6 +145,7 @@ impl<T: Clone> Sender<T> {
     /// Current number of live receivers (a lower bound under concurrent
     /// clone/drop, same caveat `tokio`'s equivalent has).
     #[must_use]
+    #[inline(always)]
     pub fn receiver_count(&self) -> usize {
         Arc::strong_count(&self.shared)
             .saturating_sub(self.shared.sender_count.load(Ordering::Acquire))
@@ -146,6 +153,7 @@ impl<T: Clone> Sender<T> {
 }
 
 /// The receiving half of a [`channel`].
+#[repr(align(64))]
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     next_seq: u64,
@@ -156,6 +164,7 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 unsafe impl<T: Send> Sync for Receiver<T> {}
 
 impl<T> Clone for Receiver<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             shared: self.shared.clone(),
@@ -172,10 +181,12 @@ impl<T: Clone> Receiver<T> {
     /// receiver fell behind the buffer's `capacity` since its last
     /// `recv()`, or [`RecvError::Closed`] once every [`Sender`] has been
     /// dropped and the backlog is drained.
+    #[inline(always)]
     pub async fn recv(&mut self) -> Result<T, RecvError> {
         std::future::poll_fn(|cx| self.poll_recv(cx)).await
     }
 
+    #[inline]
     fn poll_recv(&mut self, cx: &Context<'_>) -> Poll<Result<T, RecvError>> {
         if let Some(result) = self.try_recv_one() {
             return Poll::Ready(result);
@@ -196,6 +207,7 @@ impl<T: Clone> Receiver<T> {
         Poll::Pending
     }
 
+    #[inline]
     fn try_recv_one(&mut self) -> Option<Result<T, RecvError>> {
         let idx = (self.next_seq as usize) % self.shared.capacity;
         let slot = &self.shared.slots[idx];
@@ -236,12 +248,14 @@ impl<T: Clone> Receiver<T> {
         }
     }
 
+    #[inline(always)]
     fn is_closed(&self) -> bool {
         self.shared.sender_count.load(Ordering::Acquire) == 0
     }
 }
 
 impl<T> Drop for Shared<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         let next_seq = self.next_seq.load(Ordering::Acquire);
         // Only drop slots that were actually written to
@@ -258,6 +272,7 @@ impl<T> Drop for Shared<T> {
 /// Error returned by [`Sender::send`] when there are no receivers to
 /// deliver to. Carries the value back to the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub struct SendError<T>(pub T);
 
 impl<T> std::fmt::Display for SendError<T> {
@@ -270,6 +285,7 @@ impl<T: std::fmt::Debug> std::error::Error for SendError<T> {}
 
 /// Error returned by [`Receiver::recv`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub enum RecvError {
     /// This receiver fell behind by the contained number of messages;
     /// they were overwritten before it could read them. The receiver has

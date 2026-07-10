@@ -35,6 +35,7 @@ use std::task::{Context, Poll};
 ///   itself (one atomic pointer swap, not a per-message lock). A bounded
 ///   ring can't be reused here because "unbounded" means capacity isn't
 ///   fixed at construction time.
+#[repr(align(64))]
 enum Queue<T> {
     Bounded(Box<BoundedMpmcQueue<T>>),
     Unbounded(MpmcStack<T>),
@@ -44,6 +45,7 @@ impl<T> Queue<T> {
     /// Push `value`. Always succeeds for the unbounded variant; for the
     /// bounded variant, hands `value` back if the queue is currently at
     /// capacity.
+    #[inline(always)]
     fn try_push(&self, value: T) -> Result<(), T> {
         match self {
             Self::Bounded(q) => q.try_push(value),
@@ -55,6 +57,7 @@ impl<T> Queue<T> {
     }
 }
 
+#[repr(align(64))]
 struct Shared<T> {
     queue: Queue<T>,
     sender_count: AtomicUsize,
@@ -74,10 +77,12 @@ struct Shared<T> {
 }
 
 impl<T> Shared<T> {
+    #[inline(always)]
     fn is_closed_for_send(&self) -> bool {
         self.receiver_dropped.load(Ordering::Acquire)
     }
 
+    #[inline(always)]
     fn is_closed_for_recv(&self) -> bool {
         self.sender_count.load(Ordering::Acquire) == 0
     }
@@ -86,6 +91,7 @@ impl<T> Shared<T> {
 /// Create a bounded channel: [`Sender::send`] waits (without blocking the
 /// OS thread) once `capacity` unreceived messages are buffered.
 #[must_use]
+#[inline]
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     let shared = Arc::new(Shared {
         queue: Queue::Bounded(Box::new(BoundedMpmcQueue::new(capacity.max(1)))),
@@ -108,6 +114,7 @@ pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
 /// Create an unbounded channel: [`UnboundedSender::send`] never waits,
 /// buffering as many messages as memory allows.
 #[must_use]
+#[inline]
 pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
     let shared = Arc::new(Shared {
         queue: Queue::Unbounded(MpmcStack::new()),
@@ -133,11 +140,13 @@ pub fn unbounded_channel<T>() -> (UnboundedSender<T>, UnboundedReceiver<T>) {
 
 /// The sending half of a bounded [`channel`]. Cheaply [`Clone`]-able —
 /// every clone counts toward the channel staying open.
+#[repr(align(64))]
 pub struct Sender<T> {
     shared: Arc<Shared<T>>,
 }
 
 impl<T> Clone for Sender<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         self.shared.sender_count.fetch_add(1, Ordering::AcqRel);
         Self {
@@ -147,6 +156,7 @@ impl<T> Clone for Sender<T> {
 }
 
 impl<T> Drop for Sender<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         if self.shared.sender_count.fetch_sub(1, Ordering::AcqRel) == 1 {
             // Last sender gone — wake the receiver so a pending `.recv()`
@@ -162,6 +172,7 @@ impl<T> Sender<T> {
     /// # Errors
     /// Returns `value` back in [`SendError`] if the receiver has been
     /// dropped.
+    #[inline(always)]
     pub async fn send(&self, value: T) -> Result<(), SendError<T>> {
         let mut value = Some(value);
         std::future::poll_fn(|cx| self.poll_send(cx, &mut value)).await
@@ -218,12 +229,14 @@ impl<T> Sender<T> {
     /// `true` once the receiver has been dropped — a subsequent
     /// [`send`](Self::send) is guaranteed to fail.
     #[must_use]
+    #[inline(always)]
     pub fn is_closed(&self) -> bool {
         self.shared.is_closed_for_send()
     }
 }
 
 /// The receiving half of a bounded [`channel`].
+#[repr(align(64))]
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     /// Local FIFO-order refill buffer for the unbounded variant's
@@ -248,6 +261,7 @@ pub struct Receiver<T> {
 unsafe impl<T: Send> Sync for Receiver<T> {}
 
 impl<T> Drop for Receiver<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.shared.receiver_dropped.store(true, Ordering::Release);
         self.shared.send_wait.wake_all();
@@ -258,10 +272,12 @@ impl<T> Receiver<T> {
     /// Receive the next message, waiting if the channel is currently
     /// empty. Returns `None` once every [`Sender`] has been dropped and
     /// the buffer is drained.
+    #[inline(always)]
     pub async fn recv(&mut self) -> Option<T> {
         std::future::poll_fn(|cx| self.poll_recv(cx)).await
     }
 
+    #[inline]
     fn poll_recv(&self, cx: &Context<'_>) -> Poll<Option<T>> {
         if let Some(v) = self.try_pop() {
             return Poll::Ready(Some(v));
@@ -287,6 +303,7 @@ impl<T> Receiver<T> {
         Poll::Pending
     }
 
+    #[inline]
     fn try_pop(&self) -> Option<T> {
         let v = match &self.shared.queue {
             Queue::Bounded(q) => q.try_pop(),
@@ -313,11 +330,13 @@ impl<T> Receiver<T> {
 }
 
 /// The sending half of an [`unbounded_channel`]. Cheaply [`Clone`]-able.
+#[repr(align(64))]
 pub struct UnboundedSender<T> {
     inner: Sender<T>,
 }
 
 impl<T> Clone for UnboundedSender<T> {
+    #[inline(always)]
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -333,6 +352,7 @@ impl<T> UnboundedSender<T> {
     /// # Errors
     /// Returns `value` back in [`SendError`] if the receiver has been
     /// dropped.
+    #[inline(always)]
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         if self.inner.shared.is_closed_for_send() {
             return Err(SendError(value));
@@ -349,12 +369,14 @@ impl<T> UnboundedSender<T> {
 
     /// `true` once the receiver has been dropped.
     #[must_use]
+    #[inline(always)]
     pub fn is_closed(&self) -> bool {
         self.inner.is_closed()
     }
 }
 
 /// The receiving half of an [`unbounded_channel`].
+#[repr(align(64))]
 pub struct UnboundedReceiver<T> {
     inner: Receiver<T>,
 }
@@ -363,6 +385,7 @@ impl<T> UnboundedReceiver<T> {
     /// Receive the next message, waiting if the channel is currently
     /// empty. Returns `None` once every sender has been dropped and the
     /// buffer is drained.
+    #[inline(always)]
     pub async fn recv(&mut self) -> Option<T> {
         self.inner.recv().await
     }
@@ -372,6 +395,7 @@ impl<T> UnboundedReceiver<T> {
 /// dropped. Carries the value that couldn't be delivered back to the
 /// caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub struct SendError<T>(pub T);
 
 impl<T> std::fmt::Display for SendError<T> {

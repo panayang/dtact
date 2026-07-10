@@ -15,6 +15,7 @@ const WRITE_LOCKED: isize = -1;
 
 /// An async reader-writer lock: `.read().await`/`.write().await` yield
 /// the calling task rather than blocking the OS thread while contended.
+#[repr(align(64))]
 pub struct RwLock<T: ?Sized> {
     state: AtomicIsize,
     wait: WaitQueue,
@@ -40,6 +41,7 @@ impl<T> RwLock<T> {
     }
 
     /// Consume the lock, returning the guarded value.
+    #[inline(always)]
     pub fn into_inner(self) -> T {
         self.data.into_inner()
     }
@@ -48,12 +50,14 @@ impl<T> RwLock<T> {
 impl<T: ?Sized + Send + Sync> RwLock<T> {
     /// Acquire a shared read lock, waiting while a writer holds it.
     /// Multiple readers may hold the lock concurrently.
+    #[inline(always)]
     pub async fn read(&self) -> RwLockReadGuard<'_, T> {
         std::future::poll_fn(|cx| self.poll_read(cx)).await
     }
 
     /// Acquire the exclusive write lock, waiting while any reader or
     /// writer holds it.
+    #[inline(always)]
     pub async fn write(&self) -> RwLockWriteGuard<'_, T> {
         std::future::poll_fn(|cx| self.poll_write(cx)).await
     }
@@ -62,6 +66,7 @@ impl<T: ?Sized + Send + Sync> RwLock<T> {
 impl<T: ?Sized> RwLock<T> {
     /// Acquire a read lock if immediately available, without waiting.
     #[must_use]
+    #[inline(always)]
     pub fn try_read(&self) -> Option<RwLockReadGuard<'_, T>> {
         // See `Mutex::try_lock`'s comment on why this must be `.then(||
         // ...)`, not `.then_some(...)` — the guard's `Drop` releases a
@@ -73,6 +78,7 @@ impl<T: ?Sized> RwLock<T> {
 
     /// Acquire the write lock if immediately available, without waiting.
     #[must_use]
+    #[inline(always)]
     pub fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
         self.state
             .compare_exchange(0, WRITE_LOCKED, Ordering::Acquire, Ordering::Relaxed)
@@ -80,6 +86,7 @@ impl<T: ?Sized> RwLock<T> {
             .then(|| RwLockWriteGuard { lock: self })
     }
 
+    #[inline(always)]
     fn try_acquire_read(&self) -> bool {
         let mut current = self.state.load(Ordering::Relaxed);
         loop {
@@ -98,6 +105,7 @@ impl<T: ?Sized> RwLock<T> {
         }
     }
 
+    #[inline(always)]
     fn poll_read(&self, cx: &Context<'_>) -> Poll<RwLockReadGuard<'_, T>> {
         if self.try_acquire_read() {
             return Poll::Ready(RwLockReadGuard { lock: self });
@@ -112,6 +120,7 @@ impl<T: ?Sized> RwLock<T> {
         Poll::Pending
     }
 
+    #[inline(always)]
     fn poll_write(&self, cx: &Context<'_>) -> Poll<RwLockWriteGuard<'_, T>> {
         // Skip the fast-path CAS if anyone is already waiting — a fresh
         // writer bypassing an already-waiting one every time the lock
@@ -151,6 +160,7 @@ impl<T: Default> Default for RwLock<T> {
 }
 
 /// RAII guard for a shared read lock on a [`RwLock`].
+#[repr(align(64))]
 pub struct RwLockReadGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
@@ -160,6 +170,7 @@ unsafe impl<T: ?Sized + Sync> Sync for RwLockReadGuard<'_, T> {}
 
 impl<T: ?Sized> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T {
         // SAFETY: holding a read guard is proof no writer holds the lock.
         unsafe { &*self.lock.data.get() }
@@ -167,6 +178,7 @@ impl<T: ?Sized> Deref for RwLockReadGuard<'_, T> {
 }
 
 impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
+    #[inline(always)]
     fn drop(&mut self) {
         let prev = self.lock.state.fetch_sub(1, Ordering::Release);
         // Only the last reader to leave can possibly unblock a waiting
@@ -179,6 +191,7 @@ impl<T: ?Sized> Drop for RwLockReadGuard<'_, T> {
 }
 
 /// RAII guard for the exclusive write lock on a [`RwLock`].
+#[repr(align(64))]
 pub struct RwLockWriteGuard<'a, T: ?Sized> {
     lock: &'a RwLock<T>,
 }
@@ -188,6 +201,7 @@ unsafe impl<T: ?Sized + Sync> Sync for RwLockWriteGuard<'_, T> {}
 
 impl<T: ?Sized> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T {
         // SAFETY: holding a write guard is exclusive proof of the lock.
         unsafe { &*self.lock.data.get() }
@@ -195,6 +209,7 @@ impl<T: ?Sized> Deref for RwLockWriteGuard<'_, T> {
 }
 
 impl<T: ?Sized> DerefMut for RwLockWriteGuard<'_, T> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: same as `Deref` above.
         unsafe { &mut *self.lock.data.get() }
@@ -202,6 +217,7 @@ impl<T: ?Sized> DerefMut for RwLockWriteGuard<'_, T> {
 }
 
 impl<T: ?Sized> Drop for RwLockWriteGuard<'_, T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.lock.state.store(0, Ordering::Release);
         self.lock.wait.wake_all();

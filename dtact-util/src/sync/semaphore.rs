@@ -8,6 +8,7 @@ use std::task::{Context, Poll};
 /// A counting semaphore: `.acquire().await` waits (without blocking the
 /// OS thread) until a permit is available, then holds it until the
 /// returned [`SemaphorePermit`] is dropped.
+#[repr(align(64))]
 pub struct Semaphore {
     permits: AtomicUsize,
     wait: WaitQueue,
@@ -25,17 +26,20 @@ impl Semaphore {
 
     /// Current number of permits available for immediate acquisition.
     #[must_use]
+    #[inline(always)]
     pub fn available_permits(&self) -> usize {
         self.permits.load(Ordering::Relaxed)
     }
 
     /// Add `n` permits, waking waiters as needed.
+    #[inline(always)]
     pub fn add_permits(&self, n: usize) {
         self.permits.fetch_add(n, Ordering::Release);
         self.wait.wake_all();
     }
 
     /// Acquire one permit, waiting if none are currently available.
+    #[inline(always)]
     pub async fn acquire(&self) -> SemaphorePermit<'_> {
         std::future::poll_fn(|cx| self.poll_acquire(cx)).await
     }
@@ -44,6 +48,7 @@ impl Semaphore {
     ///
     /// # Errors
     /// Returns [`TryAcquireError::NoPermits`] if none are currently free.
+    #[inline(always)]
     pub fn try_acquire(&self) -> Result<SemaphorePermit<'_>, TryAcquireError> {
         // See `Mutex::try_lock`'s comment on why this must be `.then(||
         // ...)`, not `.then_some(...)` — the permit's `Drop` releases a
@@ -54,6 +59,7 @@ impl Semaphore {
             .ok_or(TryAcquireError::NoPermits)
     }
 
+    #[inline]
     fn try_acquire_one(&self) -> bool {
         let mut current = self.permits.load(Ordering::Relaxed);
         loop {
@@ -72,6 +78,7 @@ impl Semaphore {
         }
     }
 
+    #[inline]
     fn poll_acquire(&self, cx: &Context<'_>) -> Poll<SemaphorePermit<'_>> {
         // Skip the fast-path acquire if anyone is already waiting for a
         // permit — same starvation risk as `Mutex::poll_lock` (a fresh
@@ -95,6 +102,7 @@ impl Semaphore {
 
 /// Error returned by [`Semaphore::try_acquire`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub enum TryAcquireError {
     /// No permits were immediately available.
     NoPermits,
@@ -110,11 +118,13 @@ impl std::error::Error for TryAcquireError {}
 
 /// RAII permit held on a [`Semaphore`]. Returns the permit (and wakes one
 /// waiter, if any) on drop.
+#[repr(align(64))]
 pub struct SemaphorePermit<'a> {
     sem: &'a Semaphore,
 }
 
 impl Drop for SemaphorePermit<'_> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.sem.permits.fetch_add(1, Ordering::Release);
         self.sem.wait.wake_one();

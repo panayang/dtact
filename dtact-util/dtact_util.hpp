@@ -1,5 +1,5 @@
-#ifndef DTACT_UTIL_H
-#define DTACT_UTIL_H
+#ifndef DTACT_UTIL_HPP
+#define DTACT_UTIL_HPP
 
 /* Generated with cbindgen:0.29.4 */
 
@@ -12,387 +12,295 @@
 #include <ostream>
 #include <new>
 
-/*
- Stdio bitmask flag: route the child's stderr through a pipe.
- */
+/// Stdio bitmask flag: route the child's stderr through a pipe.
 constexpr static const uint32_t DTACT_STDERR_PIPE = 4;
 
-/*
- Stdio bitmask flag: route the child's stdin through a pipe.
- */
+/// Stdio bitmask flag: route the child's stdin through a pipe.
 constexpr static const uint32_t DTACT_STDIN_PIPE = 1;
 
-/*
- Stdio bitmask flag: route the child's stdout through a pipe.
- */
+/// Stdio bitmask flag: route the child's stdout through a pipe.
 constexpr static const uint32_t DTACT_STDOUT_PIPE = 2;
 
-/*
- Max concurrent listeners for a single signal kind. Generous for real
- programs (which typically register one listener per signal kind, at
- startup) without the registry needing dynamic growth.
- */
+/// Max concurrent listeners for a single signal kind. Generous for real
+/// programs (which typically register one listener per signal kind, at
+/// startup) without the registry needing dynamic growth.
 constexpr static const size_t MAX_LISTENERS = 16;
 
-/*
- A spawned child process.
-
- `wait`/`wait_with_output` consume `self` (ownership transfers into the
- pool closure, so nothing needs to be shared or locked); `kill`/`id`
- are synchronous since they're fast, non-blocking syscalls.
- */
+/// A spawned child process.
+///
+/// `wait`/`wait_with_output` consume `self` (ownership transfers into the
+/// pool closure, so nothing needs to be shared or locked); `kill`/`id`
+/// are synchronous since they're fast, non-blocking syscalls.
 struct DtactChild;
 
-/*
- One end of a child process's stderr pipe.
-
- Exclusively owned by whoever holds it (returned by `take_stderr` on
- `DtactChild`) — each async op temporarily moves the handle into a pool
- closure and gets it back in the result, never shared behind a lock.
- */
+/// One end of a child process's stderr pipe.
+///
+/// Exclusively owned by whoever holds it (returned by `take_stderr` on
+/// `DtactChild`) — each async op temporarily moves the handle into a pool
+/// closure and gets it back in the result, never shared behind a lock.
 struct DtactChildStderr;
 
-/*
- One end of a child process's stdin pipe.
-
- Exclusively owned by whoever holds it (returned by `take_stdin` on
- `DtactChild`) — each async op temporarily moves the handle into a pool
- closure and gets it back in the result, never shared behind a lock.
- */
+/// One end of a child process's stdin pipe.
+///
+/// Exclusively owned by whoever holds it (returned by `take_stdin` on
+/// `DtactChild`) — each async op temporarily moves the handle into a pool
+/// closure and gets it back in the result, never shared behind a lock.
 struct DtactChildStdin;
 
-/*
- One end of a child process's stdout pipe.
-
- Exclusively owned by whoever holds it (returned by `take_stdout` on
- `DtactChild`) — each async op temporarily moves the handle into a pool
- closure and gets it back in the result, never shared behind a lock.
- */
+/// One end of a child process's stdout pipe.
+///
+/// Exclusively owned by whoever holds it (returned by `take_stdout` on
+/// `DtactChild`) — each async op temporarily moves the handle into a pool
+/// closure and gets it back in the result, never shared behind a lock.
 struct DtactChildStdout;
 
-/*
- An open file whose reads/writes are dispatched as real overlapped IOCP
- operations — no thread-pool hop, buffer handed straight to the kernel.
- */
+/// An open file whose reads/writes are dispatched as real overlapped IOCP
+/// operations — no thread-pool hop, buffer handed straight to the kernel.
 struct DtactFile;
 
 #if defined(DTACT_LINUX)
-/*
- An open file whose ops are submitted as real `io_uring` SQEs.
- */
+/// An open file whose ops are submitted as real `io_uring` SQEs.
 struct DtactFile;
 #endif
 
 #if !defined(DTACT_LINUX)
-/*
- An open file whose blocking read/write/metadata operations run on the
- dtact-fs thread pool rather than the calling task's thread.
- */
+/// An open file whose blocking read/write/metadata operations run on the
+/// dtact-fs thread pool rather than the calling task's thread.
 struct DtactFile;
 #endif
 
-/*
- A repeating timer. `tick()` is a plain async method mirroring
- `tokio::time::Interval::tick`.
- */
+/// A repeating timer. `tick()` is a plain async method mirroring
+/// `tokio::time::Interval::tick`.
 struct DtactInterval;
 
-/*
- A repeating timer. `tick()` mirrors `tokio::time::Interval::tick`.
- */
+/// A repeating timer. `tick()` mirrors `tokio::time::Interval::tick`.
 struct DtactInterval;
 
-/*
- One named-pipe connection — the read/write half shared by
- [`DtactNamedPipeServer`] (after a client connects) and
- [`DtactNamedPipeClient`].
- */
+/// One named-pipe connection — the read/write half shared by
+/// [`DtactNamedPipeServer`] (after a client connects) and
+/// [`DtactNamedPipeClient`].
 struct DtactNamedPipeHandle;
 
-/*
- One named-pipe connection — the read/write half shared by
- [`DtactNamedPipeServer`] (after a client connects) and
- [`DtactNamedPipeClient`].
- */
+/// One named-pipe connection — the read/write half shared by
+/// [`DtactNamedPipeServer`] (after a client connects) and
+/// [`DtactNamedPipeClient`].
 struct DtactNamedPipeHandle;
 
-/*
- A single named-pipe server instance, before a client has connected.
-
- Create one per client you intend to accept — see the module doc's
- "no pipe-instance pooling" paragraph for why there's no persistent
- listener type the way TCP has [`super::DtactTcpListener`].
- */
+/// A single named-pipe server instance, before a client has connected.
+///
+/// Create one per client you intend to accept — see the module doc's
+/// "no pipe-instance pooling" paragraph for why there's no persistent
+/// listener type the way TCP has [`super::DtactTcpListener`].
 struct DtactNamedPipeServer;
 
-/*
- A single named-pipe server instance, before a client has connected.
-
- Create one per client you intend to accept — see this module's doc.
- */
+/// A single named-pipe server instance, before a client has connected.
+///
+/// Create one per client you intend to accept — see this module's doc.
 struct DtactNamedPipeServer;
 
-/*
- A stream of a specific signal's deliveries — call `.recv().await`
- repeatedly, once per delivery, mirroring `tokio::signal::unix::Signal`.
- */
+/// A stream of a specific signal's deliveries — call `.recv().await`
+/// repeatedly, once per delivery, mirroring `tokio::signal::unix::Signal`.
 struct DtactSignalStream;
 
-/*
- A stream of a specific console-control event's deliveries — call
- `.recv().await` repeatedly, mirroring `tokio::signal::windows`.
- */
+/// A stream of a specific console-control event's deliveries — call
+/// `.recv().await` repeatedly, mirroring `tokio::signal::windows`.
 struct DtactSignalStream;
 
-/*
- A stream of occurrences of one Unix signal.
-
- Backed by tokio's signal-fd/self-pipe reactor integration instead
- of dtact-signal's own registry. Unlike the native backend, each
- instance owns its own OS-level registration rather than sharing a
- broadcast registry.
- */
+/// A stream of occurrences of one Unix signal.
+///
+/// Backed by tokio's signal-fd/self-pipe reactor integration instead
+/// of dtact-signal's own registry. Unlike the native backend, each
+/// instance owns its own OS-level registration rather than sharing a
+/// broadcast registry.
 struct DtactSignalStream;
 
-/*
- A stream of occurrences of one Windows console-control event.
-
- Covers `Ctrl+C`, `Ctrl+Break`, window-close, logoff, and shutdown,
- backed by tokio's console-handler reactor integration instead of
- dtact-signal's own registry. Mirrors the native backend's
- `DtactSignalStream` — same five events, see its module doc for
- what each one means and the grace-period caveat that applies to
- the latter three.
- */
+/// A stream of occurrences of one Windows console-control event.
+///
+/// Covers `Ctrl+C`, `Ctrl+Break`, window-close, logoff, and shutdown,
+/// backed by tokio's console-handler reactor integration instead of
+/// dtact-signal's own registry. Mirrors the native backend's
+/// `DtactSignalStream` — same five events, see its module doc for
+/// what each one means and the grace-period caveat that applies to
+/// the latter three.
 struct DtactSignalStream;
 
-/*
- One end of an in-process duplex pipe. Create a connected pair with
- [`pair`].
- */
+/// One end of an in-process duplex pipe. Create a connected pair with
+/// [`pair`].
 struct DtactStream;
 
-/*
- A lock-free, non-blocking TCP listener registered with the dtact-io
- driver. Mirrors the Windows backend's `DtactTcpListener` API so callers
- can switch platforms without code changes.
- */
+/// A lock-free, non-blocking TCP listener registered with the dtact-io
+/// driver. Mirrors the Windows backend's `DtactTcpListener` API so callers
+/// can switch platforms without code changes.
 struct DtactTcpListener;
 
-/*
- An async TCP listener backed by IOCP-issued `AcceptEx`.
- */
+/// An async TCP listener backed by IOCP-issued `AcceptEx`.
 struct DtactTcpListener;
 
-/*
- Tokio-backed TCP listener. Mirrors the native backend's
- `DtactTcpListener` API surface.
- */
+/// Tokio-backed TCP listener. Mirrors the native backend's
+/// `DtactTcpListener` API surface.
 struct DtactTcpListener;
 
-/*
- A lock-free, non-blocking TCP stream registered with the dtact-io
- driver. Mirrors the Windows backend's `DtactTcpStream` API so callers
- can switch platforms without code changes.
- */
+/// A lock-free, non-blocking TCP stream registered with the dtact-io
+/// driver. Mirrors the Windows backend's `DtactTcpStream` API so callers
+/// can switch platforms without code changes.
 struct DtactTcpStream;
 
-/*
- An async TCP stream backed by IOCP-issued `WSARecv`/`WSASend`.
- */
+/// An async TCP stream backed by IOCP-issued `WSARecv`/`WSASend`.
 struct DtactTcpStream;
 
-/*
- Tokio-backed TCP stream. Mirrors the native backend's `DtactTcpStream`
- API surface, but drives readiness through tokio's reactor instead of the
- crate's own `IOCP`/`io_uring`/kqueue driver.
- */
+/// Tokio-backed TCP stream. Mirrors the native backend's `DtactTcpStream`
+/// API surface, but drives readiness through tokio's reactor instead of the
+/// crate's own `IOCP`/`io_uring`/kqueue driver.
 struct DtactTcpStream;
 
-/*
- Async UDP socket driven by the native backend (`io_uring` `SendMsg`/`RecvMsg`
- on Linux, `sendmsg`/`recvmsg` via the mio/kqueue reactor elsewhere).
-
- Supports the connectionless (`send_to`/`recv_from`) and connected
- (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
- `tokio::net::UdpSocket`'s API shape. The connected `send`/`recv` reuse the
- same `Write`/`Read` submission machinery as [`DtactTcpStream`].
- */
+/// Async UDP socket driven by the native backend (`io_uring` `SendMsg`/`RecvMsg`
+/// on Linux, `sendmsg`/`recvmsg` via the mio/kqueue reactor elsewhere).
+///
+/// Supports the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API shape. The connected `send`/`recv` reuse the
+/// same `Write`/`Read` submission machinery as [`DtactTcpStream`].
 struct DtactUdpSocket;
 
-/*
- Async UDP socket driven by the IOCP backend.
-
- Supports the connectionless (`send_to`/`recv_from`) and connected
- (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
- `tokio::net::UdpSocket`'s API shape. `send_to`/`recv_from` issue overlapped
- `WSASendTo`/`WSARecvFrom` ops; the connected `send`/`recv` reuse the same
- `WSASend`/`WSARecv` machinery as [`DtactTcpStream`].
- */
+/// Async UDP socket driven by the IOCP backend.
+///
+/// Supports the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) patterns, mirroring `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API shape. `send_to`/`recv_from` issue overlapped
+/// `WSASendTo`/`WSARecvFrom` ops; the connected `send`/`recv` reuse the same
+/// `WSASend`/`WSARecv` machinery as [`DtactTcpStream`].
 struct DtactUdpSocket;
 
-/*
- Async UDP socket — tokio-backend equivalent of the native
- `DtactUdpSocket`, a thin wrapper over [`tokio::net::UdpSocket`].
-
- Mirrors the connectionless (`send_to`/`recv_from`) and connected
- (`connect`/`send`/`recv`) halves of `std::net::UdpSocket`'s and
- `tokio::net::UdpSocket`'s API so call-sites port across backends with a
- single feature flag.
- */
+/// Async UDP socket — tokio-backend equivalent of the native
+/// `DtactUdpSocket`, a thin wrapper over [`tokio::net::UdpSocket`].
+///
+/// Mirrors the connectionless (`send_to`/`recv_from`) and connected
+/// (`connect`/`send`/`recv`) halves of `std::net::UdpSocket`'s and
+/// `tokio::net::UdpSocket`'s API so call-sites port across backends with a
+/// single feature flag.
 struct DtactUdpSocket;
 
-/*
- Async Unix-domain datagram socket.
-
- Connectionless counterpart to [`DtactUnixStream`], directly analogous
- to [`DtactUdpSocket`] (same connectionless `send_to`/`recv_from` and
- connected `connect`/`send`/`recv` pattern, same `SendTo`/`RecvFrom`/
- `Read`/`Write` submission machinery — only the address family and the
- `libc::sockaddr_un` construction differ).
- */
+/// Async Unix-domain datagram socket.
+///
+/// Connectionless counterpart to [`DtactUnixStream`], directly analogous
+/// to [`DtactUdpSocket`] (same connectionless `send_to`/`recv_from` and
+/// connected `connect`/`send`/`recv` pattern, same `SendTo`/`RecvFrom`/
+/// `Read`/`Write` submission machinery — only the address family and the
+/// `libc::sockaddr_un` construction differ).
 struct DtactUnixDatagram;
 
-/*
- Async Unix-domain datagram socket — tokio-backend equivalent of the
- native `DtactUnixDatagram`, a thin wrapper over
- [`tokio::net::UnixDatagram`].
-
- Mirrors [`DtactUdpSocket`]'s connectionless/connected split. Unlike
- the native backend (which has to hand-parse a raw `sockaddr_un` into
- its own address type), `recv_from` here just returns tokio's own
- `tokio::net::unix::SocketAddr` directly.
- */
+/// Async Unix-domain datagram socket — tokio-backend equivalent of the
+/// native `DtactUnixDatagram`, a thin wrapper over
+/// [`tokio::net::UnixDatagram`].
+///
+/// Mirrors [`DtactUdpSocket`]'s connectionless/connected split. Unlike
+/// the native backend (which has to hand-parse a raw `sockaddr_un` into
+/// its own address type), `recv_from` here just returns tokio's own
+/// `tokio::net::unix::SocketAddr` directly.
 struct DtactUnixDatagram;
 
-/*
- A lock-free, non-blocking Unix-domain-socket listener registered with
- the dtact-io driver. Mirrors [`DtactTcpListener`]'s API.
- */
+/// A lock-free, non-blocking Unix-domain-socket listener registered with
+/// the dtact-io driver. Mirrors [`DtactTcpListener`]'s API.
 struct DtactUnixListener;
 
-/*
- Tokio-backed Unix-domain-socket listener. Mirrors the native backend's
- `DtactUnixListener` API surface.
- */
+/// Tokio-backed Unix-domain-socket listener. Mirrors the native backend's
+/// `DtactUnixListener` API surface.
 struct DtactUnixListener;
 
-/*
- A lock-free, non-blocking Unix-domain-socket stream registered with
- the dtact-io driver. Mirrors [`DtactTcpStream`]'s API.
- */
+/// A lock-free, non-blocking Unix-domain-socket stream registered with
+/// the dtact-io driver. Mirrors [`DtactTcpStream`]'s API.
 struct DtactUnixStream;
 
-/*
- Tokio-backed Unix-domain-socket stream. Mirrors the native backend's
- `DtactUnixStream` API surface.
- */
+/// Tokio-backed Unix-domain-socket stream. Mirrors the native backend's
+/// `DtactUnixStream` API surface.
 struct DtactUnixStream;
 
 extern "C" {
 
-/*
- Resolve `path` to an absolute path with all intermediate components
- resolved, writing it (NUL-terminated, truncated if it doesn't fit)
- into `out` (capacity `out_cap`).
-
- Returns the untruncated resolved path's byte length on success, or -1
- on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string; `out`, if non-null, must point to at
- least `out_cap` writable bytes.
- */
+/// Resolve `path` to an absolute path with all intermediate components
+/// resolved, writing it (NUL-terminated, truncated if it doesn't fit)
+/// into `out` (capacity `out_cap`).
+///
+/// Returns the untruncated resolved path's byte length on success, or -1
+/// on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string; `out`, if non-null, must point to at
+/// least `out_cap` writable bytes.
  ptrdiff_t dtact_util_fs_canonicalize(const char *aPath, char *aOut, size_t aOutCap) ;
 
-/*
- Copy the contents (and permission bits) of the file at `from` to `to`,
- returning the byte count copied, or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
- be valid NUL-terminated C strings.
- */
+/// Copy the contents (and permission bits) of the file at `from` to `to`,
+/// returning the byte count copied, or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
+/// be valid NUL-terminated C strings.
  int64_t dtact_util_fs_copy(const char *aFrom, const char *aTo) ;
 
-/*
- Create a single new directory. Unlike
- [`dtact_util_fs_create_dir_all`], fails if any parent component
- doesn't already exist. Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Create a single new directory. Unlike
+/// [`dtact_util_fs_create_dir_all`], fails if any parent component
+/// doesn't already exist. Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_create_dir(const char *aPath) ;
 
-/*
- Recursively create `path` and any missing parent directories. Returns
- 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Recursively create `path` and any missing parent directories. Returns
+/// 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_create_dir_all(const char *aPath) ;
 
-/*
- Close and free a file handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `file` must have
- come from a `dtact_util_fs_file_*` constructor and must not be used
- afterwards.
- */
+/// Close and free a file handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `file` must have
+/// come from a `dtact_util_fs_file_*` constructor and must not be used
+/// afterwards.
  void dtact_util_fs_file_close(DtactFile *aFile) ;
 
-/*
- Create (truncating) the file at `path`, returning an owning handle or
- null on error. Free with [`dtact_util_fs_file_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Create (truncating) the file at `path`, returning an owning handle or
+/// null on error. Free with [`dtact_util_fs_file_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  DtactFile *dtact_util_fs_file_create(const char *aPath) ;
 
-/*
- Open the existing file at `path` for reading, returning an owning handle
- or null on error. Free with [`dtact_util_fs_file_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Open the existing file at `path` for reading, returning an owning handle
+/// or null on error. Free with [`dtact_util_fs_file_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  DtactFile *dtact_util_fs_file_open(const char *aPath) ;
 
-/*
- Read up to `len` bytes from `file` (advancing its cursor) into `buf`.
- Returns the byte count read (0 = EOF) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `file` (advancing its cursor) into `buf`.
+/// Returns the byte count read (0 = EOF) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_fs_file_read(DtactFile *aFile, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Read up to `len` bytes from `file` at absolute `offset` (not affecting
- its cursor) into `buf`. Returns the byte count read (0 = EOF) or -1 on
- error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `file` at absolute `offset` (not affecting
+/// its cursor) into `buf`. Returns the byte count read (0 = EOF) or -1 on
+/// error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
 
 ptrdiff_t dtact_util_fs_file_read_at(DtactFile *aFile,
                                      uint8_t *aBuf,
@@ -400,34 +308,28 @@ ptrdiff_t dtact_util_fs_file_read_at(DtactFile *aFile,
                                      uint64_t aOffset)
 ;
 
-/*
- Flush `file`'s buffers to disk (`FlushFileBuffers`/`fsync`). Returns 0 on
- success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Flush `file`'s buffers to disk (`FlushFileBuffers`/`fsync`). Returns 0 on
+/// success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  int32_t dtact_util_fs_file_sync(DtactFile *aFile) ;
 
-/*
- Write `len` bytes from `buf` to `file` (advancing its cursor). Returns
- the byte count written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write `len` bytes from `buf` to `file` (advancing its cursor). Returns
+/// the byte count written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_fs_file_write(DtactFile *aFile, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Write `len` bytes from `buf` to `file` at absolute `offset` (not
- affecting its cursor). Returns the byte count written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write `len` bytes from `buf` to `file` at absolute `offset` (not
+/// affecting its cursor). Returns the byte count written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
 
 ptrdiff_t dtact_util_fs_file_write_at(DtactFile *aFile,
                                       const uint8_t *aBuf,
@@ -435,436 +337,364 @@ ptrdiff_t dtact_util_fs_file_write_at(DtactFile *aFile,
                                       uint64_t aOffset)
 ;
 
-/*
- Create a hard link at `dst` pointing at the same file as `src`.
- Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
- be valid NUL-terminated C strings.
- */
+/// Create a hard link at `dst` pointing at the same file as `src`.
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+/// be valid NUL-terminated C strings.
  int32_t dtact_util_fs_hard_link(const char *aSrc, const char *aDst) ;
 
-/*
- Initialize the fs backend with `workers` worker threads. Idempotent.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Initialize the fs backend with `workers` worker threads. Idempotent.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  void dtact_util_fs_init(size_t aWorkers) ;
 
-/*
- Read the entire contents of the file at `path` into `buf` (capacity
- `len`).
-
- Returns the file's total byte length (which may exceed `len`, in
- which case `buf` received only the first `len` bytes) on success, or
- -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string; `buf`, if non-null, must point to at
- least `len` writable bytes.
- */
+/// Read the entire contents of the file at `path` into `buf` (capacity
+/// `len`).
+///
+/// Returns the file's total byte length (which may exceed `len`, in
+/// which case `buf` received only the first `len` bytes) on success, or
+/// -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string; `buf`, if non-null, must point to at
+/// least `len` writable bytes.
  ptrdiff_t dtact_util_fs_read(const char *aPath, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Read the target of the symbolic link at `path` into `out` (capacity
- `out_cap`), NUL-terminated and truncated if it doesn't fit.
-
- Returns the untruncated target's byte length (which may exceed
- `out_cap`) on success, or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string; `out`, if non-null, must point to at
- least `out_cap` writable bytes.
- */
+/// Read the target of the symbolic link at `path` into `out` (capacity
+/// `out_cap`), NUL-terminated and truncated if it doesn't fit.
+///
+/// Returns the untruncated target's byte length (which may exceed
+/// `out_cap`) on success, or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string; `out`, if non-null, must point to at
+/// least `out_cap` writable bytes.
  ptrdiff_t dtact_util_fs_read_link(const char *aPath, char *aOut, size_t aOutCap) ;
 
-/*
- Read the entire contents of the file at `path` as UTF-8 text into
- `out` (capacity `out_cap`), NUL-terminated and truncated if it doesn't
- fit.
-
- Returns the untruncated content's byte length on success, or -1 on
- error (including `InvalidData` if the file isn't valid UTF-8).
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string; `out`, if non-null, must point to at
- least `out_cap` writable bytes.
- */
+/// Read the entire contents of the file at `path` as UTF-8 text into
+/// `out` (capacity `out_cap`), NUL-terminated and truncated if it doesn't
+/// fit.
+///
+/// Returns the untruncated content's byte length on success, or -1 on
+/// error (including `InvalidData` if the file isn't valid UTF-8).
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string; `out`, if non-null, must point to at
+/// least `out_cap` writable bytes.
  ptrdiff_t dtact_util_fs_read_to_string(const char *aPath, char *aOut, size_t aOutCap) ;
 
-/*
- Remove an empty directory. Fails if `path` is non-empty — see
- [`dtact_util_fs_remove_dir_all`] for the recursive version. Returns 0
- on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Remove an empty directory. Fails if `path` is non-empty — see
+/// [`dtact_util_fs_remove_dir_all`] for the recursive version. Returns 0
+/// on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_remove_dir(const char *aPath) ;
 
-/*
- Recursively remove a directory and everything under it. Returns 0 on
- success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Recursively remove a directory and everything under it. Returns 0 on
+/// success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_remove_dir_all(const char *aPath) ;
 
-/*
- Remove (unlink) the file at `path`. Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Remove (unlink) the file at `path`. Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_remove_file(const char *aPath) ;
 
-/*
- Rename (move) the file or directory at `from` to `to`, replacing `to`
- if it already exists. Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
- be valid NUL-terminated C strings.
- */
+/// Rename (move) the file or directory at `from` to `to`, replacing `to`
+/// if it already exists. Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `from`/`to` must
+/// be valid NUL-terminated C strings.
  int32_t dtact_util_fs_rename(const char *aFrom, const char *aTo) ;
 
-/*
- Set `path` read-only (`readonly != 0`) or read-write (`readonly ==
- 0`).
-
- A thin, portable slice of `std::fs::Permissions` — the only bit
- consistently meaningful to set/query across Unix and Windows. Returns
- 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Set `path` read-only (`readonly != 0`) or read-write (`readonly ==
+/// 0`).
+///
+/// A thin, portable slice of `std::fs::Permissions` — the only bit
+/// consistently meaningful to set/query across Unix and Windows. Returns
+/// 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_set_readonly(const char *aPath, int32_t aReadonly) ;
 
-/*
- Create a symbolic link at `dst` pointing at `src`. Unix only —
- Windows callers need [`dtact_util_fs_symlink_dir`]/
- [`dtact_util_fs_symlink_file`] instead. Returns 0 on success, -1 on
- error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
- be valid NUL-terminated C strings.
- */
+/// Create a symbolic link at `dst` pointing at `src`. Unix only —
+/// Windows callers need [`dtact_util_fs_symlink_dir`]/
+/// [`dtact_util_fs_symlink_file`] instead. Returns 0 on success, -1 on
+/// error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+/// be valid NUL-terminated C strings.
  int32_t dtact_util_fs_symlink(const char *aSrc, const char *aDst) ;
 
-/*
- Create a directory symbolic link at `dst` pointing at `src`. Windows
- only — see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns
- 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
- be valid NUL-terminated C strings.
- */
+/// Create a directory symbolic link at `dst` pointing at `src`. Windows
+/// only — see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns
+/// 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+/// be valid NUL-terminated C strings.
  int32_t dtact_util_fs_symlink_dir(const char *aSrc, const char *aDst) ;
 
-/*
- Create a file symbolic link at `dst` pointing at `src`. Windows only —
- see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns 0 on
- success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
- be valid NUL-terminated C strings.
- */
+/// Create a file symbolic link at `dst` pointing at `src`. Windows only —
+/// see [`dtact_util_fs_symlink`] for the Unix equivalent. Returns 0 on
+/// success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `src`/`dst` must
+/// be valid NUL-terminated C strings.
  int32_t dtact_util_fs_symlink_file(const char *aSrc, const char *aDst) ;
 
-/*
- Check whether `path` exists, following symlinks. Returns `1` if it
- exists, `0` if it doesn't, or `-1` on any other error (e.g.
- `PermissionDenied` on a parent directory).
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string.
- */
+/// Check whether `path` exists, following symlinks. Returns `1` if it
+/// exists, `0` if it doesn't, or `-1` on any other error (e.g.
+/// `PermissionDenied` on a parent directory).
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_fs_try_exists(const char *aPath) ;
 
-/*
- Write `len` bytes from `buf` to the file at `path`, creating it if it
- doesn't exist and truncating it if it does. Returns 0 on success, -1
- on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `path` must be a
- valid NUL-terminated C string; `buf` must point to at least `len`
- readable bytes.
- */
+/// Write `len` bytes from `buf` to the file at `path`, creating it if it
+/// doesn't exist and truncating it if it does. Returns 0 on success, -1
+/// on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string; `buf` must point to at least `len`
+/// readable bytes.
  int32_t dtact_util_fs_write(const char *aPath, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Initialize the TCP runtime with `workers` I/O worker threads. Idempotent;
- the first call wins.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Initialize the TCP runtime with `workers` I/O worker threads. Idempotent;
+/// the first call wins.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  void dtact_util_io_init(size_t aWorkers) ;
 
-/*
- Block until a client connects, returning an owning stream handle (free
- with [`dtact_util_io_stream_close`]) or null on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `listener` must be a
- live handle from [`dtact_util_io_listener_bind`].
- */
+/// Block until a client connects, returning an owning stream handle (free
+/// with [`dtact_util_io_stream_close`]) or null on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `listener` must be a
+/// live handle from [`dtact_util_io_listener_bind`].
  DtactTcpStream *dtact_util_io_listener_accept(DtactTcpListener *aListener) ;
 
-/*
- Bind a TCP listener to `addr` (e.g. `"127.0.0.1:8080"`). Returns an
- owning handle or null on error. Free with
- [`dtact_util_io_listener_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Bind a TCP listener to `addr` (e.g. `"127.0.0.1:8080"`). Returns an
+/// owning handle or null on error. Free with
+/// [`dtact_util_io_listener_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactTcpListener *dtact_util_io_listener_bind(const char *aAddr) ;
 
-/*
- Close and free a listener handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a listener handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_listener_close(DtactTcpListener *aListener) ;
 
-/*
- Resolve `host` (a `"host:port"` string) to zero or more socket
- addresses.
-
- Writes them as a single `;`-separated NUL-terminated string (e.g.
- `"127.0.0.1:80;[::1]:80"`) into `out` (capacity `out_cap`, truncated
- at a whole-address boundary if it doesn't fit). Returns the number of
- addresses found (which may be more than fit in
- `out`), or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `host` must be a
- valid NUL-terminated C string. `out`, if non-null, must point to at
- least `out_cap` writable bytes.
- */
+/// Resolve `host` (a `"host:port"` string) to zero or more socket
+/// addresses.
+///
+/// Writes them as a single `;`-separated NUL-terminated string (e.g.
+/// `"127.0.0.1:80;[::1]:80"`) into `out` (capacity `out_cap`, truncated
+/// at a whole-address boundary if it doesn't fit). Returns the number of
+/// addresses found (which may be more than fit in
+/// `out`), or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `host` must be a
+/// valid NUL-terminated C string. `out`, if non-null, must point to at
+/// least `out_cap` writable bytes.
  ptrdiff_t dtact_util_io_lookup_host(const char *aHost, char *aOut, size_t aOutCap) ;
 
-/*
- Connect to the named-pipe server instance named `name`, blocking until
- connected (retrying while every existing instance is busy).
-
- Returns an
- owning handle or null on error. Free with [`dtact_util_io_pipe_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `name` must be a
- valid NUL-terminated C string.
- */
+/// Connect to the named-pipe server instance named `name`, blocking until
+/// connected (retrying while every existing instance is busy).
+///
+/// Returns an
+/// owning handle or null on error. Free with [`dtact_util_io_pipe_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `name` must be a
+/// valid NUL-terminated C string.
  DtactNamedPipeHandle *dtact_util_io_pipe_client_connect(const char *aName) ;
 
-/*
- Close and free a connected named-pipe handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a connected named-pipe handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_pipe_close(DtactNamedPipeHandle *aPipe) ;
 
-/*
- Read up to `len` bytes from `pipe` into `buf`. Returns the byte count
- read (0 = orderly close by peer) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `pipe` into `buf`. Returns the byte count
+/// read (0 = orderly close by peer) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_pipe_read(DtactNamedPipeHandle *aPipe, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Close and free a not-yet-connected pipe server handle. Passing null is
- a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a not-yet-connected pipe server handle. Passing null is
+/// a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_pipe_server_close(DtactNamedPipeServer *aServer) ;
 
-/*
- Block until a client connects to `server`.
-
- Takes ownership of `server`
- (it must not be used again, freed, or passed to this function twice,
- regardless of whether this call succeeds) and returns an owning
- connected-handle pointer, or null on error. Free the result with
- [`dtact_util_io_pipe_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `server` must be a
- live handle from [`dtact_util_io_pipe_server_create`].
- */
+/// Block until a client connects to `server`.
+///
+/// Takes ownership of `server`
+/// (it must not be used again, freed, or passed to this function twice,
+/// regardless of whether this call succeeds) and returns an owning
+/// connected-handle pointer, or null on error. Free the result with
+/// [`dtact_util_io_pipe_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `server` must be a
+/// live handle from [`dtact_util_io_pipe_server_create`].
  DtactNamedPipeHandle *dtact_util_io_pipe_server_connect(DtactNamedPipeServer *aServer) ;
 
-/*
- Create a new named-pipe server instance named `name`.
-
- E.g. `r"\\.\pipe\my-app"`. Returns an owning handle or null on error. Every
- instance accepts exactly one client — see
- [`crate::io::DtactNamedPipeServer`]'s own doc for why there's no
- persistent listener type here the way TCP/Unix sockets have one. Free
- with [`dtact_util_io_pipe_server_close`], or consume it with
- [`dtact_util_io_pipe_server_connect`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `name` must be a
- valid NUL-terminated C string.
- */
+/// Create a new named-pipe server instance named `name`.
+///
+/// E.g. `r"\\.\pipe\my-app"`. Returns an owning handle or null on error. Every
+/// instance accepts exactly one client — see
+/// [`crate::io::DtactNamedPipeServer`]'s own doc for why there's no
+/// persistent listener type here the way TCP/Unix sockets have one. Free
+/// with [`dtact_util_io_pipe_server_close`], or consume it with
+/// [`dtact_util_io_pipe_server_connect`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `name` must be a
+/// valid NUL-terminated C string.
  DtactNamedPipeServer *dtact_util_io_pipe_server_create(const char *aName) ;
 
-/*
- Write up to `len` bytes from `buf` to `pipe`. Returns the byte count
- written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write up to `len` bytes from `buf` to `pipe`. Returns the byte count
+/// written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_pipe_write(DtactNamedPipeHandle *aPipe, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Close and free a TCP stream handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a TCP stream handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_stream_close(DtactTcpStream *aStream) ;
 
-/*
- Connect to `addr`, blocking until connected. Returns an owning stream
- handle or null on error. Free with [`dtact_util_io_stream_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Connect to `addr`, blocking until connected. Returns an owning stream
+/// handle or null on error. Free with [`dtact_util_io_stream_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactTcpStream *dtact_util_io_stream_connect(const char *aAddr) ;
 
-/*
- Read up to `len` bytes from `stream` into `buf`. Returns the byte count
- read (0 = orderly shutdown by peer) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `stream` into `buf`. Returns the byte count
+/// read (0 = orderly shutdown by peer) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_stream_read(DtactTcpStream *aStream, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Write up to `len` bytes from `buf` to `stream`. Returns the byte count
- written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write up to `len` bytes from `buf` to `stream`. Returns the byte count
+/// written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_stream_write(DtactTcpStream *aStream, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Bind a UDP socket to `addr` (e.g. `"127.0.0.1:8080"`, or `"0.0.0.0:0"`
- for an ephemeral port). Returns an owning handle or null on error. Free
- with [`dtact_util_io_udp_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Bind a UDP socket to `addr` (e.g. `"127.0.0.1:8080"`, or `"0.0.0.0:0"`
+/// for an ephemeral port). Returns an owning handle or null on error. Free
+/// with [`dtact_util_io_udp_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactUdpSocket *dtact_util_io_udp_bind(const char *aAddr) ;
 
-/*
- Close and free a UDP socket handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a UDP socket handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_udp_close(DtactUdpSocket *aSock) ;
 
-/*
- Connect `sock` to `addr` so [`dtact_util_io_udp_send`]/
- [`dtact_util_io_udp_recv`] can omit the peer address. Returns 0 on
- success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Connect `sock` to `addr` so [`dtact_util_io_udp_send`]/
+/// [`dtact_util_io_udp_recv`] can omit the peer address. Returns 0 on
+/// success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_io_udp_connect(DtactUdpSocket *aSock, const char *aAddr) ;
 
-/*
- Receive a datagram from the connected peer into `buf`. Returns the byte
- count received, or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Receive a datagram from the connected peer into `buf`. Returns the byte
+/// count received, or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_udp_recv(DtactUdpSocket *aSock, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Receive a single datagram into `buf` (capacity `len`).
-
- On success writes the sender's `"host:port"` address as a
- NUL-terminated string into `out_addr` (capacity `out_addr_cap`,
- truncated if it doesn't fit) and returns the byte count received;
- returns -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `out_addr`, if
- non-null, must point to at least `out_addr_cap` writable bytes.
- */
+/// Receive a single datagram into `buf` (capacity `len`).
+///
+/// On success writes the sender's `"host:port"` address as a
+/// NUL-terminated string into `out_addr` (capacity `out_addr_cap`,
+/// truncated if it doesn't fit) and returns the byte count received;
+/// returns -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `out_addr`, if
+/// non-null, must point to at least `out_addr_cap` writable bytes.
 
 ptrdiff_t dtact_util_io_udp_recv_from(DtactUdpSocket *aSock,
                                       uint8_t *aBuf,
@@ -873,27 +703,23 @@ ptrdiff_t dtact_util_io_udp_recv_from(DtactUdpSocket *aSock,
                                       size_t aOutAddrCap)
 ;
 
-/*
- Send `len` bytes from `buf` to the connected peer (see
- [`dtact_util_io_udp_connect`]). Returns the byte count sent, or -1 on
- error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Send `len` bytes from `buf` to the connected peer (see
+/// [`dtact_util_io_udp_connect`]). Returns the byte count sent, or -1 on
+/// error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_udp_send(DtactUdpSocket *aSock, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Send `len` bytes from `buf` as a single datagram to `target` (a
- NUL-terminated `"host:port"` string). Returns the byte count sent, or -1
- on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `target` must be a
- valid NUL-terminated C string.
- */
+/// Send `len` bytes from `buf` as a single datagram to `target` (a
+/// NUL-terminated `"host:port"` string). Returns the byte count sent, or -1
+/// on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `target` must be a
+/// valid NUL-terminated C string.
 
 ptrdiff_t dtact_util_io_udp_send_to(DtactUdpSocket *aSock,
                                     const uint8_t *aBuf,
@@ -901,65 +727,55 @@ ptrdiff_t dtact_util_io_udp_send_to(DtactUdpSocket *aSock,
                                     const char *aTarget)
 ;
 
-/*
- Bind a Unix-domain datagram socket to the filesystem path `addr`.
- Returns an owning handle or null on error. Free with
- [`dtact_util_io_unix_datagram_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Bind a Unix-domain datagram socket to the filesystem path `addr`.
+/// Returns an owning handle or null on error. Free with
+/// [`dtact_util_io_unix_datagram_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactUnixDatagram *dtact_util_io_unix_datagram_bind(const char *aAddr) ;
 
-/*
- Close and free a Unix-domain datagram socket handle. Passing null is a
- no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a Unix-domain datagram socket handle. Passing null is a
+/// no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_unix_datagram_close(DtactUnixDatagram *aSock) ;
 
-/*
- Connect `sock` to the path `addr` so
- [`dtact_util_io_unix_datagram_send`]/
- [`dtact_util_io_unix_datagram_recv`] can omit the peer address.
- Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Connect `sock` to the path `addr` so
+/// [`dtact_util_io_unix_datagram_send`]/
+/// [`dtact_util_io_unix_datagram_recv`] can omit the peer address.
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  int32_t dtact_util_io_unix_datagram_connect(DtactUnixDatagram *aSock, const char *aAddr) ;
 
-/*
- Receive a datagram from the connected peer into `buf`. Returns the
- byte count received, or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Receive a datagram from the connected peer into `buf`. Returns the
+/// byte count received, or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_unix_datagram_recv(DtactUnixDatagram *aSock, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Receive a single datagram into `buf` (capacity `len`).
-
- On success writes the sender's path (or an empty string if unnamed —
- see [`crate::io::DtactUnixSocketAddr::is_unnamed`]) as a
- NUL-terminated string into `out_addr` (capacity `out_addr_cap`,
- truncated if it doesn't fit) and returns the byte count received;
- returns -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `out_addr`, if
- non-null, must point to at least `out_addr_cap` writable bytes.
- */
+/// Receive a single datagram into `buf` (capacity `len`).
+///
+/// On success writes the sender's path (or an empty string if unnamed —
+/// see [`crate::io::DtactUnixSocketAddr::is_unnamed`]) as a
+/// NUL-terminated string into `out_addr` (capacity `out_addr_cap`,
+/// truncated if it doesn't fit) and returns the byte count received;
+/// returns -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `out_addr`, if
+/// non-null, must point to at least `out_addr_cap` writable bytes.
 
 ptrdiff_t dtact_util_io_unix_datagram_recv_from(DtactUnixDatagram *aSock,
                                                 uint8_t *aBuf,
@@ -968,30 +784,26 @@ ptrdiff_t dtact_util_io_unix_datagram_recv_from(DtactUnixDatagram *aSock,
                                                 size_t aOutAddrCap)
 ;
 
-/*
- Send `len` bytes from `buf` to the connected peer (see
- [`dtact_util_io_unix_datagram_connect`]). Returns the byte count sent,
- or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Send `len` bytes from `buf` to the connected peer (see
+/// [`dtact_util_io_unix_datagram_connect`]). Returns the byte count sent,
+/// or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
 
 ptrdiff_t dtact_util_io_unix_datagram_send(DtactUnixDatagram *aSock,
                                            const uint8_t *aBuf,
                                            size_t aLen)
 ;
 
-/*
- Send `len` bytes from `buf` as a single datagram to the socket bound
- at `target`. Returns the byte count sent, or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `target` must be
- a valid NUL-terminated C string.
- */
+/// Send `len` bytes from `buf` as a single datagram to the socket bound
+/// at `target`. Returns the byte count sent, or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `target` must be
+/// a valid NUL-terminated C string.
 
 ptrdiff_t dtact_util_io_unix_datagram_send_to(DtactUnixDatagram *aSock,
                                               const uint8_t *aBuf,
@@ -999,76 +811,64 @@ ptrdiff_t dtact_util_io_unix_datagram_send_to(DtactUnixDatagram *aSock,
                                               const char *aTarget)
 ;
 
-/*
- Block until a client connects, returning an owning stream handle (free
- with [`dtact_util_io_unix_stream_close`]) or null on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `listener` must
- be a live handle from [`dtact_util_io_unix_listener_bind`].
- */
+/// Block until a client connects, returning an owning stream handle (free
+/// with [`dtact_util_io_unix_stream_close`]) or null on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `listener` must
+/// be a live handle from [`dtact_util_io_unix_listener_bind`].
  DtactUnixStream *dtact_util_io_unix_listener_accept(DtactUnixListener *aListener) ;
 
-/*
- Bind a Unix-domain-socket listener to the filesystem path `addr`.
- Returns an owning handle or null on error. Free with
- [`dtact_util_io_unix_listener_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Bind a Unix-domain-socket listener to the filesystem path `addr`.
+/// Returns an owning handle or null on error. Free with
+/// [`dtact_util_io_unix_listener_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactUnixListener *dtact_util_io_unix_listener_bind(const char *aAddr) ;
 
-/*
- Close and free a Unix-domain-socket listener handle. Passing null is a
- no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a Unix-domain-socket listener handle. Passing null is a
+/// no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_unix_listener_close(DtactUnixListener *aListener) ;
 
-/*
- Close and free a Unix-domain-socket stream handle. Passing null is a
- no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close and free a Unix-domain-socket stream handle. Passing null is a
+/// no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_io_unix_stream_close(DtactUnixStream *aStream) ;
 
-/*
- Connect to the Unix-domain-socket path `addr`, blocking until
- connected. Returns an owning stream handle or null on error. Free with
- [`dtact_util_io_unix_stream_close`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `addr` must be a
- valid NUL-terminated C string.
- */
+/// Connect to the Unix-domain-socket path `addr`, blocking until
+/// connected. Returns an owning stream handle or null on error. Free with
+/// [`dtact_util_io_unix_stream_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `addr` must be a
+/// valid NUL-terminated C string.
  DtactUnixStream *dtact_util_io_unix_stream_connect(const char *aAddr) ;
 
-/*
- Fetch `stream`'s connected peer's credentials into `out_uid`/
- `out_gid`/`out_pid`.
-
- `out_pid` is set to -1 on platforms that don't report a PID — see
- [`crate::io::DtactUnixStream::peer_cred`]. Any of the three output
- pointers may be null to skip that field. Returns 0 on success, -1 on
- error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `out_uid`/
- `out_gid`/`out_pid`, if non-null, must each point to one writable
- value of the matching type.
- */
+/// Fetch `stream`'s connected peer's credentials into `out_uid`/
+/// `out_gid`/`out_pid`.
+///
+/// `out_pid` is set to -1 on platforms that don't report a PID — see
+/// [`crate::io::DtactUnixStream::peer_cred`]. Any of the three output
+/// pointers may be null to skip that field. Returns 0 on success, -1 on
+/// error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `out_uid`/
+/// `out_gid`/`out_pid`, if non-null, must each point to one writable
+/// value of the matching type.
 
 int32_t dtact_util_io_unix_stream_peer_cred(DtactUnixStream *aStream,
                                             uint32_t *aOutUid,
@@ -1076,143 +876,119 @@ int32_t dtact_util_io_unix_stream_peer_cred(DtactUnixStream *aStream,
                                             int32_t *aOutPid)
 ;
 
-/*
- Read up to `len` bytes from `stream` into `buf`. Returns the byte
- count read (0 = orderly shutdown by peer) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `stream` into `buf`. Returns the byte
+/// count read (0 = orderly shutdown by peer) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_io_unix_stream_read(DtactUnixStream *aStream, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Write up to `len` bytes from `buf` to `stream`. Returns the byte count
- written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write up to `len` bytes from `buf` to `stream`. Returns the byte count
+/// written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
 
 ptrdiff_t dtact_util_io_unix_stream_write(DtactUnixStream *aStream,
                                           const uint8_t *aBuf,
                                           size_t aLen)
 ;
 
-/*
- Return the current thread's last-error message as a NUL-terminated C
- string, or null if no error has been recorded since the last successful
- call.
-
- The returned pointer is owned by the library and remains valid only
- until the next `dtact-util` FFI call on this thread. Do not free it.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. This function reads
- only thread-local state and takes no pointer arguments.
- */
+/// Return the current thread's last-error message as a NUL-terminated C
+/// string, or null if no error has been recorded since the last successful
+/// call.
+///
+/// The returned pointer is owned by the library and remains valid only
+/// until the next `dtact-util` FFI call on this thread. Do not free it.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. This function reads
+/// only thread-local state and takes no pointer arguments.
  const char *dtact_util_last_error_message() ;
 
-/*
- Free a child handle without waiting (leaves a zombie on Unix if the
- child hasn't been reaped). Prefer [`dtact_util_process_child_wait`].
- Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Free a child handle without waiting (leaves a zombie on Unix if the
+/// child hasn't been reaped). Prefer [`dtact_util_process_child_wait`].
+/// Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_process_child_free(DtactChild *aChild) ;
 
-/*
- Return the child's OS process id, or 0 if `child` is null.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Return the child's OS process id, or 0 if `child` is null.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  uint32_t dtact_util_process_child_id(DtactChild *aChild) ;
 
-/*
- Kill the child (does not reap it — still call
- [`dtact_util_process_child_wait`] or [`dtact_util_process_child_free`]).
- Returns 0 on success, -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Kill the child (does not reap it — still call
+/// [`dtact_util_process_child_wait`] or [`dtact_util_process_child_free`]).
+/// Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  int32_t dtact_util_process_child_kill(DtactChild *aChild) ;
 
-/*
- Take ownership of the child's stderr pipe (only if spawned with
- [`DTACT_STDERR_PIPE`]). Returns null if unavailable or already taken.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Take ownership of the child's stderr pipe (only if spawned with
+/// [`DTACT_STDERR_PIPE`]). Returns null if unavailable or already taken.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  DtactChildStderr *dtact_util_process_child_take_stderr(DtactChild *aChild) ;
 
-/*
- Take ownership of the child's stdin pipe (only if spawned with
- [`DTACT_STDIN_PIPE`]). Returns null if unavailable or already taken.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Take ownership of the child's stdin pipe (only if spawned with
+/// [`DTACT_STDIN_PIPE`]). Returns null if unavailable or already taken.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  DtactChildStdin *dtact_util_process_child_take_stdin(DtactChild *aChild) ;
 
-/*
- Take ownership of the child's stdout pipe (only if spawned with
- [`DTACT_STDOUT_PIPE`]). Returns null if unavailable or already taken.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Take ownership of the child's stdout pipe (only if spawned with
+/// [`DTACT_STDOUT_PIPE`]). Returns null if unavailable or already taken.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  DtactChildStdout *dtact_util_process_child_take_stdout(DtactChild *aChild) ;
 
-/*
- Block until the child exits, writing its exit code into `*out_code`.
-
- **Consumes and frees `child`** — do not use the handle afterwards.
- Returns 0 on success, -1 on error (e.g. the platform reported no exit
- code, as for a signal-terminated process on Unix).
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `child` must be a
- live handle; `out_code`, if non-null, must be writable.
- */
+/// Block until the child exits, writing its exit code into `*out_code`.
+///
+/// **Consumes and frees `child`** — do not use the handle afterwards.
+/// Returns 0 on success, -1 on error (e.g. the platform reported no exit
+/// code, as for a signal-terminated process on Unix).
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `child` must be a
+/// live handle; `out_code`, if non-null, must be writable.
  int32_t dtact_util_process_child_wait(DtactChild *aChild, int32_t *aOutCode) ;
 
-/*
- Initialize the process backend's blocking-op pool with `workers`
- threads. Idempotent (the pool also self-initializes on first use).
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Initialize the process backend's blocking-op pool with `workers`
+/// threads. Idempotent (the pool also self-initializes on first use).
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  void dtact_util_process_init(size_t aWorkers) ;
 
-/*
- Spawn `program` as a child process.
-
- Takes `arg_count` arguments (`argv[0..arg_count]`, none of which is the
- program name) and the given `stdio_flags` (see [`DTACT_STDIN_PIPE`]
- etc.). Returns an owning child handle or null on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `program` must be a
- valid C string; `argv` must be non-null when `arg_count > 0` and point to
- `arg_count` valid C-string pointers.
- */
+/// Spawn `program` as a child process.
+///
+/// Takes `arg_count` arguments (`argv[0..arg_count]`, none of which is the
+/// program name) and the given `stdio_flags` (see [`DTACT_STDIN_PIPE`]
+/// etc.). Returns an owning child handle or null on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `program` must be a
+/// valid C string; `argv` must be non-null when `arg_count > 0` and point to
+/// `arg_count` valid C-string pointers.
 
 DtactChild *dtact_util_process_spawn(const char *aProgram,
                                      const char *const *aArgv,
@@ -1220,234 +996,190 @@ DtactChild *dtact_util_process_spawn(const char *aProgram,
                                      uint32_t aStdioFlags)
 ;
 
-/*
- Free the child's stderr pipe handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Free the child's stderr pipe handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_process_stderr_free(DtactChildStderr *aStderr) ;
 
-/*
- Read up to `len` bytes from the child's stderr into `buf`. Returns the
- byte count read (0 = EOF) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from the child's stderr into `buf`. Returns the
+/// byte count read (0 = EOF) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_process_stderr_read(DtactChildStderr *aStderr, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Close (free) the child's stdin pipe, letting the child observe EOF.
- Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Close (free) the child's stdin pipe, letting the child observe EOF.
+/// Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_process_stdin_close(DtactChildStdin *aStdin) ;
 
-/*
- Write `len` bytes from `buf` to the child's stdin. Returns the byte count
- written or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write `len` bytes from `buf` to the child's stdin. Returns the byte count
+/// written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
 
 ptrdiff_t dtact_util_process_stdin_write(DtactChildStdin *aStdin,
                                          const uint8_t *aBuf,
                                          size_t aLen)
 ;
 
-/*
- Free the child's stdout pipe handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Free the child's stdout pipe handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_process_stdout_free(DtactChildStdout *aStdout) ;
 
-/*
- Read up to `len` bytes from the child's stdout into `buf`. Returns the
- byte count read (0 = EOF) or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from the child's stdout into `buf`. Returns the
+/// byte count read (0 = EOF) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_process_stdout_read(DtactChildStdout *aStdout, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Register a listener for Ctrl+Break (`CTRL_BREAK_EVENT`), returning an
- owning handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for Ctrl+Break (`CTRL_BREAK_EVENT`), returning an
+/// owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_ctrl_break() ;
 
-/*
- Register a listener for Ctrl+C (`CTRL_C_EVENT`), returning an owning
- handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for Ctrl+C (`CTRL_C_EVENT`), returning an owning
+/// handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_ctrl_c() ;
 
-/*
- Register a listener for console-window-close (`CTRL_CLOSE_EVENT`),
- returning an owning handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for console-window-close (`CTRL_CLOSE_EVENT`),
+/// returning an owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_ctrl_close() ;
 
-/*
- Register a listener for user-logoff (`CTRL_LOGOFF_EVENT`), returning an
- owning handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for user-logoff (`CTRL_LOGOFF_EVENT`), returning an
+/// owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_ctrl_logoff() ;
 
-/*
- Register a listener for system-shutdown (`CTRL_SHUTDOWN_EVENT`),
- returning an owning handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for system-shutdown (`CTRL_SHUTDOWN_EVENT`),
+/// returning an owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_ctrl_shutdown() ;
 
-/*
- Free a signal listener handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Free a signal listener handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_signal_free(DtactSignalStream *aStream) ;
 
-/*
- Block until this signal is next delivered.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `stream` must be a
- live handle from one of the signal constructors above.
- */
+/// Block until this signal is next delivered.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `stream` must be a
+/// live handle from one of the signal constructors above.
  void dtact_util_signal_recv(DtactSignalStream *aStream) ;
 
-/*
- Register a listener for a raw signal number (`libc::SIGINT` etc.),
- returning an owning handle. Free with [`dtact_util_signal_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Register a listener for a raw signal number (`libc::SIGINT` etc.),
+/// returning an owning handle. Free with [`dtact_util_signal_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactSignalStream *dtact_util_signal_register(int aSignum) ;
 
-/*
- Free (close) a stream endpoint. Dropping it lets the peer observe EOF on
- its next read. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Free (close) a stream endpoint. Dropping it lets the peer observe EOF on
+/// its next read. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  void dtact_util_stream_free(DtactStream *aStream) ;
 
-/*
- Create a connected pair of duplex streams.
-
- Each side buffers `capacity` bytes per direction (rounded up to a power
- of two). On success writes two owning handles into `out_a` / `out_b` and
- returns 0; on error returns -1 and records a message.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `out_a` and `out_b`
- must be non-null, writable, and point to storage for one pointer each.
- */
+/// Create a connected pair of duplex streams.
+///
+/// Each side buffers `capacity` bytes per direction (rounded up to a power
+/// of two). On success writes two owning handles into `out_a` / `out_b` and
+/// returns 0; on error returns -1 and records a message.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `out_a` and `out_b`
+/// must be non-null, writable, and point to storage for one pointer each.
  int32_t dtact_util_stream_pair_create(size_t aCapacity, DtactStream **aOutA, DtactStream **aOutB) ;
 
-/*
- Read up to `len` bytes from `stream` into `buf`. Returns the number of
- bytes read (0 = EOF, peer's write half dropped), or -1 on error.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Read up to `len` bytes from `stream` into `buf`. Returns the number of
+/// bytes read (0 = EOF, peer's write half dropped), or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_stream_read(DtactStream *aStream, uint8_t *aBuf, size_t aLen) ;
 
-/*
- Write up to `len` bytes from `buf` into `stream`. Returns the number of
- bytes written, or -1 on error (e.g. the peer dropped its read half).
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract.
- */
+/// Write up to `len` bytes from `buf` into `stream`. Returns the number of
+/// bytes written, or -1 on error (e.g. the peer dropped its read half).
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
  ptrdiff_t dtact_util_stream_write(DtactStream *aStream, const uint8_t *aBuf, size_t aLen) ;
 
-/*
- Create a repeating interval timer with the given period in milliseconds.
-
- Returns an owning handle, or null if `period_millis` is 0 (an error is
- recorded). Free with [`dtact_util_timer_interval_free`].
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Create a repeating interval timer with the given period in milliseconds.
+///
+/// Returns an owning handle, or null if `period_millis` is 0 (an error is
+/// recorded). Free with [`dtact_util_timer_interval_free`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  DtactInterval *dtact_util_timer_interval_create(uint64_t aPeriodMillis) ;
 
-/*
- Free an interval handle. Passing null is a no-op.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `interval` must have
- come from [`dtact_util_timer_interval_create`] and must not be used
- afterwards.
- */
+/// Free an interval handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `interval` must have
+/// come from [`dtact_util_timer_interval_create`] and must not be used
+/// afterwards.
  void dtact_util_timer_interval_free(DtactInterval *aInterval) ;
 
-/*
- Block until this interval's next tick fires.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. `interval` must be a
- live handle from [`dtact_util_timer_interval_create`].
- */
+/// Block until this interval's next tick fires.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `interval` must be a
+/// live handle from [`dtact_util_timer_interval_create`].
  void dtact_util_timer_interval_tick(DtactInterval *aInterval) ;
 
-/*
- Block the calling thread for `millis` milliseconds using the native
- timer wheel.
-
- # Safety
-
- See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
- */
+/// Block the calling thread for `millis` milliseconds using the native
+/// timer wheel.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  void dtact_util_timer_sleep_ms(uint64_t aMillis) ;
 
 }  // extern "C"
 
-#endif  // DTACT_UTIL_H
+#endif  // DTACT_UTIL_HPP

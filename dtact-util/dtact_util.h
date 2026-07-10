@@ -306,7 +306,11 @@ extern "C" {
  valid NUL-terminated C string; `out`, if non-null, must point to at
  least `out_cap` writable bytes.
  */
- ptrdiff_t dtact_util_fs_canonicalize(const char *aPath, char *aOut, size_t aOutCap) ;
+
+ptrdiff_t dtact_util_fs_canonicalize(const char *aPath,
+                                     char *aOut,
+                                     size_t aOutCap)
+;
 
 /*
  Copy the contents (and permission bits) of the file at `from` to `to`,
@@ -383,7 +387,11 @@ extern "C" {
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_fs_file_read(struct DtactFile *aFile, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_fs_file_read(struct DtactFile *aFile,
+                                  uint8_t *aBuf,
+                                  size_t aLen)
+;
 
 /*
  Read up to `len` bytes from `file` at absolute `offset` (not affecting
@@ -419,7 +427,11 @@ ptrdiff_t dtact_util_fs_file_read_at(struct DtactFile *aFile,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_fs_file_write(struct DtactFile *aFile, const uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_fs_file_write(struct DtactFile *aFile,
+                                   const uint8_t *aBuf,
+                                   size_t aLen)
+;
 
 /*
  Write `len` bytes from `buf` to `file` at absolute `offset` (not
@@ -485,7 +497,11 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  valid NUL-terminated C string; `out`, if non-null, must point to at
  least `out_cap` writable bytes.
  */
- ptrdiff_t dtact_util_fs_read_link(const char *aPath, char *aOut, size_t aOutCap) ;
+
+ptrdiff_t dtact_util_fs_read_link(const char *aPath,
+                                  char *aOut,
+                                  size_t aOutCap)
+;
 
 /*
  Read the entire contents of the file at `path` as UTF-8 text into
@@ -501,7 +517,11 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  valid NUL-terminated C string; `out`, if non-null, must point to at
  least `out_cap` writable bytes.
  */
- ptrdiff_t dtact_util_fs_read_to_string(const char *aPath, char *aOut, size_t aOutCap) ;
+
+ptrdiff_t dtact_util_fs_read_to_string(const char *aPath,
+                                       char *aOut,
+                                       size_t aOutCap)
+;
 
 /*
  Remove an empty directory. Fails if `path` is non-empty — see
@@ -622,7 +642,11 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  valid NUL-terminated C string; `buf` must point to at least `len`
  readable bytes.
  */
- int32_t dtact_util_fs_write(const char *aPath, const uint8_t *aBuf, size_t aLen) ;
+
+int32_t dtact_util_fs_write(const char *aPath,
+                            const uint8_t *aBuf,
+                            size_t aLen)
+;
 
 /*
  Initialize the TCP runtime with `workers` I/O worker threads. Idempotent;
@@ -643,7 +667,9 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  See the [`crate::ffi`] module-level Safety contract. `listener` must be a
  live handle from [`dtact_util_io_listener_bind`].
  */
- struct DtactTcpStream *dtact_util_io_listener_accept(struct DtactTcpListener *aListener) ;
+
+struct DtactTcpStream *dtact_util_io_listener_accept(struct DtactTcpListener *aListener)
+;
 
 /*
  Bind a TCP listener to `addr` (e.g. `"127.0.0.1:8080"`). Returns an
@@ -682,7 +708,11 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  valid NUL-terminated C string. `out`, if non-null, must point to at
  least `out_cap` writable bytes.
  */
- ptrdiff_t dtact_util_io_lookup_host(const char *aHost, char *aOut, size_t aOutCap) ;
+
+ptrdiff_t dtact_util_io_lookup_host(const char *aHost,
+                                    char *aOut,
+                                    size_t aOutCap)
+;
 
 /*
  Connect to the named-pipe server instance named `name`, blocking until
@@ -696,7 +726,9 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
  See the [`crate::ffi`] module-level Safety contract. `name` must be a
  valid NUL-terminated C string.
  */
- struct DtactNamedPipeHandle *dtact_util_io_pipe_client_connect(const char *aName) ;
+
+struct DtactNamedPipeHandle *dtact_util_io_pipe_client_connect(const char *aName)
+;
 
 /*
  Close and free a connected named-pipe handle. Passing null is a no-op.
@@ -715,7 +747,11 @@ ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_io_pipe_read(struct DtactNamedPipeHandle *aPipe, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_io_pipe_read(struct DtactNamedPipeHandle *aPipe,
+                                  uint8_t *aBuf,
+                                  size_t aLen)
+;
 
 /*
  Close and free a not-yet-connected pipe server handle. Passing null is
@@ -760,7 +796,9 @@ struct DtactNamedPipeHandle *dtact_util_io_pipe_server_connect(struct DtactNamed
  See the [`crate::ffi`] module-level Safety contract. `name` must be a
  valid NUL-terminated C string.
  */
- struct DtactNamedPipeServer *dtact_util_io_pipe_server_create(const char *aName) ;
+
+struct DtactNamedPipeServer *dtact_util_io_pipe_server_create(const char *aName)
+;
 
 /*
  Write up to `len` bytes from `buf` to `pipe`. Returns the byte count
@@ -804,7 +842,11 @@ ptrdiff_t dtact_util_io_pipe_write(struct DtactNamedPipeHandle *aPipe,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_io_stream_read(struct DtactTcpStream *aStream, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_io_stream_read(struct DtactTcpStream *aStream,
+                                    uint8_t *aBuf,
+                                    size_t aLen)
+;
 
 /*
  Write up to `len` bytes from `buf` to `stream`. Returns the byte count
@@ -851,7 +893,10 @@ ptrdiff_t dtact_util_io_stream_write(struct DtactTcpStream *aStream,
  See the [`crate::ffi`] module-level Safety contract. `addr` must be a
  valid NUL-terminated C string.
  */
- int32_t dtact_util_io_udp_connect(struct DtactUdpSocket *aSock, const char *aAddr) ;
+
+int32_t dtact_util_io_udp_connect(struct DtactUdpSocket *aSock,
+                                  const char *aAddr)
+;
 
 /*
  Receive a datagram from the connected peer into `buf`. Returns the byte
@@ -861,7 +906,11 @@ ptrdiff_t dtact_util_io_stream_write(struct DtactTcpStream *aStream,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_io_udp_recv(struct DtactUdpSocket *aSock, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_io_udp_recv(struct DtactUdpSocket *aSock,
+                                 uint8_t *aBuf,
+                                 size_t aLen)
+;
 
 /*
  Receive a single datagram into `buf` (capacity `len`).
@@ -893,7 +942,11 @@ ptrdiff_t dtact_util_io_udp_recv_from(struct DtactUdpSocket *aSock,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_io_udp_send(struct DtactUdpSocket *aSock, const uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_io_udp_send(struct DtactUdpSocket *aSock,
+                                 const uint8_t *aBuf,
+                                 size_t aLen)
+;
 
 /*
  Send `len` bytes from `buf` as a single datagram to `target` (a
@@ -945,7 +998,10 @@ ptrdiff_t dtact_util_io_udp_send_to(struct DtactUdpSocket *aSock,
  See the [`crate::ffi`] module-level Safety contract. `addr` must be a
  valid NUL-terminated C string.
  */
- int32_t dtact_util_io_unix_datagram_connect(struct DtactUnixDatagram *aSock, const char *aAddr) ;
+
+int32_t dtact_util_io_unix_datagram_connect(struct DtactUnixDatagram *aSock,
+                                            const char *aAddr)
+;
 
 /*
  Receive a datagram from the connected peer into `buf`. Returns the
@@ -1023,7 +1079,9 @@ ptrdiff_t dtact_util_io_unix_datagram_send_to(struct DtactUnixDatagram *aSock,
  See the [`crate::ffi`] module-level Safety contract. `listener` must
  be a live handle from [`dtact_util_io_unix_listener_bind`].
  */
- struct DtactUnixStream *dtact_util_io_unix_listener_accept(struct DtactUnixListener *aListener) ;
+
+struct DtactUnixStream *dtact_util_io_unix_listener_accept(struct DtactUnixListener *aListener)
+;
 
 /*
  Bind a Unix-domain-socket listener to the filesystem path `addr`.
@@ -1173,7 +1231,9 @@ ptrdiff_t dtact_util_io_unix_stream_write(struct DtactUnixStream *aStream,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- struct DtactChildStderr *dtact_util_process_child_take_stderr(struct DtactChild *aChild) ;
+
+struct DtactChildStderr *dtact_util_process_child_take_stderr(struct DtactChild *aChild)
+;
 
 /*
  Take ownership of the child's stdin pipe (only if spawned with
@@ -1183,7 +1243,9 @@ ptrdiff_t dtact_util_io_unix_stream_write(struct DtactUnixStream *aStream,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- struct DtactChildStdin *dtact_util_process_child_take_stdin(struct DtactChild *aChild) ;
+
+struct DtactChildStdin *dtact_util_process_child_take_stdin(struct DtactChild *aChild)
+;
 
 /*
  Take ownership of the child's stdout pipe (only if spawned with
@@ -1193,7 +1255,9 @@ ptrdiff_t dtact_util_io_unix_stream_write(struct DtactUnixStream *aStream,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- struct DtactChildStdout *dtact_util_process_child_take_stdout(struct DtactChild *aChild) ;
+
+struct DtactChildStdout *dtact_util_process_child_take_stdout(struct DtactChild *aChild)
+;
 
 /*
  Block until the child exits, writing its exit code into `*out_code`.
@@ -1207,7 +1271,10 @@ ptrdiff_t dtact_util_io_unix_stream_write(struct DtactUnixStream *aStream,
  See the [`crate::ffi`] module-level Safety contract. `child` must be a
  live handle; `out_code`, if non-null, must be writable.
  */
- int32_t dtact_util_process_child_wait(struct DtactChild *aChild, int32_t *aOutCode) ;
+
+int32_t dtact_util_process_child_wait(struct DtactChild *aChild,
+                                      int32_t *aOutCode)
+;
 
 /*
  Initialize the process backend's blocking-op pool with `workers`
@@ -1424,7 +1491,11 @@ int32_t dtact_util_stream_pair_create(size_t aCapacity,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_stream_read(struct DtactStream *aStream, uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_stream_read(struct DtactStream *aStream,
+                                 uint8_t *aBuf,
+                                 size_t aLen)
+;
 
 /*
  Write up to `len` bytes from `buf` into `stream`. Returns the number of
@@ -1434,7 +1505,11 @@ int32_t dtact_util_stream_pair_create(size_t aCapacity,
 
  See the [`crate::ffi`] module-level Safety contract.
  */
- ptrdiff_t dtact_util_stream_write(struct DtactStream *aStream, const uint8_t *aBuf, size_t aLen) ;
+
+ptrdiff_t dtact_util_stream_write(struct DtactStream *aStream,
+                                  const uint8_t *aBuf,
+                                  size_t aLen)
+;
 
 /*
  Create a repeating interval timer with the given period in milliseconds.
@@ -1446,7 +1521,9 @@ int32_t dtact_util_stream_pair_create(size_t aCapacity,
 
  See the [`crate::ffi`] module-level Safety contract. Takes no pointers.
  */
- struct DtactInterval *dtact_util_timer_interval_create(uint64_t aPeriodMillis) ;
+
+struct DtactInterval *dtact_util_timer_interval_create(uint64_t aPeriodMillis)
+;
 
 /*
  Free an interval handle. Passing null is a no-op.

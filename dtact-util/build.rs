@@ -44,7 +44,7 @@ fn generate_headers() -> Result<(), Box<dyn std::error::Error>> {
     // C++ header: same config, C++ language.
     let cpp_config = cbindgen::Config {
         language: cbindgen::Language::Cxx,
-        ..cbindgen::Config::from_file("cbindgen.toml").unwrap_or_default()
+        ..cbindgen::Config::from_file("cbindgen-cxx.toml").unwrap_or_default()
     };
     match cbindgen::Builder::new()
         .with_crate(&crate_dir)

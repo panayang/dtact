@@ -51,7 +51,7 @@ fn generate_headers() -> Result<(), Box<dyn std::error::Error>> {
     let cpp_config = cbindgen::Config {
         language: cbindgen::Language::Cxx,
         namespace: Some("dtact".to_string()),
-        ..cbindgen::Config::from_file("cbindgen.toml").unwrap_or_default()
+        ..cbindgen::Config::from_file("cbindgen-cxx.toml").unwrap_or_default()
     };
 
     match cbindgen::Builder::new()

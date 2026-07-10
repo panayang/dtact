@@ -14,6 +14,7 @@ use std::task::{Context, Poll};
 /// None of this type's methods can fail (no lock poisoning — a panic
 /// while holding the guard simply unlocks on unwind, matching
 /// `tokio::sync::Mutex`'s behavior, not `std::sync::Mutex`'s).
+#[repr(align(64))]
 pub struct Mutex<T: ?Sized> {
     locked: AtomicBool,
     wait: WaitQueue,
@@ -40,6 +41,7 @@ impl<T> Mutex<T> {
     }
 
     /// Consume the mutex, returning the guarded value.
+    #[inline(always)]
     pub fn into_inner(self) -> T {
         self.data.into_inner()
     }
@@ -48,12 +50,14 @@ impl<T> Mutex<T> {
 impl<T: ?Sized> Mutex<T> {
     /// Acquire the lock, waiting (without blocking the OS thread) if it's
     /// currently held elsewhere.
+    #[inline(always)]
     pub async fn lock(&self) -> MutexGuard<'_, T> {
         std::future::poll_fn(|cx| self.poll_lock(cx)).await
     }
 
     /// Acquire the lock if it's immediately available, without waiting.
     #[must_use]
+    #[inline(always)]
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
         self.locked
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -67,6 +71,7 @@ impl<T: ?Sized> Mutex<T> {
             .then(|| MutexGuard { mutex: self })
     }
 
+    #[inline]
     fn poll_lock(&self, cx: &Context<'_>) -> Poll<MutexGuard<'_, T>> {
         // Skip the immediate fast-path CAS if anyone is already
         // registered waiting for the lock — otherwise a fresh `.lock()`
@@ -104,6 +109,7 @@ impl<T: ?Sized> Mutex<T> {
     /// Get mutable access to the guarded value without locking — sound
     /// because `&mut self` statically proves no other reference (locked
     /// or not) can exist.
+    #[inline(always)]
     pub const fn get_mut(&mut self) -> &mut T {
         self.data.get_mut()
     }
@@ -121,6 +127,7 @@ impl<T: Default> Default for Mutex<T> {
 
 /// RAII guard for a locked [`Mutex`]. Releases the lock (and wakes one
 /// waiter, if any) on drop.
+#[repr(align(64))]
 pub struct MutexGuard<'a, T: ?Sized> {
     mutex: &'a Mutex<T>,
 }
@@ -134,6 +141,7 @@ unsafe impl<T: ?Sized + Sync> Sync for MutexGuard<'_, T> {}
 
 impl<T: ?Sized> Deref for MutexGuard<'_, T> {
     type Target = T;
+    #[inline(always)]
     fn deref(&self) -> &T {
         // SAFETY: holding a `MutexGuard` is exclusive proof of the lock.
         unsafe { &*self.mutex.data.get() }
@@ -141,6 +149,7 @@ impl<T: ?Sized> Deref for MutexGuard<'_, T> {
 }
 
 impl<T: ?Sized> DerefMut for MutexGuard<'_, T> {
+    #[inline(always)]
     fn deref_mut(&mut self) -> &mut T {
         // SAFETY: same as `Deref` above.
         unsafe { &mut *self.mutex.data.get() }
@@ -148,6 +157,7 @@ impl<T: ?Sized> DerefMut for MutexGuard<'_, T> {
 }
 
 impl<T: ?Sized> Drop for MutexGuard<'_, T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.mutex.locked.store(false, Ordering::Release);
         self.mutex.wait.wake_one();

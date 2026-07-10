@@ -121,9 +121,7 @@ extern "C" {
  Critical failure handler. Aborts the process if a fiber attempts to
  return without properly terminating via the runtime.
  */
-
-void dtact_abort(void)
-;
+ void dtact_abort(void) ;
 
 /*
  Blocks the current thread until the specified fiber terminates.
@@ -135,23 +133,17 @@ void dtact_abort(void)
  # Panics
  * Panics if the runtime is not initialized.
  */
-
-void dtact_await(dtact_handle_t aHandle)
-;
+ void dtact_await(dtact_handle_t aHandle) ;
 
 /*
  Returns the recommended default configuration for the Dtact runtime.
  */
-
-struct dtact_config_t dtact_default_config(void)
-;
+ struct dtact_config_t dtact_default_config(void) ;
 
 /*
  Returns the recommended default options for the Dtact runtime.
  */
-
-struct dtact_spawn_options_t dtact_default_spawn_options(void)
-;
+ struct dtact_spawn_options_t dtact_default_spawn_options(void) ;
 
 /*
  Launches a C-function as a DTA-V3 stackful Fiber.
@@ -227,9 +219,7 @@ void dtact_free_arg(void *aArg)
  # Panics
  * Panics if the runtime is already initialized or if memory allocation fails.
  */
-
-void *dtact_init(const struct dtact_config_t *aCfg)
-;
+ void *dtact_init(const struct dtact_config_t *aCfg) ;
 
 /*
  Signals all worker threads to shutdown and waits for them to terminate.
@@ -238,16 +228,12 @@ void *dtact_init(const struct dtact_config_t *aCfg)
  # Panics
  * Panics if the runtime is not initialized.
  */
-
-void dtact_run(void *aRt)
-;
+ void dtact_run(void *aRt) ;
 
 /*
  Signals the cooperative shutdown of all Dtact worker threads.
  */
-
-void dtact_shutdown(void)
-;
+ void dtact_shutdown(void) ;
 
 #ifdef __cplusplus
 }  // extern "C"

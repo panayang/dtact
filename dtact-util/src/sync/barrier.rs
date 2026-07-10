@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 
 /// A barrier that releases all `n` participants together once every one
 /// of them has called [`Barrier::wait`].
+#[repr(align(64))]
 pub struct Barrier {
     n: usize,
     /// Arrivals for the current generation; reset to 0 by whichever
@@ -37,6 +38,7 @@ impl Barrier {
     /// Exactly one of the `n` calls in each generation gets back a
     /// [`BarrierWaitResult`] with [`is_leader`](BarrierWaitResult::is_leader)
     /// `true`; the rest get `false`. All `n` calls return together.
+    #[inline(always)]
     pub async fn wait(&self) -> BarrierWaitResult {
         let observed_gen = self.generation.load(Ordering::Acquire);
         let arrived = self.count.fetch_add(1, Ordering::AcqRel) + 1;
@@ -52,6 +54,7 @@ impl Barrier {
         BarrierWaitResult { is_leader: false }
     }
 
+    #[inline(always)]
     fn poll_generation_advanced(&self, cx: &Context<'_>, observed_gen: usize) -> Poll<()> {
         if self.generation.load(Ordering::Acquire) != observed_gen {
             return Poll::Ready(());
@@ -69,6 +72,7 @@ impl Barrier {
 /// call (per generation) whose arrival released everyone else. Purely
 /// informational — every participant proceeds regardless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub struct BarrierWaitResult {
     is_leader: bool,
 }

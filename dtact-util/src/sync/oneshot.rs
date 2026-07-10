@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
+#[repr(align(64))]
 struct Inner<T> {
     value: UnsafeCell<Option<T>>,
     sent: AtomicBool,
@@ -26,6 +27,7 @@ unsafe impl<T: Send> Sync for Inner<T> {}
 
 /// Create a connected sender/receiver pair for one value.
 #[must_use]
+#[inline]
 pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
     let inner = Arc::new(Inner {
         value: UnsafeCell::new(None),
@@ -45,6 +47,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 /// The sending half of a [`channel`]. Consumed by [`Sender::send`] — a
 /// oneshot sender can only ever send once, so there's no `&self` send
 /// method to accidentally call twice.
+#[repr(align(64))]
 pub struct Sender<T> {
     inner: Arc<Inner<T>>,
 }
@@ -55,6 +58,7 @@ impl<T> Sender<T> {
     /// # Errors
     /// Returns `value` back if the receiver was already dropped (nobody
     /// left to receive it).
+    #[inline(always)]
     pub fn send(self, value: T) -> Result<(), T> {
         if self.inner.receiver_dropped.load(Ordering::Acquire) {
             return Err(value);
@@ -78,12 +82,14 @@ impl<T> Sender<T> {
     /// `true` if the receiver has already been dropped — a subsequent
     /// [`send`](Self::send) is guaranteed to fail.
     #[must_use]
+    #[inline(always)]
     pub fn is_closed(&self) -> bool {
         self.inner.receiver_dropped.load(Ordering::Acquire)
     }
 }
 
 impl<T> Drop for Sender<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.inner.sender_dropped.store(true, Ordering::Release);
         // Wake the receiver so a pending `.await` observes the closure
@@ -95,11 +101,13 @@ impl<T> Drop for Sender<T> {
 /// The receiving half of a [`channel`]. Implements [`Future`] directly —
 /// `receiver.await` resolves once, either with the sent value or
 /// [`RecvError`] if the sender was dropped without sending.
+#[repr(align(64))]
 pub struct Receiver<T> {
     inner: Arc<Inner<T>>,
 }
 
 impl<T> Drop for Receiver<T> {
+    #[inline(always)]
     fn drop(&mut self) {
         self.inner.receiver_dropped.store(true, Ordering::Release);
     }
@@ -108,6 +116,7 @@ impl<T> Drop for Receiver<T> {
 /// Error returned by a [`Receiver`] when the [`Sender`] was dropped
 /// without sending a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(align(64))]
 pub struct RecvError;
 
 impl std::fmt::Display for RecvError {
@@ -121,6 +130,7 @@ impl std::error::Error for RecvError {}
 impl<T> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
+    #[inline(always)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         if let Some(result) = self.try_take() {
             return Poll::Ready(result);
@@ -135,6 +145,7 @@ impl<T> Future for Receiver<T> {
 }
 
 impl<T> Receiver<T> {
+    #[inline(always)]
     fn try_take(&self) -> Option<Result<T, RecvError>> {
         if self.inner.sent.load(Ordering::Acquire) {
             // SAFETY: `sent` observed true under Acquire, paired with the
