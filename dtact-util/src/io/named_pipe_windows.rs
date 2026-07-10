@@ -198,7 +198,7 @@ fn worker_loop() {
 }
 
 enum Slot {
-    Pooled(u32),
+    Pooled { shard_idx: usize, slot_idx: u32 },
     Heap(Box<OpState>),
 }
 

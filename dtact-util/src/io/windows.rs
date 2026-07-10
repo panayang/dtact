@@ -109,8 +109,8 @@ fn get_local_thread_id() -> usize {
     THREAD_ID.with(|id| *id)
 }
 
-struct GlobalConfig {
-    workers: usize,
+pub(super) struct GlobalConfig {
+    pub(super) workers: usize,
 }
 
 pub(super) static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
