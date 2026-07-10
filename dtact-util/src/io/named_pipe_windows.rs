@@ -240,15 +240,36 @@ fn init_sharded_pool() -> &'static ShardedSlotPool {
     })
 }
 
+fn get_local_shard_idx(num_shards: usize) -> usize {
+    thread_local! {
+        // Lazily initialized once per thread execution lifetime
+        static LAZY_SHARD_IDX: usize = {
+            static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        };
+    }
+    LAZY_SHARD_IDX.with(|&idx| idx % num_shards)
+}
+
 fn acquire_slot() -> Slot {
-    let pool = slot_pool();
-    pool.free.pop().map_or_else(
+    let pool = init_sharded_pool();
+    let num_shards = pool.shards.len();
+
+    // Thread-safe sampling at checkout time
+    let shard_idx = get_local_shard_idx(num_shards);
+    let shard = &pool.shards[shard_idx];
+
+    shard.free.pop().map_or_else(
         || Slot::Heap(Box::new(OpState::fresh())),
         |idx| {
-            pool.slots[idx as usize]
+            shard.slots[idx as usize]
                 .result
                 .store(PENDING, Ordering::Relaxed);
-            Slot::Pooled(idx)
+
+            Slot::Pooled {
+                shard_idx,
+                slot_idx: idx,
+            }
         },
     )
 }
