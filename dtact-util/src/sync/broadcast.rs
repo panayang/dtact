@@ -25,7 +25,7 @@ unsafe impl<T: Send> Send for Slot<T> {}
 unsafe impl<T: Sync> Sync for Slot<T> {}
 
 impl<T> Slot<T> {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             seq: AtomicU64::new(u64::MAX),
             value: UnsafeCell::new(MaybeUninit::uninit()),
@@ -97,6 +97,11 @@ impl<T: Clone> Sender<T> {
     /// Broadcast `value` to every current and future receiver.
     ///
     /// Zero heap allocations. Purely atomic array coordination.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SendError` if all downstream receivers have been dropped,
+    /// leaving nobody left to consume the payload.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         if self.receiver_count() == 0 {
             return Err(SendError(value));
@@ -145,6 +150,10 @@ pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     next_seq: u64,
 }
+
+#[allow(clippy::non_send_fields_in_send_ty)]
+unsafe impl<T: Send> Send for Receiver<T> {}
+unsafe impl<T: Send> Sync for Receiver<T> {}
 
 impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Self {

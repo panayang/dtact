@@ -36,7 +36,7 @@ use std::task::{Context, Poll};
 ///   ring can't be reused here because "unbounded" means capacity isn't
 ///   fixed at construction time.
 enum Queue<T> {
-    Bounded(BoundedMpmcQueue<T>),
+    Bounded(Box<BoundedMpmcQueue<T>>),
     Unbounded(MpmcStack<T>),
 }
 
@@ -88,7 +88,7 @@ impl<T> Shared<T> {
 #[must_use]
 pub fn channel<T>(capacity: usize) -> (Sender<T>, Receiver<T>) {
     let shared = Arc::new(Shared {
-        queue: Queue::Bounded(BoundedMpmcQueue::new(capacity.max(1))),
+        queue: Queue::Bounded(Box::new(BoundedMpmcQueue::new(capacity.max(1)))),
         sender_count: AtomicUsize::new(1),
         receiver_dropped: AtomicBool::new(false),
         recv_wait: WaitQueue::new(),
@@ -292,13 +292,14 @@ impl<T> Receiver<T> {
             Queue::Bounded(q) => q.try_pop(),
             Queue::Unbounded(q) => {
                 let mut local = self.local.borrow_mut();
-                if let Some(v) = local.pop_front() {
-                    Some(v)
-                } else {
-                    // Zero-allocation refill optimization
-                    q.drain_into_vec_deque(&mut local);
-                    local.pop_front()
-                }
+                local.pop_front().map_or_else(
+                    || {
+                        // Zero-allocation refill optimization
+                        q.drain_into_vec_deque(&mut local);
+                        local.pop_front()
+                    },
+                    Some,
+                )
             }
         };
 

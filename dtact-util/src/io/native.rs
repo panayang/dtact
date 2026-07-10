@@ -13,6 +13,8 @@ use crate::io::trace::io_trace;
 #[allow(unused_imports)]
 use crate::io::trace::trace_now_us;
 
+static WORKER_ROUND_ROBIN: AtomicUsize = AtomicUsize::new(0);
+
 // =========================================================================
 // 1-2. TreiberStack / BufferPool — moved to `crate::lockfree`
 // =========================================================================
@@ -2959,6 +2961,8 @@ pub struct DtactUnixStream {
     inner: std::os::unix::net::UnixStream,
     direct_fd_idx: u32,
     worker_idx: usize,
+    read_backpressured: std::sync::atomic::AtomicBool,
+    write_backpressured: std::sync::atomic::AtomicBool,
 }
 
 impl DtactUnixStream {
@@ -2980,7 +2984,7 @@ impl DtactUnixStream {
         stream.set_nonblocking(true)?;
 
         let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
-        let worker_idx = fd as usize % num_workers;
+        let worker_idx = WORKER_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed) % num_workers;
         let state = &WORKERS.get().unwrap()[worker_idx];
 
         let direct_fd_idx = register_fd_sync(state, fd);
@@ -2989,6 +2993,8 @@ impl DtactUnixStream {
             inner: stream,
             direct_fd_idx,
             worker_idx,
+            read_backpressured: std::sync::atomic::AtomicBool::new(false),
+            write_backpressured: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -3005,29 +3011,32 @@ impl DtactUnixStream {
             return Ok(0);
         }
 
-        let res = unsafe {
-            let r = libc::read(
-                self.inner.as_raw_fd(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            );
-            match r.cmp(&0) {
-                std::cmp::Ordering::Greater => Ok(r as usize),
-                std::cmp::Ordering::Equal => Ok(0), // EOF
-                std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
-            }
-        };
+        if !self.read_backpressured.load(Ordering::Relaxed) {
+            let res = unsafe {
+                let r = libc::read(
+                    self.inner.as_raw_fd(),
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                );
+                match r.cmp(&0) {
+                    std::cmp::Ordering::Greater => Ok(r as usize),
+                    std::cmp::Ordering::Equal => Ok(0), // EOF
+                    std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
+                }
+            };
 
-        match res {
-            Ok(n) => return Ok(n),
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(e);
+            match res {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(e);
+                    }
                 }
             }
+            self.read_backpressured.store(true, Ordering::Relaxed);
         }
 
-        DtactIoFuture {
+        let future = DtactIoFuture {
             worker_idx: self.worker_idx,
             fd: self.inner.as_raw_fd() as u32,
             direct_fd_idx: self.direct_fd_idx,
@@ -3040,8 +3049,10 @@ impl DtactUnixStream {
             slot_idx: None,
             msg_ptr: std::ptr::null_mut(),
         }
-        .await
-        .map(|n| n.min(buf.len()))
+        .await;
+
+        self.read_backpressured.store(false, Ordering::Relaxed);
+        future.map(|n| n.min(buf.len()))
     }
 
     /// Write `buf`, returning `Ok(0)` immediately for an empty buffer
@@ -3057,29 +3068,32 @@ impl DtactUnixStream {
             return Ok(0);
         }
 
-        let res = unsafe {
-            let r = libc::write(
-                self.inner.as_raw_fd(),
-                buf.as_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            );
-            if r >= 0 {
-                Ok(r as usize)
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        };
+        if !self.write_backpressured.load(Ordering::Relaxed) {
+            let res = unsafe {
+                let r = libc::write(
+                    self.inner.as_raw_fd(),
+                    buf.as_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                );
+                if r >= 0 {
+                    Ok(r as usize)
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            };
 
-        match res {
-            Ok(n) => return Ok(n),
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(e);
+            match res {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(e);
+                    }
                 }
             }
+            self.write_backpressured.store(true, Ordering::Relaxed);
         }
 
-        DtactIoFuture {
+        let future = DtactIoFuture {
             worker_idx: self.worker_idx,
             fd: self.inner.as_raw_fd() as u32,
             direct_fd_idx: self.direct_fd_idx,
@@ -3091,8 +3105,10 @@ impl DtactUnixStream {
             addr_len: 0,
             slot_idx: None,
             msg_ptr: std::ptr::null_mut(),
-        }
-        .await
+        };
+
+        self.write_backpressured.store(false, Ordering::Relaxed);
+        future.await
     }
 
     /// Create a new non-blocking Unix domain socket and connect to the
@@ -3147,6 +3163,8 @@ impl DtactUnixStream {
                 inner: stream,
                 direct_fd_idx,
                 worker_idx,
+                read_backpressured: std::sync::atomic::AtomicBool::new(false),
+                write_backpressured: std::sync::atomic::AtomicBool::new(false),
             });
         }
         let err = std::io::Error::last_os_error();
@@ -3182,6 +3200,8 @@ impl DtactUnixStream {
                         inner: stream,
                         direct_fd_idx,
                         worker_idx,
+                        read_backpressured: std::sync::atomic::AtomicBool::new(false),
+                        write_backpressured: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
                 let os_err = if err_code != 0 {
@@ -3218,6 +3238,8 @@ impl DtactUnixStream {
                 inner: stream,
                 direct_fd_idx,
                 worker_idx,
+                read_backpressured: std::sync::atomic::AtomicBool::new(false),
+                write_backpressured: std::sync::atomic::AtomicBool::new(false),
             }),
             Err(e) => Err(e),
         }
@@ -3302,7 +3324,7 @@ impl DtactUnixListener {
         listener.set_nonblocking(true)?;
 
         let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
-        let worker_idx = fd as usize % num_workers;
+        let worker_idx = WORKER_ROUND_ROBIN.fetch_add(1, Ordering::Relaxed) % num_workers;
         let state = &WORKERS.get().unwrap()[worker_idx];
 
         let direct_fd_idx = register_fd_sync(state, fd);
@@ -3333,17 +3355,16 @@ impl DtactUnixListener {
     pub async fn accept(
         &self,
     ) -> std::io::Result<(DtactUnixStream, std::os::unix::net::SocketAddr)> {
-        // One direct attempt before going async — see the comment in
-        // `DtactTcpListener::accept` for why.
+        // 1. Direct opportunistic check using accept4 natively to avoid later fcntl
         let res = unsafe {
-            libc::accept(
+            libc::accept4(
                 self.inner.as_raw_fd(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
+                libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
             )
         };
         if res >= 0 {
-            unsafe { libc::fcntl(res, libc::F_SETFL, libc::O_NONBLOCK) };
             let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(res) };
             let peer_addr = stream.peer_addr()?;
             let client_stream = DtactUnixStream::from_std(stream)?;
@@ -3354,6 +3375,7 @@ impl DtactUnixListener {
             return Err(err);
         }
 
+        // 2. Async path: The driver's OpCode::Accept MUST pass SOCK_NONBLOCK | SOCK_CLOEXEC
         let res = DtactIoFuture {
             worker_idx: self.worker_idx,
             fd: self.inner.as_raw_fd() as u32,
@@ -3370,7 +3392,7 @@ impl DtactUnixListener {
         .await?;
 
         let client_fd = res as RawFd;
-        unsafe { libc::fcntl(client_fd, libc::F_SETFL, libc::O_NONBLOCK) };
+        // Zero extra syscalls here. The fd is already non-blocking!
         let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(client_fd) };
         let peer_addr = stream.peer_addr()?;
         let client_stream = DtactUnixStream::from_std(stream)?;
@@ -3581,6 +3603,8 @@ pub struct DtactUnixDatagram {
     inner: std::os::unix::net::UnixDatagram,
     direct_fd_idx: u32,
     worker_idx: usize,
+    read_backpressured: std::sync::atomic::AtomicBool,
+    write_backpressured: std::sync::atomic::AtomicBool,
 }
 
 impl DtactUnixDatagram {
@@ -3629,6 +3653,8 @@ impl DtactUnixDatagram {
             inner: socket,
             direct_fd_idx,
             worker_idx,
+            read_backpressured: std::sync::atomic::AtomicBool::new(false),
+            write_backpressured: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -3643,9 +3669,6 @@ impl DtactUnixDatagram {
         buf: &[u8],
         target: impl AsRef<std::path::Path>,
     ) -> std::io::Result<usize> {
-        // See `DtactUdpSocket::send_to`'s `SendToState` for why this
-        // wrapper (and its `unsafe impl Send`) exists — identical
-        // reasoning, just a `sockaddr_un` instead of `sockaddr_in`.
         struct SendToState {
             storage: libc::sockaddr_storage,
             iov: libc::iovec,
@@ -3653,6 +3676,34 @@ impl DtactUnixDatagram {
         }
         unsafe impl Send for SendToState {}
 
+        if !self.write_backpressured.load(Ordering::Relaxed) {
+            let (storage, addr_len) = unix_path_to_libc(target.as_ref())?;
+            let mut state = SendToState {
+                storage,
+                iov: libc::iovec {
+                    iov_base: buf.as_ptr().cast_mut().cast::<libc::c_void>(),
+                    iov_len: buf.len(),
+                },
+                msg: unsafe { std::mem::zeroed() },
+            };
+            state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+            state.msg.msg_namelen = addr_len;
+            state.msg.msg_iov = &raw mut state.iov;
+            state.msg.msg_iovlen = 1;
+
+            let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const state.msg, 0) };
+            if r >= 0 {
+                return Ok(r as usize);
+            }
+
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(e);
+            }
+            self.write_backpressured.store(true, Ordering::Relaxed);
+        }
+
+        // Re-generate the state layout if falling back to the driver ring
         let (storage, addr_len) = unix_path_to_libc(target.as_ref())?;
         let mut state = SendToState {
             storage,
@@ -3667,15 +3718,6 @@ impl DtactUnixDatagram {
         state.msg.msg_iov = &raw mut state.iov;
         state.msg.msg_iovlen = 1;
 
-        let r = unsafe { libc::sendmsg(self.inner.as_raw_fd(), &raw const state.msg, 0) };
-        if r >= 0 {
-            return Ok(r as usize);
-        }
-        let e = std::io::Error::last_os_error();
-        if e.kind() != std::io::ErrorKind::WouldBlock {
-            return Err(e);
-        }
-
         let mut fut = DtactIoFuture::new(
             self.worker_idx,
             self.inner.as_raw_fd() as u32,
@@ -3689,7 +3731,9 @@ impl DtactUnixDatagram {
             None,
         );
         fut.msg_ptr = &raw mut state.msg;
-        fut.await
+        let res = fut.await;
+        self.write_backpressured.store(false, Ordering::Relaxed);
+        res
     }
 
     /// Receive a single datagram into `buf`, returning the byte count and
@@ -3698,14 +3742,39 @@ impl DtactUnixDatagram {
     /// # Errors
     /// Returns any error from the underlying `recvmsg`.
     pub async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, DtactUnixSocketAddr)> {
-        // See `DtactUdpSocket::recv_from`'s `RecvFromState` for why this
-        // wrapper (and its `unsafe impl Send`) exists.
         struct RecvFromState {
             storage: libc::sockaddr_storage,
             iov: libc::iovec,
             msg: libc::msghdr,
         }
         unsafe impl Send for RecvFromState {}
+
+        if !self.read_backpressured.load(Ordering::Relaxed) {
+            let mut state = RecvFromState {
+                storage: unsafe { std::mem::zeroed() },
+                iov: libc::iovec {
+                    iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
+                    iov_len: buf.len(),
+                },
+                msg: unsafe { std::mem::zeroed() },
+            };
+            state.msg.msg_name = std::ptr::addr_of_mut!(state.storage).cast::<libc::c_void>();
+            state.msg.msg_namelen =
+                std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            state.msg.msg_iov = &raw mut state.iov;
+            state.msg.msg_iovlen = 1;
+
+            let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut state.msg, 0) };
+            if r >= 0 {
+                let from = sockaddr_un_to_addr(&state.storage, state.msg.msg_namelen);
+                return Ok((r as usize, from));
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(e);
+            }
+            self.read_backpressured.store(true, Ordering::Relaxed);
+        }
 
         let mut state = RecvFromState {
             storage: unsafe { std::mem::zeroed() },
@@ -3719,16 +3788,6 @@ impl DtactUnixDatagram {
         state.msg.msg_namelen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         state.msg.msg_iov = &raw mut state.iov;
         state.msg.msg_iovlen = 1;
-
-        let r = unsafe { libc::recvmsg(self.inner.as_raw_fd(), &raw mut state.msg, 0) };
-        if r >= 0 {
-            let from = sockaddr_un_to_addr(&state.storage, state.msg.msg_namelen);
-            return Ok((r as usize, from));
-        }
-        let e = std::io::Error::last_os_error();
-        if e.kind() != std::io::ErrorKind::WouldBlock {
-            return Err(e);
-        }
 
         let mut fut = DtactIoFuture::new(
             self.worker_idx,
@@ -3744,6 +3803,7 @@ impl DtactUnixDatagram {
         );
         fut.msg_ptr = &raw mut state.msg;
         let n = fut.await?;
+        self.read_backpressured.store(false, Ordering::Relaxed);
         let from = sockaddr_un_to_addr(&state.storage, state.msg.msg_namelen);
         Ok((n, from))
     }
@@ -3866,6 +3926,7 @@ pub struct DtactFifoReader {
     inner: std::fs::File,
     direct_fd_idx: u32,
     worker_idx: usize,
+    backpressured: std::sync::atomic::AtomicBool,
 }
 
 unsafe impl Send for DtactFifoReader {}
@@ -3880,27 +3941,30 @@ impl DtactFifoReader {
         if buf.is_empty() {
             return Ok(0);
         }
-        let res = unsafe {
-            let r = libc::read(
-                self.inner.as_raw_fd(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            );
-            match r.cmp(&0) {
-                std::cmp::Ordering::Greater => Ok(r as usize),
-                std::cmp::Ordering::Equal => Ok(0),
-                std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
-            }
-        };
-        match res {
-            Ok(n) => return Ok(n),
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(e);
+        if !self.backpressured.load(Ordering::Relaxed) {
+            let res = unsafe {
+                let r = libc::read(
+                    self.inner.as_raw_fd(),
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                );
+                match r.cmp(&0) {
+                    std::cmp::Ordering::Greater => Ok(r as usize),
+                    std::cmp::Ordering::Equal => Ok(0),
+                    std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
+                }
+            };
+            match res {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(e);
+                    }
                 }
             }
+            self.backpressured.store(true, Ordering::Relaxed);
         }
-        DtactIoFuture {
+        let future = DtactIoFuture {
             worker_idx: self.worker_idx,
             fd: self.inner.as_raw_fd() as u32,
             direct_fd_idx: self.direct_fd_idx,
@@ -3913,8 +3977,9 @@ impl DtactFifoReader {
             slot_idx: None,
             msg_ptr: std::ptr::null_mut(),
         }
-        .await
-        .map(|n| n.min(buf.len()))
+        .await;
+        self.backpressured.store(false, Ordering::Relaxed);
+        future.map(|n| n.min(buf.len()))
     }
 }
 
@@ -3933,6 +3998,7 @@ pub struct DtactFifoWriter {
     inner: std::fs::File,
     direct_fd_idx: u32,
     worker_idx: usize,
+    backpressured: std::sync::atomic::AtomicBool,
 }
 
 unsafe impl Send for DtactFifoWriter {}
@@ -3948,27 +4014,30 @@ impl DtactFifoWriter {
         if buf.is_empty() {
             return Ok(0);
         }
-        let res = unsafe {
-            let r = libc::write(
-                self.inner.as_raw_fd(),
-                buf.as_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            );
-            if r >= 0 {
-                Ok(r as usize)
-            } else {
-                Err(std::io::Error::last_os_error())
-            }
-        };
-        match res {
-            Ok(n) => return Ok(n),
-            Err(e) => {
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    return Err(e);
+        if !self.backpressured.load(Ordering::Relaxed) {
+            let res = unsafe {
+                let r = libc::write(
+                    self.inner.as_raw_fd(),
+                    buf.as_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                );
+                if r >= 0 {
+                    Ok(r as usize)
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            };
+            match res {
+                Ok(n) => return Ok(n),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(e);
+                    }
                 }
             }
+            self.backpressured.store(true, Ordering::Relaxed);
         }
-        DtactIoFuture {
+        let future = DtactIoFuture {
             worker_idx: self.worker_idx,
             fd: self.inner.as_raw_fd() as u32,
             direct_fd_idx: self.direct_fd_idx,
@@ -3981,8 +4050,9 @@ impl DtactFifoWriter {
             slot_idx: None,
             msg_ptr: std::ptr::null_mut(),
         }
-        .await
-        .map(|n| n.min(buf.len()))
+        .await;
+        self.backpressured.store(false, Ordering::Relaxed);
+        future.map(|n| n.min(buf.len()))
     }
 }
 
@@ -4035,6 +4105,7 @@ pub async fn open_fifo_read(
         inner: file,
         direct_fd_idx,
         worker_idx,
+        backpressured: AtomicBool::new(false),
     })
 }
 
@@ -4065,6 +4136,7 @@ pub async fn open_fifo_write(
         inner: file,
         direct_fd_idx,
         worker_idx,
+        backpressured: AtomicBool::new(false),
     })
 }
 

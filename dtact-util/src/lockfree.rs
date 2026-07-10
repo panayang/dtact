@@ -121,7 +121,7 @@ impl TreiberStack {
     /// Single-threaded initialization helper to set the initial entry head
     #[inline]
     pub(crate) fn set_head(&self, head_idx: u32) {
-        let initial_head = (0u64 << 32) | u64::from(head_idx);
+        let initial_head = u64::from(head_idx);
         self.head.store(initial_head, Ordering::Relaxed);
     }
 }

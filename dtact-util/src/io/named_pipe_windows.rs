@@ -201,15 +201,61 @@ enum Slot {
     Heap(Box<OpState>),
 }
 
+struct Shard {
+    slots: Box<[OpState]>,
+    free: TreiberStack,
+}
+
+struct ShardedSlotPool {
+    shards: Box<[Shard]>,
+}
+
+static SHARDED_POOL: OnceLock<ShardedSlotPool> = OnceLock::new();
+
+fn init_sharded_pool() -> &'static ShardedSlotPool {
+    SHARDED_POOL.get_or_init(|| {
+        let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers).max(1);
+        let depth_per_shard = *RING_DEPTH.get_or_init(|| 256);
+
+        let mut shards = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let mut slots = Vec::with_capacity(depth_per_shard);
+            for _ in 0..depth_per_shard {
+                slots.push(OpState::fresh());
+            }
+            let free = TreiberStack::new(depth_per_shard);
+            for i in 0..depth_per_shard as u32 {
+                free.push(i);
+            }
+            shards.push(Shard {
+                slots: slots.into_boxed_slice(),
+                free,
+            });
+        }
+
+        ShardedSlotPool {
+            shards: shards.into_boxed_slice(),
+        }
+    })
+}
+
 fn acquire_slot() -> Slot {
-    let pool = slot_pool();
-    pool.free.pop().map_or_else(
+    let pool = init_sharded_pool();
+    // Resolve which shard belongs to the execution thread context
+    let worker_idx = CURRENT_WORKER_IDX.with(|cell| cell.get()).unwrap_or(0);
+    let shard_idx = worker_idx % pool.shards.len();
+    let shard = &pool.shards[shard_idx];
+
+    shard.free.pop().map_or_else(
         || Slot::Heap(Box::new(OpState::fresh())),
         |idx| {
-            pool.slots[idx as usize]
+            shard.slots[idx as usize]
                 .result
                 .store(PENDING, Ordering::Relaxed);
-            Slot::Pooled(idx)
+            Slot::Pooled {
+                shard_idx,
+                slot_idx: idx,
+            }
         },
     )
 }
@@ -222,7 +268,10 @@ impl IoOp {
     #[inline]
     fn state(&self) -> &OpState {
         match &self.slot {
-            Slot::Pooled(idx) => &slot_pool().slots[*idx as usize],
+            Slot::Pooled {
+                shard_idx,
+                slot_idx,
+            } => &init_sharded_pool().shards[*shard_idx].slots[*slot_idx as usize],
             Slot::Heap(b) => b,
         }
     }
@@ -230,11 +279,13 @@ impl IoOp {
     #[inline]
     fn overlapped_ptr(&self) -> *mut OVERLAPPED {
         match &self.slot {
-            // SAFETY: see `fs::iocp_windows::IoOp::overlapped_ptr` — this
-            // slot is exclusively checked out to this `IoOp` until `Drop`.
-            Slot::Pooled(idx) => (&raw const slot_pool().slots[*idx as usize])
-                .cast_mut()
-                .cast(),
+            Slot::Pooled {
+                shard_idx,
+                slot_idx,
+            } => {
+                let state_ref = &init_sharded_pool().shards[*shard_idx].slots[*slot_idx as usize];
+                std::ptr::from_ref::<OpState>(state_ref).cast_mut().cast()
+            }
             Slot::Heap(b) => std::ptr::from_ref::<OpState>(b.as_ref()).cast_mut().cast(),
         }
     }
@@ -259,62 +310,98 @@ impl Future for IoOp {
 
 impl Drop for IoOp {
     fn drop(&mut self) {
-        if let Slot::Pooled(idx) = self.slot {
-            let pool = slot_pool();
-            let done = pool.slots[idx as usize].result.load(Ordering::Acquire) != PENDING;
+        if let Slot::Pooled {
+            shard_idx,
+            slot_idx,
+        } = self.slot
+        {
+            let pool = init_sharded_pool();
+            let shard = &pool.shards[shard_idx];
+            let done = shard.slots[slot_idx as usize]
+                .result
+                .load(Ordering::Acquire)
+                != PENDING;
             if done {
-                pool.free.push(idx);
+                shard.free.push(slot_idx);
             }
-            // Else: leak this slot — same cancellation caveat as
-            // `fs::iocp_windows`'s identical policy; see that module's doc.
+            // If the kernel operation is still running/stalled on the port,
+            // the slot leaks safely to prevent cross-stack pointer corruption.
         }
     }
 }
 
-fn issue_read(handle: HANDLE, buf: &mut [u8]) -> IoOp {
-    let op = IoOp {
-        slot: acquire_slot(),
-    };
+enum IoOpResult {
+    Ready(io::Result<usize>),
+    Pending(IoOp),
+}
+
+fn issue_read(handle: HANDLE, buf: &mut [u8]) -> IoOpResult {
+    let slot = acquire_slot();
+    let op = IoOp { slot };
     let ov_ptr = op.overlapped_ptr();
+
+    let mut bytes_transferred: u32 = 0;
     let ok = unsafe {
         ReadFile(
             handle,
             buf.as_mut_ptr(),
             buf.len() as u32,
-            ptr::null_mut(),
+            &mut bytes_transferred,
             ov_ptr,
         )
     };
-    if ok == 0 {
-        let err = unsafe { GetLastError() };
-        if err != ERROR_IO_PENDING {
-            op.state().result.store(encode_err(err), Ordering::Release);
-        }
+
+    if ok != 0 {
+        // Fast path: completed immediately synchronous!
+        // We set the result state so Drop doesn't track it as leaked/stale,
+        // then immediately return the payload size.
+        op.state()
+            .result
+            .store(encode_ok(bytes_transferred as usize), Ordering::Relaxed);
+        return IoOpResult::Ready(Ok(bytes_transferred as usize));
     }
-    op
+
+    let err = unsafe { GetLastError() };
+    if err == ERROR_IO_PENDING {
+        IoOpResult::Pending(op)
+    } else {
+        // Immediate failure path
+        op.state().result.store(encode_err(err), Ordering::Relaxed);
+        IoOpResult::Ready(Err(io::Error::from_raw_os_error(err as i32)))
+    }
 }
 
-fn issue_write(handle: HANDLE, buf: &[u8]) -> IoOp {
-    let op = IoOp {
-        slot: acquire_slot(),
-    };
+fn issue_write(handle: HANDLE, buf: &[u8]) -> IoOpResult {
+    let slot = acquire_slot();
+    let op = IoOp { slot };
     let ov_ptr = op.overlapped_ptr();
+
+    let mut bytes_transferred: u32 = 0;
     let ok = unsafe {
         WriteFile(
             handle,
             buf.as_ptr(),
             buf.len() as u32,
-            ptr::null_mut(),
+            &mut bytes_transferred,
             ov_ptr,
         )
     };
-    if ok == 0 {
-        let err = unsafe { GetLastError() };
-        if err != ERROR_IO_PENDING {
-            op.state().result.store(encode_err(err), Ordering::Release);
-        }
+
+    if ok != 0 {
+        // Fast path: written immediately without pausing task execution
+        op.state()
+            .result
+            .store(encode_ok(bytes_transferred as usize), Ordering::Relaxed);
+        return IoOpResult::Ready(Ok(bytes_transferred as usize));
     }
-    op
+
+    let err = unsafe { GetLastError() };
+    if err == ERROR_IO_PENDING {
+        IoOpResult::Pending(op)
+    } else {
+        op.state().result.store(encode_err(err), Ordering::Relaxed);
+        IoOpResult::Ready(Err(io::Error::from_raw_os_error(err as i32)))
+    }
 }
 
 /// Submit `ConnectNamedPipe` (wait for a client to connect to a
@@ -372,7 +459,10 @@ impl DtactNamedPipeHandle {
         if buf.is_empty() {
             return Ok(0);
         }
-        issue_read(self.handle, buf).await
+        match issue_read_optimized(self.handle, buf) {
+            IoOpResult::Ready(res) => res,
+            IoOpResult::Pending(fut) => fut.await,
+        }
     }
 
     /// Write from `buf`, returning the number of bytes written.
@@ -384,7 +474,10 @@ impl DtactNamedPipeHandle {
         if buf.is_empty() {
             return Ok(0);
         }
-        issue_write(self.handle, buf).await
+        match issue_write_optimized(self.handle, buf) {
+            IoOpResult::Ready(res) => res,
+            IoOpResult::Pending(fut) => fut.await,
+        }
     }
 }
 
