@@ -102,6 +102,36 @@ typedef struct DtactInterval DtactInterval;
 typedef struct DtactInterval DtactInterval;
 
 /*
+ One named-pipe connection — the read/write half shared by
+ [`DtactNamedPipeServer`] (after a client connects) and
+ [`DtactNamedPipeClient`].
+ */
+typedef struct DtactNamedPipeHandle DtactNamedPipeHandle;
+
+/*
+ One named-pipe connection — the read/write half shared by
+ [`DtactNamedPipeServer`] (after a client connects) and
+ [`DtactNamedPipeClient`].
+ */
+typedef struct DtactNamedPipeHandle DtactNamedPipeHandle;
+
+/*
+ A single named-pipe server instance, before a client has connected.
+
+ Create one per client you intend to accept — see the module doc's
+ "no pipe-instance pooling" paragraph for why there's no persistent
+ listener type the way TCP has [`super::DtactTcpListener`].
+ */
+typedef struct DtactNamedPipeServer DtactNamedPipeServer;
+
+/*
+ A single named-pipe server instance, before a client has connected.
+
+ Create one per client you intend to accept — see this module's doc.
+ */
+typedef struct DtactNamedPipeServer DtactNamedPipeServer;
+
+/*
  A stream of a specific signal's deliveries — call `.recv().await`
  repeatedly, once per delivery, mirroring `tokio::signal::unix::Signal`.
  */
@@ -356,6 +386,22 @@ extern "C" {
  ptrdiff_t dtact_util_fs_file_read(struct DtactFile *aFile, uint8_t *aBuf, size_t aLen) ;
 
 /*
+ Read up to `len` bytes from `file` at absolute `offset` (not affecting
+ its cursor) into `buf`. Returns the byte count read (0 = EOF) or -1 on
+ error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+
+ptrdiff_t dtact_util_fs_file_read_at(struct DtactFile *aFile,
+                                     uint8_t *aBuf,
+                                     size_t aLen,
+                                     uint64_t aOffset)
+;
+
+/*
  Flush `file`'s buffers to disk (`FlushFileBuffers`/`fsync`). Returns 0 on
  success, -1 on error.
 
@@ -374,6 +420,21 @@ extern "C" {
  See the [`crate::ffi`] module-level Safety contract.
  */
  ptrdiff_t dtact_util_fs_file_write(struct DtactFile *aFile, const uint8_t *aBuf, size_t aLen) ;
+
+/*
+ Write `len` bytes from `buf` to `file` at absolute `offset` (not
+ affecting its cursor). Returns the byte count written or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+
+ptrdiff_t dtact_util_fs_file_write_at(struct DtactFile *aFile,
+                                      const uint8_t *aBuf,
+                                      size_t aLen,
+                                      uint64_t aOffset)
+;
 
 /*
  Create a hard link at `dst` pointing at the same file as `src`.
@@ -464,6 +525,16 @@ extern "C" {
  valid NUL-terminated C string.
  */
  int32_t dtact_util_fs_remove_dir_all(const char *aPath) ;
+
+/*
+ Remove (unlink) the file at `path`. Returns 0 on success, -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `path` must be a
+ valid NUL-terminated C string.
+ */
+ int32_t dtact_util_fs_remove_file(const char *aPath) ;
 
 /*
  Rename (move) the file or directory at `from` to `to`, replacing `to`
@@ -594,6 +665,116 @@ extern "C" {
  See the [`crate::ffi`] module-level Safety contract.
  */
  void dtact_util_io_listener_close(struct DtactTcpListener *aListener) ;
+
+/*
+ Resolve `host` (a `"host:port"` string) to zero or more socket
+ addresses.
+
+ Writes them as a single `;`-separated NUL-terminated string (e.g.
+ `"127.0.0.1:80;[::1]:80"`) into `out` (capacity `out_cap`, truncated
+ at a whole-address boundary if it doesn't fit). Returns the number of
+ addresses found (which may be more than fit in
+ `out`), or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `host` must be a
+ valid NUL-terminated C string. `out`, if non-null, must point to at
+ least `out_cap` writable bytes.
+ */
+ ptrdiff_t dtact_util_io_lookup_host(const char *aHost, char *aOut, size_t aOutCap) ;
+
+/*
+ Connect to the named-pipe server instance named `name`, blocking until
+ connected (retrying while every existing instance is busy).
+
+ Returns an
+ owning handle or null on error. Free with [`dtact_util_io_pipe_close`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `name` must be a
+ valid NUL-terminated C string.
+ */
+ struct DtactNamedPipeHandle *dtact_util_io_pipe_client_connect(const char *aName) ;
+
+/*
+ Close and free a connected named-pipe handle. Passing null is a no-op.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ void dtact_util_io_pipe_close(struct DtactNamedPipeHandle *aPipe) ;
+
+/*
+ Read up to `len` bytes from `pipe` into `buf`. Returns the byte count
+ read (0 = orderly close by peer) or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ ptrdiff_t dtact_util_io_pipe_read(struct DtactNamedPipeHandle *aPipe, uint8_t *aBuf, size_t aLen) ;
+
+/*
+ Close and free a not-yet-connected pipe server handle. Passing null is
+ a no-op.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+ void dtact_util_io_pipe_server_close(struct DtactNamedPipeServer *aServer) ;
+
+/*
+ Block until a client connects to `server`.
+
+ Takes ownership of `server`
+ (it must not be used again, freed, or passed to this function twice,
+ regardless of whether this call succeeds) and returns an owning
+ connected-handle pointer, or null on error. Free the result with
+ [`dtact_util_io_pipe_close`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `server` must be a
+ live handle from [`dtact_util_io_pipe_server_create`].
+ */
+
+struct DtactNamedPipeHandle *dtact_util_io_pipe_server_connect(struct DtactNamedPipeServer *aServer)
+;
+
+/*
+ Create a new named-pipe server instance named `name`.
+
+ E.g. `r"\\.\pipe\my-app"`. Returns an owning handle or null on error. Every
+ instance accepts exactly one client — see
+ [`crate::io::DtactNamedPipeServer`]'s own doc for why there's no
+ persistent listener type here the way TCP/Unix sockets have one. Free
+ with [`dtact_util_io_pipe_server_close`], or consume it with
+ [`dtact_util_io_pipe_server_connect`].
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract. `name` must be a
+ valid NUL-terminated C string.
+ */
+ struct DtactNamedPipeServer *dtact_util_io_pipe_server_create(const char *aName) ;
+
+/*
+ Write up to `len` bytes from `buf` to `pipe`. Returns the byte count
+ written or -1 on error.
+
+ # Safety
+
+ See the [`crate::ffi`] module-level Safety contract.
+ */
+
+ptrdiff_t dtact_util_io_pipe_write(struct DtactNamedPipeHandle *aPipe,
+                                   const uint8_t *aBuf,
+                                   size_t aLen)
+;
 
 /*
  Close and free a TCP stream handle. Passing null is a no-op.

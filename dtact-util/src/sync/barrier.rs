@@ -56,8 +56,9 @@ impl Barrier {
         if self.generation.load(Ordering::Acquire) != observed_gen {
             return Poll::Ready(());
         }
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if self.generation.load(Ordering::Acquire) != observed_gen {
+            self.wait.cancel(token);
             return Poll::Ready(());
         }
         Poll::Pending

@@ -73,13 +73,20 @@ impl Semaphore {
     }
 
     fn poll_acquire(&self, cx: &Context<'_>) -> Poll<SemaphorePermit<'_>> {
-        if self.try_acquire_one() {
+        // Skip the fast-path acquire if anyone is already waiting for a
+        // permit — same starvation risk as `Mutex::poll_lock` (a fresh
+        // acquirer could otherwise perpetually beat an already-waiting
+        // one to every freed permit); see `WaitQueue::has_waiters`'s doc.
+        // `try_acquire` itself is unaffected — it's an explicit
+        // "don't wait" API and must always attempt regardless of waiters.
+        if !self.wait.has_waiters() && self.try_acquire_one() {
             return Poll::Ready(SemaphorePermit { sem: self });
         }
         // See `Mutex::poll_lock` for why registration comes before the
         // re-check, not after.
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if self.try_acquire_one() {
+            self.wait.cancel(token);
             return Poll::Ready(SemaphorePermit { sem: self });
         }
         Poll::Pending

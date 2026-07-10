@@ -125,8 +125,9 @@ impl<T> Future for Receiver<T> {
         if let Some(result) = self.try_take() {
             return Poll::Ready(result);
         }
-        self.inner.wait.register(cx.waker());
+        let token = self.inner.wait.register(cx.waker());
         if let Some(result) = self.try_take() {
+            self.inner.wait.cancel(token);
             return Poll::Ready(result);
         }
         Poll::Pending
@@ -144,6 +145,17 @@ impl<T> Receiver<T> {
             return Some(value.ok_or(RecvError));
         }
         if self.inner.sender_dropped.load(Ordering::Acquire) {
+            // `send` (which sets `sent` *before* the `Sender` itself
+            // drops and sets `sender_dropped`) could have completed
+            // concurrently with the `sent` check above — see
+            // `mpsc::Receiver::poll_recv`'s identical comment for why one
+            // more check is needed before reporting the sender gone
+            // without a value.
+            if self.inner.sent.load(Ordering::Acquire) {
+                // SAFETY: same as the identical block above.
+                let value = unsafe { (*self.inner.value.get()).take() };
+                return Some(value.ok_or(RecvError));
+            }
             return Some(Err(RecvError));
         }
         None

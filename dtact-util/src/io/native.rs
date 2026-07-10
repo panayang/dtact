@@ -3850,6 +3850,225 @@ impl Drop for DtactUnixDatagram {
 }
 
 // =========================================================================
+// 10b. FIFO (named-pipe) read/write ends — the Unix counterpart to
+// `named_pipe_windows`'s server/client handles.
+// =========================================================================
+// Does not create the FIFO itself (`mkfifo(2)` is out of scope, matching
+// `tokio::net::unix::pipe`'s own scope — it only opens an already-`mkfifo`'d
+// path); create the FIFO externally (the `mkfifo` shell command, or
+// `libc::mkfifo`) before opening either end here. Both ends reuse the
+// exact same reactor registration (`register_fd_sync`) and `DtactIoFuture`
+// read/write path as `DtactUnixStream` above — a FIFO fd is just as
+// poll/io_uring-able as a socket fd once opened non-blocking.
+
+/// The read end of a Unix FIFO. Open with [`open_fifo_read`].
+pub struct DtactFifoReader {
+    inner: std::fs::File,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+unsafe impl Send for DtactFifoReader {}
+unsafe impl Sync for DtactFifoReader {}
+
+impl DtactFifoReader {
+    /// Read into `buf`, returning `0` at EOF (every writer end closed).
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying read reports one.
+    pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let res = unsafe {
+            let r = libc::read(
+                self.inner.as_raw_fd(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            );
+            match r.cmp(&0) {
+                std::cmp::Ordering::Greater => Ok(r as usize),
+                std::cmp::Ordering::Equal => Ok(0),
+                std::cmp::Ordering::Less => Err(std::io::Error::last_os_error()),
+            }
+        };
+        match res {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(e);
+                }
+            }
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Read,
+            buf_ptr: buf.as_mut_ptr(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+        .map(|n| n.min(buf.len()))
+    }
+}
+
+impl Drop for DtactFifoReader {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+/// The write end of a Unix FIFO. Open with [`open_fifo_write`].
+pub struct DtactFifoWriter {
+    inner: std::fs::File,
+    direct_fd_idx: u32,
+    worker_idx: usize,
+}
+
+unsafe impl Send for DtactFifoWriter {}
+unsafe impl Sync for DtactFifoWriter {}
+
+impl DtactFifoWriter {
+    /// Write `buf`, returning the byte count written.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying write reports one (e.g.
+    /// `BrokenPipe` once every reader end has closed).
+    pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let res = unsafe {
+            let r = libc::write(
+                self.inner.as_raw_fd(),
+                buf.as_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            );
+            if r >= 0 {
+                Ok(r as usize)
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        };
+        match res {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    return Err(e);
+                }
+            }
+        }
+        DtactIoFuture {
+            worker_idx: self.worker_idx,
+            fd: self.inner.as_raw_fd() as u32,
+            direct_fd_idx: self.direct_fd_idx,
+            op: OpCode::Write,
+            buf_ptr: buf.as_ptr().cast_mut(),
+            len: buf.len(),
+            offset: 0,
+            addr: None,
+            addr_len: 0,
+            slot_idx: None,
+            msg_ptr: std::ptr::null_mut(),
+        }
+        .await
+        .map(|n| n.min(buf.len()))
+    }
+}
+
+impl Drop for DtactFifoWriter {
+    fn drop(&mut self) {
+        if let Some(workers) = WORKERS.get()
+            && let Some(state) = workers.get(self.worker_idx)
+        {
+            unregister_fd_sync(state, self.direct_fd_idx);
+        }
+    }
+}
+
+fn register_fifo_fd(fd: RawFd) -> (u32, usize) {
+    let num_workers = GLOBAL_CONFIG.get().map_or(1, |c| c.workers);
+    let worker_idx = fd as usize % num_workers;
+    let state = &WORKERS.get().unwrap()[worker_idx];
+    (register_fd_sync(state, fd), worker_idx)
+}
+
+/// Open the read end of the FIFO at `path` (which must already exist —
+/// see the module-doc note above on why this doesn't `mkfifo` it).
+///
+/// Non-blocking: unlike a blocking `open(2)` on a FIFO's read end (which
+/// waits for a writer), this returns immediately regardless of whether a
+/// writer is currently open, matching `tokio::net::unix::pipe::OpenOptions`.
+///
+/// # Errors
+/// Returns an `io::Error` if `open(2)` fails (e.g. `path` doesn't exist
+/// or isn't a FIFO) or if registering the fd with the reactor fails.
+///
+/// # Panics
+/// Panics if called before [`init_runtime`]/[`init`] has been called.
+pub async fn open_fifo_read(
+    path: impl Into<std::path::PathBuf>,
+) -> std::io::Result<DtactFifoReader> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = path.into();
+    // `O_NONBLOCK` makes `open(2)` itself non-blocking for a FIFO's read
+    // end per POSIX semantics (it returns immediately regardless of
+    // whether a writer is open), so there's no actual blocking syscall
+    // here to hand off to a blocking-pool thread the way `fs::DtactFile`
+    // needs to for ordinary file I/O.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&path)?;
+    let (direct_fd_idx, worker_idx) = register_fifo_fd(file.as_raw_fd());
+    Ok(DtactFifoReader {
+        inner: file,
+        direct_fd_idx,
+        worker_idx,
+    })
+}
+
+/// Open the write end of the FIFO at `path` (which must already exist,
+/// and — per POSIX FIFO semantics — already have at least one reader end
+/// open, or this fails with `ENXIO` rather than blocking).
+///
+/// # Errors
+/// Returns an `io::Error` if `open(2)` fails (`ENXIO` with no reader
+/// present is the common case, not a driver bug) or if registering the
+/// fd with the reactor fails.
+///
+/// # Panics
+/// Panics if called before [`init_runtime`]/[`init`] has been called.
+pub async fn open_fifo_write(
+    path: impl Into<std::path::PathBuf>,
+) -> std::io::Result<DtactFifoWriter> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = path.into();
+    // See `open_fifo_read`'s comment on why `O_NONBLOCK` means this
+    // doesn't need a blocking-pool hand-off either.
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&path)?;
+    let (direct_fd_idx, worker_idx) = register_fifo_fd(file.as_raw_fd());
+    Ok(DtactFifoWriter {
+        inner: file,
+        direct_fd_idx,
+        worker_idx,
+    })
+}
+
+// =========================================================================
 // 11. FILE-REGISTRATION HELPERS
 // =========================================================================
 

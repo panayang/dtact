@@ -121,6 +121,68 @@ pub unsafe extern "C" fn dtact_util_fs_file_write(
     }
 }
 
+/// Read up to `len` bytes from `file` at absolute `offset` (not affecting
+/// its cursor) into `buf`. Returns the byte count read (0 = EOF) or -1 on
+/// error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_fs_file_read_at(
+    file: *mut DtactFile,
+    buf: *mut u8,
+    len: usize,
+    offset: u64,
+) -> isize {
+    clear_last_error();
+    if file.is_null() || buf.is_null() {
+        set_last_error("null file handle or buffer");
+        return -1;
+    }
+    let file = unsafe { &*file };
+    let scratch = vec![0u8; len];
+    match block_on(file.read_at(scratch, offset)) {
+        Ok((n, data)) => {
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, n) };
+            n as isize
+        }
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
+/// Write `len` bytes from `buf` to `file` at absolute `offset` (not
+/// affecting its cursor). Returns the byte count written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_fs_file_write_at(
+    file: *mut DtactFile,
+    buf: *const u8,
+    len: usize,
+    offset: u64,
+) -> isize {
+    clear_last_error();
+    if file.is_null() || buf.is_null() {
+        set_last_error("null file handle or buffer");
+        return -1;
+    }
+    let file = unsafe { &*file };
+    let data = unsafe { std::slice::from_raw_parts(buf, len) }.to_vec();
+    match block_on(file.write_at(data, offset)) {
+        Ok((n, _)) => n as isize,
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
 /// Flush `file`'s buffers to disk (`FlushFileBuffers`/`fsync`). Returns 0 on
 /// success, -1 on error.
 ///
@@ -565,6 +627,28 @@ pub unsafe extern "C" fn dtact_util_fs_remove_dir(path: *const c_char) -> i32 {
         return -1;
     };
     match block_on(crate::fs::remove_dir(path)) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
+/// Remove (unlink) the file at `path`. Returns 0 on success, -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `path` must be a
+/// valid NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_fs_remove_file(path: *const c_char) -> i32 {
+    clear_last_error();
+    crate::fs::init(1);
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        return -1;
+    };
+    match block_on(crate::fs::remove_file(path)) {
         Ok(()) => 0,
         Err(e) => {
             set_io_error(&e);

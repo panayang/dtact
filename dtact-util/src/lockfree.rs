@@ -7,6 +7,7 @@
 //! `AtomicPtr<Waker>` swap, and cross-thread handoff queues are lock-free
 //! Treiber stacks, not `Mutex<Vec<_>>`.
 
+use std::collections::VecDeque;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
@@ -34,14 +35,27 @@ impl TreiberStack {
     #[must_use]
     pub fn new(size: usize) -> Self {
         let mut next = Vec::with_capacity(size);
-        for i in 0..size {
-            next.push(AtomicU32::new((i + 1) as u32));
+        for _ in 0..size {
+            next.push(AtomicU32::new(0));
         }
         if size > 0 {
             next[size - 1].store(u32::MAX, Ordering::Relaxed);
         }
         Self {
-            head: AtomicU64::new(u64::from(u32::MAX)), // empty index (u32::MAX), tag 0
+            head: AtomicU64::new(u64::from(u32::MAX)),
+            next: next.into_boxed_slice(),
+        }
+    }
+
+    /// Build a stack holding indices `0..size`, all free.
+    #[must_use]
+    pub(crate) fn new_empty(size: usize) -> Self {
+        let mut next = Vec::with_capacity(size);
+        for _ in 0..size {
+            next.push(AtomicU32::new(0));
+        }
+        Self {
+            head: AtomicU64::new(u64::from(u32::MAX)),
             next: next.into_boxed_slice(),
         }
     }
@@ -57,8 +71,10 @@ impl TreiberStack {
         loop {
             let head_idx = (head & 0xFFFF_FFFF) as u32;
             let tag = (head >> 32) as u32;
+
             self.next[idx as usize].store(head_idx, Ordering::Release);
             let new_head = (u64::from(tag.wrapping_add(1)) << 32) | u64::from(idx);
+
             match self.head.compare_exchange_weak(
                 head,
                 new_head,
@@ -83,6 +99,7 @@ impl TreiberStack {
             let tag = (head >> 32) as u32;
             let next = self.next[head_idx as usize].load(Ordering::Acquire);
             let new_head = (u64::from(tag.wrapping_add(1)) << 32) | u64::from(next);
+
             match self.head.compare_exchange_weak(
                 head,
                 new_head,
@@ -93,6 +110,19 @@ impl TreiberStack {
                 Err(actual) => head = actual,
             }
         }
+    }
+
+    /// Linear initialization helper for single-threaded setup paths
+    #[inline]
+    pub(crate) fn write_next_slot(&self, idx: usize, next_idx: u32) {
+        self.next[idx].store(next_idx, Ordering::Relaxed);
+    }
+
+    /// Single-threaded initialization helper to set the initial entry head
+    #[inline]
+    pub(crate) fn set_head(&self, head_idx: u32) {
+        let initial_head = (0u64 << 32) | u64::from(head_idx);
+        self.head.store(initial_head, Ordering::Relaxed);
     }
 }
 
@@ -136,21 +166,38 @@ impl BufferPool {
     /// (`handle_alloc_error`).
     #[must_use]
     pub fn new(total_chunks: usize, chunk_size: usize) -> Self {
+        let total_chunks_bounded = total_chunks.max(1);
+        let chunk_size_bounded = chunk_size.max(1);
+
         let layout =
-            std::alloc::Layout::from_size_align(total_chunks.max(1) * chunk_size.max(1), 4096)
+            std::alloc::Layout::from_size_align(total_chunks_bounded * chunk_size_bounded, 4096)
                 .expect("Invalid layout alignment for BufferPool");
+
         let arena_ptr = unsafe { std::alloc::alloc(layout) };
         if arena_ptr.is_null() {
             std::alloc::handle_alloc_error(layout);
         }
-        let free = TreiberStack::new(total_chunks);
-        for i in 0..total_chunks as u32 {
-            free.push(i);
+
+        // Initialize empty shell with zero contention
+        let free = TreiberStack::new_empty(total_chunks_bounded);
+
+        // Link chunk i directly to chunk i + 1 using Relaxed writes
+        for i in 0..total_chunks_bounded {
+            let next_idx = if i == total_chunks_bounded - 1 {
+                u32::MAX
+            } else {
+                (i + 1) as u32
+            };
+            free.write_next_slot(i, next_idx);
         }
+
+        // Point head directly to chunk 0
+        free.set_head(0);
+
         Self {
             arena_ptr,
             layout,
-            chunk_size,
+            chunk_size: chunk_size_bounded,
             free,
         }
     }
@@ -474,6 +521,35 @@ impl<T> MpmcStack<T> {
     pub fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
+
+    /// Zero-allocation drainage directly into the existing consumer buffer
+    #[allow(non_snake_case)]
+    pub fn drain_into_vec_deque(&self, target: &mut VecDeque<T>) {
+        // Collect from Treiber stack via atomic swap
+        let mut current = self.head.swap(std::ptr::null_mut(), Ordering::Acquire);
+
+        // Since a Treiber stack is LIFO, reversing elements as we walk the pointer chain
+        // yields correct FIFO ordering.
+        let mut prev = std::ptr::null_mut();
+        while !current.is_null() {
+            unsafe {
+                let next = (*current).next;
+                (*current).next = prev;
+                prev = current;
+                current = next;
+            }
+        }
+
+        // Push the correctly ordered items into the reused buffer capacity
+        let mut node = prev;
+        while !node.is_null() {
+            unsafe {
+                let BoxedNode = Box::from_raw(node);
+                target.push_back(BoxedNode.value);
+                node = BoxedNode.next;
+            }
+        }
+    }
 }
 
 // SAFETY: nodes are heap-boxed and moved between threads only via the
@@ -779,15 +855,25 @@ impl<T> OnceSlot<T> {
     /// dangling non-null pointer behind for exactly that case.
     #[inline]
     pub fn poll(&self, cx: &Context<'_>) -> Poll<T> {
-        let p = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
+        let mut p = self.ptr.load(Ordering::Acquire);
+
         if !p.is_null() {
-            return Poll::Ready(*unsafe { Box::from_raw(p) });
+            // Data is present! Safely isolate it by swapping it out
+            p = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
+            if !p.is_null() {
+                return Poll::Ready(*unsafe { Box::from_raw(p) });
+            }
         }
+
+        // Fallback path: register the waker
         self.waker.register(cx.waker());
-        let p = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
+
+        // Double-check after registration using a swap to prevent race conditions
+        p = self.ptr.swap(ptr::null_mut(), Ordering::AcqRel);
         if !p.is_null() {
             return Poll::Ready(*unsafe { Box::from_raw(p) });
         }
+
         Poll::Pending
     }
 }
@@ -808,3 +894,230 @@ unsafe impl<T: Send> Send for OnceSlot<T> {}
 // SAFETY: same reasoning as `Send` — every access to the boxed value goes
 // through an atomic swap, never a shared read of `&T` from two threads.
 unsafe impl<T: Send> Sync for OnceSlot<T> {}
+
+// =============================================================================
+// BoundedMpmcQueue<T> — lock-free bounded multi-producer/multi-consumer
+// FIFO queue (Dmitry Vyukov's classic bounded MPMC ring-buffer algorithm)
+// =============================================================================
+// Used by `sync::mpsc`'s bounded channel in place of a
+// `std::sync::Mutex<VecDeque<T>>`: that mutex, plus the register/wake
+// traffic it causes under backpressure, measured multiple times slower
+// than `tokio::sync::mpsc` under contention (see
+// `benches/sync_performance.rs`'s `mpsc_multi_producer_throughput`) — a
+// real, user-facing performance defect, not a micro-optimization. This
+// queue removes the mutex entirely: each slot carries its own `sequence`
+// counter, and producers/consumers claim a slot via a single CAS on a
+// shared position counter, retrying only on a lost race — no thread ever
+// blocks another out for the duration of a push/pop.
+//
+// This is the same well-known algorithm behind (e.g.) folly's
+// `MPMCQueue` and boost::lockfree::queue's bounded mode — not a novel
+// design — reimplemented here from the published algorithm rather than
+// vendored, to keep this crate dependency-free.
+/// Lock-free bounded multi-producer/multi-consumer FIFO queue of fixed
+/// `capacity`.
+///
+/// `try_push`/`try_pop` never block; they return `Err`/`None`
+/// immediately if the queue is full/empty rather than waiting — callers
+/// needing to wait layer their own backoff/parking on top (this is what
+/// `sync::mpsc` does with its `WaitQueue`-based registration).
+#[repr(C)]
+pub struct BoundedMpmcQueue<T> {
+    buffer: Box<[Cell<T>]>,
+    capacity: usize,
+    _pad1: [u64; 8],
+    enqueue_pos: AtomicUsize,
+    _pad2: [u64; 8],
+    dequeue_pos: AtomicUsize,
+    _pad3: [u64; 8],
+}
+
+#[repr(align(64))]
+struct Cell<T> {
+    /// See the algorithm's invariant in `try_push`/`try_pop`: a cell at
+    /// buffer index `i` cycles through `sequence` values `i`, `i+1`,
+    /// `i+1+capacity`, `i+1+2*capacity`, ... — "ready to be written for
+    /// enqueue position `i`", "ready to be read", "ready to be written
+    /// for enqueue position `i+capacity`", etc.
+    sequence: AtomicUsize,
+    data: std::cell::UnsafeCell<std::mem::MaybeUninit<T>>,
+}
+
+impl<T> BoundedMpmcQueue<T> {
+    /// Build an empty queue holding up to `capacity` elements (rounded up
+    /// to at least 1).
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
+        let mut buffer = Vec::with_capacity(capacity);
+        for i in 0..capacity {
+            buffer.push(Cell {
+                sequence: AtomicUsize::new(i),
+                data: std::cell::UnsafeCell::new(std::mem::MaybeUninit::uninit()),
+            });
+        }
+        Self {
+            buffer: buffer.into_boxed_slice(),
+            capacity,
+            _pad1: [0; 8],
+            enqueue_pos: AtomicUsize::new(0),
+            _pad2: [0; 8],
+            dequeue_pos: AtomicUsize::new(0),
+            _pad3: [0; 8],
+        }
+    }
+
+    /// The fixed capacity this queue was constructed with.
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Push `value`, returning it back in `Err` if the queue is currently
+    /// full. Never blocks.
+    ///
+    /// # Errors
+    /// Returns `value` back, unmodified, if the queue is at `capacity`.
+    pub fn try_push(&self, value: T) -> Result<(), T> {
+        let mut pos = self.enqueue_pos.load(Ordering::Relaxed);
+        loop {
+            let cell = &self.buffer[pos % self.capacity];
+            let seq = cell.sequence.load(Ordering::Acquire);
+            #[allow(clippy::cast_possible_wrap)]
+            let diff = seq as isize - pos as isize;
+            match diff.cmp(&0) {
+                std::cmp::Ordering::Equal => {
+                    // This cell is free for our position. Race every
+                    // other producer to claim it by advancing the shared
+                    // counter; on success we — and only we — own the
+                    // cell until we publish it below.
+                    match self.enqueue_pos.compare_exchange_weak(
+                        pos,
+                        pos.wrapping_add(1),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => {
+                            // SAFETY: winning the CAS above is exclusive
+                            // ownership of this cell until the `Release`
+                            // store below publishes it to a consumer.
+                            unsafe { (*cell.data.get()).write(value) };
+                            cell.sequence.store(pos.wrapping_add(1), Ordering::Release);
+                            return Ok(());
+                        }
+                        Err(actual) => pos = actual,
+                    }
+                }
+                std::cmp::Ordering::Less => return Err(value),
+                std::cmp::Ordering::Greater => pos = self.enqueue_pos.load(Ordering::Relaxed),
+            }
+        }
+    }
+
+    /// Pop the oldest pushed value, or `None` if the queue is currently
+    /// empty. Never blocks.
+    pub fn try_pop(&self) -> Option<T> {
+        let mut pos = self.dequeue_pos.load(Ordering::Relaxed);
+        loop {
+            let cell = &self.buffer[pos % self.capacity];
+            let seq = cell.sequence.load(Ordering::Acquire);
+            #[allow(clippy::cast_possible_wrap)]
+            let diff = seq as isize - pos.wrapping_add(1) as isize;
+            match diff.cmp(&0) {
+                std::cmp::Ordering::Equal => {
+                    match self.dequeue_pos.compare_exchange_weak(
+                        pos,
+                        pos.wrapping_add(1),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => {
+                            // SAFETY: winning the CAS above is exclusive
+                            // ownership of this cell's current value —
+                            // the `Acquire` load of `sequence` paired
+                            // with the producer's `Release` store made
+                            // its write visible.
+                            let value = unsafe { (*cell.data.get()).assume_init_read() };
+                            cell.sequence
+                                .store(pos.wrapping_add(self.capacity), Ordering::Release);
+                            return Some(value);
+                        }
+                        Err(actual) => pos = actual,
+                    }
+                }
+                std::cmp::Ordering::Less => return None,
+                std::cmp::Ordering::Greater => pos = self.dequeue_pos.load(Ordering::Relaxed),
+            }
+        }
+    }
+
+    /// A snapshot of how many `try_push` calls have *claimed* a slot so
+    /// far (via winning the `enqueue_pos` CAS), including any still
+    /// in-flight (claimed but not yet published). Paired with
+    /// [`Self::try_pop_until`] so a drain-everything caller can wait out
+    /// an in-flight push rather than mistaking it for "queue empty".
+    #[must_use]
+    pub fn enqueue_snapshot(&self) -> usize {
+        self.enqueue_pos.load(Ordering::Acquire)
+    }
+
+    /// Pop everything pushed up to (not including) `target` (an
+    /// [`Self::enqueue_snapshot`] taken earlier), spin-waiting out any
+    /// push that's claimed a slot but not yet published rather than
+    /// treating a transient empty read as "done".
+    ///
+    /// Ordinary [`Self::try_pop`] alone can't safely implement "drain
+    /// every currently-registered entry": it returns `None` the instant
+    /// dequeue catches up to a slot that's been *claimed* (CAS won) but
+    /// not yet *published* (its value written and `sequence` released),
+    /// which looks identical to a genuinely empty queue. A caller that
+    /// stops draining on the first `None` can permanently miss that
+    /// about-to-be-published entry if this was the last drain anyone
+    /// will ever perform (see `sync::broadcast`'s module doc for the
+    /// real, reproducible hang this caused via `WaitQueue::wake_all`).
+    /// Looping until `target` is reached closes that window: any slot
+    /// below `target` was claimed *before* this call started, so it can
+    /// only be transiently unpublished, never permanently absent.
+    pub fn drain_until(&self, target: usize, mut on_pop: impl FnMut(T)) {
+        #[allow(clippy::cast_possible_wrap)]
+        while (target.wrapping_sub(self.dequeue_pos.load(Ordering::Relaxed)) as isize) > 0 {
+            match self.try_pop() {
+                Some(value) => on_pop(value),
+                None => std::hint::spin_loop(),
+            }
+        }
+    }
+
+    /// Approximate current length — racy under concurrent push/pop, same
+    /// caveat as every other lock-free length check in this module.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        let enq = self.enqueue_pos.load(Ordering::Relaxed);
+        let deq = self.dequeue_pos.load(Ordering::Relaxed);
+        enq.saturating_sub(deq)
+    }
+
+    /// Whether the queue currently has no elements. Racy, same caveat as
+    /// [`Self::len`].
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<T> Drop for BoundedMpmcQueue<T> {
+    fn drop(&mut self) {
+        while self.try_pop().is_some() {}
+    }
+}
+
+// SAFETY: every `data` access is gated by first winning the corresponding
+// `enqueue_pos`/`dequeue_pos` CAS for that specific cell — the `sequence`
+// Acquire/Release pairing establishes happens-before between a
+// producer's write and the consumer's read, and the CAS itself ensures
+// no two producers (or two consumers) ever claim the same cell at the
+// same generation. `T: Send` suffices since ownership transfers cleanly
+// producer-thread -> consumer-thread.
+unsafe impl<T: Send> Send for BoundedMpmcQueue<T> {}
+// SAFETY: same reasoning as `Send`.
+unsafe impl<T: Send> Sync for BoundedMpmcQueue<T> {}

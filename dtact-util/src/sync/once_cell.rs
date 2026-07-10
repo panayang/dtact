@@ -131,8 +131,9 @@ impl<T> OnceCell<T> {
         if self.state.load(Ordering::Acquire) == INIT {
             return Poll::Ready(());
         }
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if self.state.load(Ordering::Acquire) == INIT {
+            self.wait.cancel(token);
             return Poll::Ready(());
         }
         Poll::Pending

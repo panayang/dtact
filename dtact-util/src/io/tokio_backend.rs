@@ -908,6 +908,78 @@ impl DtactUnixDatagram {
 }
 
 // =========================================================================
+// FIFO (named-pipe) read/write ends — tokio-backend counterpart of
+// `native`'s `DtactFifoReader`/`DtactFifoWriter`. Thin wrappers over
+// `tokio::net::unix::pipe`, which already does everything the native
+// backend hand-rolls (non-blocking open, reactor registration) — no
+// hand-rolled I/O loop needed here, matching this module's other types.
+// =========================================================================
+
+/// The read end of a Unix FIFO. Open with [`open_fifo_read`]. Does not
+/// create the FIFO itself — see [`open_fifo_read`]'s doc.
+#[cfg(unix)]
+pub struct DtactFifoReader {
+    inner: tokio::net::unix::pipe::Receiver,
+}
+
+#[cfg(unix)]
+impl DtactFifoReader {
+    /// Read into `buf`, returning `0` at EOF (every writer end closed).
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying read reports one.
+    pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use tokio::io::AsyncReadExt;
+        (&self.inner).read(buf).await
+    }
+}
+
+/// The write end of a Unix FIFO. Open with [`open_fifo_write`].
+#[cfg(unix)]
+pub struct DtactFifoWriter {
+    inner: tokio::net::unix::pipe::Sender,
+}
+
+#[cfg(unix)]
+impl DtactFifoWriter {
+    /// Write `buf`, returning the byte count written.
+    ///
+    /// # Errors
+    /// Returns an `io::Error` if the underlying write reports one (e.g.
+    /// `BrokenPipe` once every reader end has closed).
+    pub async fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
+        use tokio::io::AsyncWriteExt;
+        (&self.inner).write(buf).await
+    }
+}
+
+/// Open the read end of the FIFO at `path` (which must already exist —
+/// `mkfifo(2)` is out of scope here, matching `tokio::net::unix::pipe`'s
+/// own scope; create the FIFO externally first).
+///
+/// # Errors
+/// Returns an `io::Error` if opening or registering the FIFO fails.
+#[cfg(unix)]
+pub fn open_fifo_read(path: impl AsRef<std::path::Path>) -> std::io::Result<DtactFifoReader> {
+    let _guard = runtime_handle().enter();
+    let inner = tokio::net::unix::pipe::OpenOptions::new().open_receiver(path)?;
+    Ok(DtactFifoReader { inner })
+}
+
+/// Open the write end of the FIFO at `path` (which must already exist,
+/// and — per POSIX FIFO semantics — already have at least one reader end
+/// open, or this fails with `ENXIO`).
+///
+/// # Errors
+/// Returns an `io::Error` if opening or registering the FIFO fails.
+#[cfg(unix)]
+pub fn open_fifo_write(path: impl AsRef<std::path::Path>) -> std::io::Result<DtactFifoWriter> {
+    let _guard = runtime_handle().enter();
+    let inner = tokio::net::unix::pipe::OpenOptions::new().open_sender(path)?;
+    Ok(DtactFifoWriter { inner })
+}
+
+// =========================================================================
 // COMPAT: convert DtactTcpStream to futures-io / tokio AsyncRead+AsyncWrite
 // =========================================================================
 

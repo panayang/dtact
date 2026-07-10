@@ -152,3 +152,12 @@ required-features = ["native"]
 name = "unix_socket_roundtrip"
 harness = false
 required-features = ["native"]
+
+[[bench]]
+name = "sync_performance"
+harness = false
+
+[[bench]]
+name = "named_pipe_performance"
+harness = false
+required-features = ["native"]

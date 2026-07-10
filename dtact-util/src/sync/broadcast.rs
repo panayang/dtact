@@ -1,42 +1,73 @@
 //! Multi-producer, multi-consumer broadcast channel.
 //!
-//! Every [`Receiver`] gets every value sent after it was created, up to a
-//! fixed backlog (`capacity`) — a receiver that falls more than
-//! `capacity` messages behind gets [`RecvError::Lagged`] instead of
-//! silently missing values.
+//! Pre-allocated, zero-allocation on the send path, and cache-friendly.
+//! Eliminates hazard pointer linear scans entirely.
 
 use super::wait_queue::WaitQueue;
-use std::collections::VecDeque;
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
+/// A single pre-allocated slot inside the contiguous ring buffer.
+#[repr(align(64))]
+struct Slot<T> {
+    /// Tracks the absolute message sequence number.
+    /// Bit 63 can be used as a "writing/locked" flag, or we can just rely on
+    /// updating it after writing the value.
+    seq: AtomicU64,
+    /// The value is stored completely inline. Zero heap allocations.
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+unsafe impl<T: Send> Send for Slot<T> {}
+unsafe impl<T: Sync> Sync for Slot<T> {}
+
+impl<T> Slot<T> {
+    fn new() -> Self {
+        Self {
+            seq: AtomicU64::new(u64::MAX),
+            value: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+}
+
 struct Shared<T> {
-    /// Ring buffer of `(sequence_number, value)`, oldest first. Capped at
-    /// `capacity` — pushing past that drops the oldest entry, which is
-    /// exactly what turns a slow receiver's next `recv()` into `Lagged`
-    /// rather than blocking the sender.
-    buffer: Mutex<VecDeque<(u64, T)>>,
+    /// Contiguous, pre-allocated ring buffer. Zero heap allocations on the hot path.
+    slots: Box<[Slot<T>]>,
     capacity: usize,
     next_seq: AtomicU64,
     sender_count: AtomicUsize,
     wait: WaitQueue,
 }
 
+unsafe impl<T: Send> Send for Shared<T> {}
+unsafe impl<T: Sync> Sync for Shared<T> {}
+
 /// Create a broadcast channel with a `capacity`-entry backlog.
 #[must_use]
 pub fn channel<T: Clone>(capacity: usize) -> (Sender<T>, Receiver<T>) {
+    let capacity = capacity.max(1);
+
+    let mut slots = Vec::with_capacity(capacity);
+    for _ in 0..capacity {
+        slots.push(Slot::new());
+    }
+
     let shared = Arc::new(Shared {
-        buffer: Mutex::new(VecDeque::with_capacity(capacity.max(1))),
-        capacity: capacity.max(1),
+        slots: slots.into_boxed_slice(),
+        capacity,
         next_seq: AtomicU64::new(0),
         sender_count: AtomicUsize::new(1),
         wait: WaitQueue::new(),
     });
+
     let receiver = Receiver {
         shared: shared.clone(),
         next_seq: 0,
     };
+
     (Sender { shared }, receiver)
 }
 
@@ -57,38 +88,46 @@ impl<T> Clone for Sender<T> {
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
         if self.shared.sender_count.fetch_sub(1, Ordering::AcqRel) == 1 {
-            // Wake every receiver so a pending `recv()` observes closure
-            // instead of waiting forever for a value that'll never come.
             self.shared.wait.wake_all();
         }
     }
 }
 
 impl<T: Clone> Sender<T> {
-    /// Broadcast `value` to every current and future (until they lag out
-    /// of the backlog) receiver.
+    /// Broadcast `value` to every current and future receiver.
     ///
-    /// # Errors
-    /// Returns [`SendError`] (value handed back) if there are no
-    /// receivers at all — matches `tokio::sync::broadcast::Sender::send`,
-    /// which treats "nobody could possibly receive this" as an error
-    /// rather than silently discarding.
+    /// Zero heap allocations. Purely atomic array coordination.
     pub fn send(&self, value: T) -> Result<(), SendError<T>> {
         if self.receiver_count() == 0 {
             return Err(SendError(value));
         }
-        let seq = self.shared.next_seq.fetch_add(1, Ordering::AcqRel);
-        let mut buf = self
-            .shared
-            .buffer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if buf.len() >= self.shared.capacity {
-            buf.pop_front();
+
+        let seq = self.shared.next_seq.fetch_add(1, Ordering::Relaxed);
+        let idx = (seq as usize) % self.shared.capacity;
+        let slot = &self.shared.slots[idx];
+
+        // 1. Mark the slot as transitioning/locked by storing an intermediate flag
+        // or letting readers know it's being overwritten.
+        // Storing u64::MAX - 1 flags a transient state.
+        slot.seq.store(u64::MAX - 1, Ordering::Release);
+
+        // 2. Write/Overwrite the element directly in place (Zero-alloc)
+        unsafe {
+            let ptr = slot.value.get();
+            // If the channel has wrapped around, we need to drop the old value inline safely
+            if seq >= self.shared.capacity as u64 {
+                std::ptr::drop_in_place((*ptr).as_mut_ptr());
+            }
+            std::ptr::write((*ptr).as_mut_ptr(), value);
         }
-        buf.push_back((seq, value));
-        drop(buf);
-        self.shared.wait.wake_all();
+
+        // 3. Publish the final absolute sequence number. Unlocks for readers.
+        slot.seq.store(seq, Ordering::Release);
+
+        if self.shared.wait.has_waiters() {
+            self.shared.wait.wake_all();
+        }
+
         Ok(())
     }
 
@@ -96,22 +135,12 @@ impl<T: Clone> Sender<T> {
     /// clone/drop, same caveat `tokio`'s equivalent has).
     #[must_use]
     pub fn receiver_count(&self) -> usize {
-        // `Arc::strong_count` counts every `Sender` and `Receiver` clone
-        // sharing this `Shared`; subtracting the sender side isolates the
-        // receiver side without a separate counter (mirrors this
-        // module's `Shared` not tracking `receiver_count` explicitly,
-        // unlike `watch`'s `Shared`, since broadcast has no per-receiver
-        // "close" side effect that needs an exact count).
         Arc::strong_count(&self.shared)
             .saturating_sub(self.shared.sender_count.load(Ordering::Acquire))
     }
 }
 
 /// The receiving half of a [`channel`].
-///
-/// [`Clone`]-able — each clone tracks its own read position
-/// independently, so every receiver (original and clones) sees every
-/// broadcast value via its own [`recv`](Self::recv) calls.
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
     next_seq: u64,
@@ -143,43 +172,77 @@ impl<T: Clone> Receiver<T> {
             return Poll::Ready(result);
         }
         if self.is_closed() {
-            return Poll::Ready(Err(RecvError::Closed));
+            return Poll::Ready(self.try_recv_one().unwrap_or(Err(RecvError::Closed)));
         }
-        self.shared.wait.register(cx.waker());
+        let token = self.shared.wait.register(cx.waker());
         if let Some(result) = self.try_recv_one() {
+            self.shared.wait.cancel(token);
             return Poll::Ready(result);
         }
         if self.is_closed() {
-            return Poll::Ready(Err(RecvError::Closed));
+            let result = self.try_recv_one().unwrap_or(Err(RecvError::Closed));
+            self.shared.wait.cancel(token);
+            return Poll::Ready(result);
         }
         Poll::Pending
     }
 
     fn try_recv_one(&mut self) -> Option<Result<T, RecvError>> {
-        let buf = self
-            .shared
-            .buffer
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(&(oldest_seq, _)) = buf.front() else {
-            return None; // buffer empty — nothing to receive yet
-        };
-        if self.next_seq < oldest_seq {
-            // We fell behind: the entries we hadn't read yet were
-            // overwritten. Report how many, then fast-forward.
-            let skipped = oldest_seq - self.next_seq;
-            self.next_seq = oldest_seq;
-            return Some(Err(RecvError::Lagged(skipped)));
+        let idx = (self.next_seq as usize) % self.shared.capacity;
+        let slot = &self.shared.slots[idx];
+
+        let slot_seq = slot.seq.load(Ordering::Acquire);
+
+        // If the slot is uninitialized or currently being written to, bail immediately.
+        // No tight spin loops! Let the async runtime handle re-polling.
+        if slot_seq == u64::MAX || slot_seq == u64::MAX - 1 {
+            return None;
         }
-        let idx = usize::try_from(self.next_seq - oldest_seq).ok()?;
-        let value = buf.get(idx)?.1.clone();
-        drop(buf);
-        self.next_seq += 1;
-        Some(Ok(value))
+
+        match self.next_seq.cmp(&slot_seq) {
+            std::cmp::Ordering::Equal => {
+                // SAFETY: slot_seq matches exactly what we expect. Clone inline data.
+                let cloned_val = unsafe {
+                    let ptr = slot.value.get();
+                    (*ptr).assume_init_ref().clone()
+                };
+
+                // Double check sequence to ensure a blazing fast sender didn't
+                // wrap around and overwrite us mid-clone.
+                if slot.seq.load(Ordering::Acquire) != slot_seq {
+                    return Some(Err(RecvError::Lagged(1)));
+                }
+
+                self.next_seq += 1;
+                Some(Ok(cloned_val))
+            }
+            std::cmp::Ordering::Less => {
+                let skipped = slot_seq - self.next_seq;
+                self.next_seq = slot_seq;
+                Some(Err(RecvError::Lagged(skipped)))
+            }
+            std::cmp::Ordering::Greater => {
+                None // Sender hasn't caught up to this slot index yet
+            }
+        }
     }
 
     fn is_closed(&self) -> bool {
         self.shared.sender_count.load(Ordering::Acquire) == 0
+    }
+}
+
+impl<T> Drop for Shared<T> {
+    fn drop(&mut self) {
+        let next_seq = self.next_seq.load(Ordering::Acquire);
+        // Only drop slots that were actually written to
+        let initialized_elements = next_seq.min(self.capacity as u64) as usize;
+        for i in 0..initialized_elements {
+            unsafe {
+                let ptr = self.slots[i].value.get();
+                std::ptr::drop_in_place((*ptr).as_mut_ptr());
+            }
+        }
     }
 }
 

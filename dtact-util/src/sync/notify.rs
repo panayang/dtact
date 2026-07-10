@@ -39,15 +39,33 @@ impl Notify {
     /// waiting — store a permit so the *next* `notified().await` returns
     /// immediately without waiting at all.
     pub fn notify_one(&self) {
-        // If we can hand the permit straight to an already-parked waiter,
-        // do that instead of the store-a-permit path — avoids leaving a
-        // stale permit around if the waiter that consumes it was in fact
-        // already waiting when this call happened (both are valid under
-        // `Notify`'s contract, but preferring the direct handoff matches
-        // `tokio::sync::Notify`'s own observable behavior more closely).
-        self.wait.wake_one_or_else(|| {
-            self.permit.store(true, Ordering::Release);
-        });
+        // Unconditionally store the permit, *then* wake one queued waiter
+        // — the same "set flag, then wake the (lock-free) queue" shape
+        // `Mutex`/`RwLock`/`Semaphore` all use, rather than the mutex-
+        // queue-only version this replaced, which conditionally stored
+        // the permit solely when a locked look at the queue found it
+        // empty. That conditional version needed the queue-emptiness
+        // check and the permit store to be atomic together (true under a
+        // shared mutex, false under `WaitQueue`'s lock-free stack: a
+        // `notified()` call's `register` could land in the gap between
+        // "found empty" and "store permit", registering a waker nothing
+        // would ever wake, and permanently stalling that task while a
+        // *different*, later `notified()` caller sees the (still-set)
+        // permit and gets a wakeup that was never meant for it).
+        //
+        // This version can't lose a wakeup: any waiter's `Notified::poll`
+        // rechecks the permit *after* registering (see below), so a store
+        // that lands at any point relative to that registration is either
+        // seen by the first check, the second check, or — if the register
+        // raced ahead of both checks — by this call's `wake_one()`
+        // finding that waiter already queued. If a waiter was already
+        // parked, it gets directly woken (by `wake_one`) *and* finds the
+        // permit set when it re-polls, consuming it immediately — so no
+        // permit is ever left stranded for an unrelated later waiter to
+        // pick up, matching `tokio::sync::Notify`'s "at most one buffered
+        // permit" semantics exactly, just via a different code path.
+        self.permit.store(true, Ordering::Release);
+        self.wait.wake_one();
     }
 
     /// Wake every task currently waiting in `notified().await`. Does
@@ -83,13 +101,14 @@ impl Future for Notified<'_> {
         {
             return Poll::Ready(());
         }
-        self.notify.wait.register(cx.waker());
+        let token = self.notify.wait.register(cx.waker());
         if self
             .notify
             .permit
             .compare_exchange(true, false, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
+            self.notify.wait.cancel(token);
             return Poll::Ready(());
         }
         Poll::Pending

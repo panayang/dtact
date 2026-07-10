@@ -104,19 +104,30 @@ impl<T: ?Sized> RwLock<T> {
         }
         // See `Mutex::poll_lock` for why registration comes before the
         // re-check, not after.
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if self.try_acquire_read() {
+            self.wait.cancel(token);
             return Poll::Ready(RwLockReadGuard { lock: self });
         }
         Poll::Pending
     }
 
     fn poll_write(&self, cx: &Context<'_>) -> Poll<RwLockWriteGuard<'_, T>> {
-        if let Some(guard) = self.try_write() {
+        // Skip the fast-path CAS if anyone is already waiting — a fresh
+        // writer bypassing an already-waiting one every time the lock
+        // frees up is the same starvation risk `Mutex::poll_lock` guards
+        // against; see `WaitQueue::has_waiters`'s doc. (This module's own
+        // doc already accepts reader-vs-waiting-writer unfairness as
+        // intentional, matching `std::sync::RwLock` — this is a
+        // different case: writer-vs-writer.)
+        if !self.wait.has_waiters()
+            && let Some(guard) = self.try_write()
+        {
             return Poll::Ready(guard);
         }
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if let Some(guard) = self.try_write() {
+            self.wait.cancel(token);
             return Poll::Ready(guard);
         }
         Poll::Pending

@@ -93,6 +93,104 @@ fn fs_create_write_read() {
 }
 
 #[test]
+fn fs_positional_read_write_and_remove() {
+    unsafe {
+        dtact_util_fs_init(2);
+        let dir = std::env::temp_dir().join(format!("dtact-ffi-fs-at-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ffi-at.txt");
+        let cpath = CString::new(path.to_str().unwrap()).unwrap();
+
+        let f = dtact_util_fs_file_create(cpath.as_ptr());
+        assert!(!f.is_null(), "{:?}", last_error());
+
+        let a = b"AAAA";
+        let b = b"BBBB";
+        assert_eq!(
+            dtact_util_fs_file_write_at(f, a.as_ptr(), a.len(), 4),
+            a.len() as isize
+        );
+        assert_eq!(
+            dtact_util_fs_file_write_at(f, b.as_ptr(), b.len(), 0),
+            b.len() as isize
+        );
+        dtact_util_fs_file_close(f);
+
+        let f2 = dtact_util_fs_file_open(cpath.as_ptr());
+        assert!(!f2.is_null(), "{:?}", last_error());
+        let mut buf = [0u8; 4];
+        assert_eq!(
+            dtact_util_fs_file_read_at(f2, buf.as_mut_ptr(), buf.len(), 0),
+            4
+        );
+        assert_eq!(&buf, b);
+        assert_eq!(
+            dtact_util_fs_file_read_at(f2, buf.as_mut_ptr(), buf.len(), 4),
+            4
+        );
+        assert_eq!(&buf, a);
+        dtact_util_fs_file_close(f2);
+
+        assert_eq!(
+            dtact_util_fs_remove_file(cpath.as_ptr()),
+            0,
+            "{:?}",
+            last_error()
+        );
+        assert_eq!(dtact_util_fs_try_exists(cpath.as_ptr()), 0);
+    }
+}
+
+#[test]
+fn io_lookup_host_resolves_loopback() {
+    unsafe {
+        let host = CString::new("localhost:80").unwrap();
+        let mut out = [0i8; 256];
+        let n = dtact_util_io_lookup_host(host.as_ptr(), out.as_mut_ptr(), out.len());
+        assert!(n >= 1, "{:?}", last_error());
+        let joined = CStr::from_ptr(out.as_ptr()).to_str().unwrap();
+        assert!(joined.contains(":80"), "joined was {joined:?}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn io_named_pipe_roundtrip() {
+    unsafe {
+        let name =
+            CString::new(format!(r"\\.\pipe\dtact-ffi-test-{}", std::process::id())).unwrap();
+
+        let server = dtact_util_io_pipe_server_create(name.as_ptr());
+        assert!(!server.is_null(), "{:?}", last_error());
+
+        let server_addr = server as usize;
+        let accept = std::thread::spawn(move || {
+            let server = server_addr as *mut _;
+            let handle = dtact_util_io_pipe_server_connect(server);
+            assert!(!handle.is_null());
+            handle as usize
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let client = dtact_util_io_pipe_client_connect(name.as_ptr());
+        assert!(!client.is_null(), "{:?}", last_error());
+
+        let server_handle = accept.join().unwrap() as *mut _;
+        let msg = b"pingx";
+        assert_eq!(dtact_util_io_pipe_write(client, msg.as_ptr(), 5), 5);
+        let mut buf = [0u8; 5];
+        assert_eq!(
+            dtact_util_io_pipe_read(server_handle, buf.as_mut_ptr(), 5),
+            5
+        );
+        assert_eq!(&buf, msg);
+
+        dtact_util_io_pipe_close(client);
+        dtact_util_io_pipe_close(server_handle);
+    }
+}
+
+#[test]
 fn io_tcp_echo() {
     unsafe {
         dtact_util_io_init(1);

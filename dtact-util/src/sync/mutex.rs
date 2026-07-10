@@ -68,7 +68,18 @@ impl<T: ?Sized> Mutex<T> {
     }
 
     fn poll_lock(&self, cx: &Context<'_>) -> Poll<MutexGuard<'_, T>> {
-        if let Some(guard) = self.try_lock() {
+        // Skip the immediate fast-path CAS if anyone is already
+        // registered waiting for the lock — otherwise a fresh `.lock()`
+        // call can win the CAS against an already-waiting task every
+        // single time the lock is released, starving it indefinitely
+        // under sustained contention. See `WaitQueue::has_waiters`'s doc
+        // (written up against the identical, confirmed-reproducible bug
+        // in `mpsc`'s bounded channel) for the full explanation. `try_lock`
+        // itself is unaffected — it's an explicit "don't wait" API and
+        // must always attempt the CAS regardless of waiters.
+        if !self.wait.has_waiters()
+            && let Some(guard) = self.try_lock()
+        {
             return Poll::Ready(guard);
         }
         // Register before the re-check below (not after) so a release
@@ -78,8 +89,13 @@ impl<T: ?Sized> Mutex<T> {
         // runs, its wakeup is lost — registering first, then re-checking,
         // closes that window the same way every other primitive in this
         // module does.
-        self.wait.register(cx.waker());
+        let token = self.wait.register(cx.waker());
         if let Some(guard) = self.try_lock() {
+            // Our own CAS succeeded without needing the wake — retract
+            // the registration above so it doesn't sit around as dead
+            // weight for `wake_one` to work around later. See
+            // `WaitQueue::cancel`'s doc for why this matters beyond tidiness.
+            self.wait.cancel(token);
             return Poll::Ready(guard);
         }
         Poll::Pending

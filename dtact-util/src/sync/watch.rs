@@ -156,14 +156,29 @@ impl<T> Receiver<T> {
             return Poll::Ready(Ok(()));
         }
         if self.is_closed() {
-            return Poll::Ready(Err(RecvError));
+            // The last sender could have sent a final value and then
+            // dropped concurrently with the check above — see
+            // `mpsc::Receiver::poll_recv`'s identical comment for why one
+            // more observe attempt is needed before reporting closed.
+            return Poll::Ready(if self.try_observe_change() {
+                Ok(())
+            } else {
+                Err(RecvError)
+            });
         }
-        self.shared.wait.register(cx.waker());
+        let token = self.shared.wait.register(cx.waker());
         if self.try_observe_change() {
+            self.shared.wait.cancel(token);
             return Poll::Ready(Ok(()));
         }
         if self.is_closed() {
-            return Poll::Ready(Err(RecvError));
+            let result = if self.try_observe_change() {
+                Ok(())
+            } else {
+                Err(RecvError)
+            };
+            self.shared.wait.cancel(token);
+            return Poll::Ready(result);
         }
         Poll::Pending
     }

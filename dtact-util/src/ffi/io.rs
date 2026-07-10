@@ -1,12 +1,17 @@
-//! C FFI for [`crate::io`]: TCP listener + stream (bind / accept / connect
-//! / read / write / close) and UDP socket (bind / `send_to` / `recv_from` /
-//! connect / send / recv / close).
+//! C FFI for [`crate::io`].
+//!
+//! TCP listener + stream (bind / accept / connect / read / write / close),
+//! UDP socket (bind / `send_to` / `recv_from` / connect / send / recv /
+//! close), Unix-domain stream/datagram sockets (Unix only), Windows named
+//! pipes (Windows only, server create/connect + client connect +
+//! read/write/close), and DNS resolution ([`dtact_util_io_lookup_host`]).
 //!
 //! The native TCP/UDP driver needs its worker runtime started before any
 //! socket is used; [`dtact_util_io_init`] does that explicitly, and every
 //! constructor here also lazily starts a single-worker runtime if none was
 //! configured, so a caller can use the simple functions without an explicit
-//! init call.
+//! init call. Named pipes and [`crate::io::lookup_host`] have their own
+//! independent, lazy init paths and don't need [`dtact_util_io_init`].
 
 use crate::ffi::{block_on, clear_last_error, cstr_to_str, set_io_error, set_last_error};
 use crate::io::{DtactTcpListener, DtactTcpStream, DtactUdpSocket};
@@ -889,5 +894,256 @@ fn write_str_bytes_out(bytes: &[u8], out: *mut c_char, cap: usize) {
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out, n);
         *out.add(n) = 0;
+    }
+}
+
+// =========================================================================
+// DNS resolution — `crate::io::lookup_host`, all platforms.
+// =========================================================================
+
+/// Resolve `host` (a `"host:port"` string) to zero or more socket
+/// addresses.
+///
+/// Writes them as a single `;`-separated NUL-terminated string (e.g.
+/// `"127.0.0.1:80;[::1]:80"`) into `out` (capacity `out_cap`, truncated
+/// at a whole-address boundary if it doesn't fit). Returns the number of
+/// addresses found (which may be more than fit in
+/// `out`), or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `host` must be a
+/// valid NUL-terminated C string. `out`, if non-null, must point to at
+/// least `out_cap` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_lookup_host(
+    host: *const c_char,
+    out: *mut c_char,
+    out_cap: usize,
+) -> isize {
+    clear_last_error();
+    let Some(host) = (unsafe { cstr_to_str(host) }) else {
+        return -1;
+    };
+    match block_on(crate::io::lookup_host(host)) {
+        Ok(iter) => {
+            let addrs: Vec<SocketAddr> = iter.collect();
+            let joined = addrs
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(";");
+            write_addr_list_out(&joined, out, out_cap);
+            addrs.len() as isize
+        }
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
+/// Write `s` as a NUL-terminated string into `out` (capacity `cap`),
+/// truncating (but always NUL-terminating, if `cap > 0`) rather than
+/// overflowing. A null or zero-capacity `out` is a silent no-op — the
+/// caller just doesn't get the (full) list back, even though the return
+/// count from the caller-facing function is still accurate.
+fn write_addr_list_out(s: &str, out: *mut c_char, cap: usize) {
+    if out.is_null() || cap == 0 {
+        return;
+    }
+    let bytes = s.as_bytes();
+    let n = bytes.len().min(cap - 1);
+    // SAFETY: caller contract (see this function's caller's `# Safety`
+    // section) guarantees `out` points to at least `cap` writable bytes;
+    // `n < cap`, and we NUL-terminate at `n`, leaving room for it.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), out, n);
+        *out.add(n) = 0;
+    }
+}
+
+// =========================================================================
+// Windows named pipes — the Windows IPC counterpart to the Unix-domain-
+// socket surface above. See `crate::io::DtactNamedPipe{Server,Client,
+// Handle}` for the native backend.
+// =========================================================================
+
+#[cfg(windows)]
+use crate::io::{DtactNamedPipeHandle, DtactNamedPipeServer};
+
+/// Create a new named-pipe server instance named `name`.
+///
+/// E.g. `r"\\.\pipe\my-app"`. Returns an owning handle or null on error. Every
+/// instance accepts exactly one client — see
+/// [`crate::io::DtactNamedPipeServer`]'s own doc for why there's no
+/// persistent listener type here the way TCP/Unix sockets have one. Free
+/// with [`dtact_util_io_pipe_server_close`], or consume it with
+/// [`dtact_util_io_pipe_server_connect`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `name` must be a
+/// valid NUL-terminated C string.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_server_create(
+    name: *const c_char,
+) -> *mut DtactNamedPipeServer {
+    clear_last_error();
+    let Some(name) = (unsafe { cstr_to_str(name) }) else {
+        return std::ptr::null_mut();
+    };
+    match DtactNamedPipeServer::create(name) {
+        Ok(s) => Box::into_raw(Box::new(s)),
+        Err(e) => {
+            set_io_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Block until a client connects to `server`.
+///
+/// Takes ownership of `server`
+/// (it must not be used again, freed, or passed to this function twice,
+/// regardless of whether this call succeeds) and returns an owning
+/// connected-handle pointer, or null on error. Free the result with
+/// [`dtact_util_io_pipe_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `server` must be a
+/// live handle from [`dtact_util_io_pipe_server_create`].
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_server_connect(
+    server: *mut DtactNamedPipeServer,
+) -> *mut DtactNamedPipeHandle {
+    clear_last_error();
+    if server.is_null() {
+        set_last_error("null pipe server handle");
+        return std::ptr::null_mut();
+    }
+    let server = unsafe { *Box::from_raw(server) };
+    match block_on(server.connect()) {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
+        Err(e) => {
+            set_io_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Close and free a not-yet-connected pipe server handle. Passing null is
+/// a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_server_close(server: *mut DtactNamedPipeServer) {
+    if !server.is_null() {
+        drop(unsafe { Box::from_raw(server) });
+    }
+}
+
+/// Connect to the named-pipe server instance named `name`, blocking until
+/// connected (retrying while every existing instance is busy).
+///
+/// Returns an
+/// owning handle or null on error. Free with [`dtact_util_io_pipe_close`].
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract. `name` must be a
+/// valid NUL-terminated C string.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_client_connect(
+    name: *const c_char,
+) -> *mut DtactNamedPipeHandle {
+    clear_last_error();
+    let Some(name) = (unsafe { cstr_to_str(name) }) else {
+        return std::ptr::null_mut();
+    };
+    match block_on(crate::io::DtactNamedPipeClient::connect(name)) {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
+        Err(e) => {
+            set_io_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Read up to `len` bytes from `pipe` into `buf`. Returns the byte count
+/// read (0 = orderly close by peer) or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_read(
+    pipe: *mut DtactNamedPipeHandle,
+    buf: *mut u8,
+    len: usize,
+) -> isize {
+    clear_last_error();
+    if pipe.is_null() || buf.is_null() {
+        set_last_error("null pipe handle or buffer");
+        return -1;
+    }
+    let pipe = unsafe { &*pipe };
+    let slice = unsafe { std::slice::from_raw_parts_mut(buf, len) };
+    match block_on(pipe.read(slice)) {
+        Ok(n) => n as isize,
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
+/// Write up to `len` bytes from `buf` to `pipe`. Returns the byte count
+/// written or -1 on error.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_write(
+    pipe: *mut DtactNamedPipeHandle,
+    buf: *const u8,
+    len: usize,
+) -> isize {
+    clear_last_error();
+    if pipe.is_null() || buf.is_null() {
+        set_last_error("null pipe handle or buffer");
+        return -1;
+    }
+    let pipe = unsafe { &*pipe };
+    let slice = unsafe { std::slice::from_raw_parts(buf, len) };
+    match block_on(pipe.write(slice)) {
+        Ok(n) => n as isize,
+        Err(e) => {
+            set_io_error(&e);
+            -1
+        }
+    }
+}
+
+/// Close and free a connected named-pipe handle. Passing null is a no-op.
+///
+/// # Safety
+///
+/// See the [`crate::ffi`] module-level Safety contract.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtact_util_io_pipe_close(pipe: *mut DtactNamedPipeHandle) {
+    if !pipe.is_null() {
+        drop(unsafe { Box::from_raw(pipe) });
     }
 }
