@@ -1,0 +1,163 @@
+[package]
+name = "dtact-util"
+version = "0.2.0"
+edition = "2024"
+
+authors = ["Xinyu Yang <xinyu.yang@apich.org>"]
+exclude = ['bench_results.md']
+publish = true
+repository = "https://github.com/Apich-Organization/dtact"
+documentation = "https://docs.rs/dtact-util"
+readme = "../README.md"
+categories = ["asynchronous", "concurrency"]
+keywords = ["async", "futures", "non-blocking", "runtime", "concurrency"]
+license = "MIT or Apache-2.0"
+description = "Async utilities for Dtact: I/O, filesystem, process, signal, stream and timer primitives with lock-free native (io_uring/IOCP/kqueue) and tokio backends. Designed for hardware-level control and non-blocking heterogeneous orchestration."
+rust-version = "1.90.0"
+
+[lib]
+# `rlib` keeps `dtact-util` usable as a normal Rust dependency (root `dtact`
+# depends on it as an rlib dev-dependency); `cdylib`/`staticlib` produce the
+# shared/static C-ABI artifacts the `ffi` feature's `extern "C"` surface is
+# meant to be linked against.
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[features]
+# Default backend: a from-scratch lock-free driver with a native OS backend
+# per platform — io_uring on Linux, IOCP on Windows, kqueue (via mio) on
+# macOS/BSD. Selects its actual OS backend purely via `cfg(target_os/windows)`,
+# not a sub-feature — there's nothing else to pick once `native` is on.
+default = ["native", "dtact"]
+
+# Alternate backend: thin wrapper over `tokio::net`, for callers who'd rather
+# lean on tokio's own epoll/kqueue/IOCP reactor (e.g. to share a runtime with
+# other tokio-based code) than the native driver above.
+tokio = ["compat"]
+
+native = [
+    "dep:mio",
+    "dtact",
+    "dep:dtact-macros",
+    "dep:libc",
+    "dep:io-uring",
+    "dep:windows-sys",
+]
+compat = ["dep:tokio", "dep:futures-io", "dep:libc"]
+
+# C FFI layer: a blocking/synchronous `extern "C"` surface over all six
+# native primitives (io/fs/process/signal/stream/timer), raw-pointer-handle
+# style. Off by default.
+ffi = []
+
+# Opt-in, Linux-only: before an idle `io` worker commits to a blocking
+# `submit_and_wait`, spin-poll its request queues for a short, adaptively
+# bounded window instead. Off by default — an earlier unconditional version
+# of this idea regressed UDP roundtrip latency badly under real background
+# CPU contention (see the comment at the call site in
+# `src/io/native.rs::run_linux_worker_loop`); this feature exists for
+# callers who have measured their own workload and want to trade some CPU
+# for lower steady-state IO latency, not as a default-on optimization.
+spin = []
+
+[dependencies]
+mio = { version = "1.2", features = [
+    "os-poll",
+    "net",
+], default-features = false, optional = true }
+dtact = { version = "0.2", path = "../", optional = true }
+dtact-macros = { version = "0.1", path = "../dtact-macros", optional = true }
+libc = { version = "0.2", optional = true }
+futures-io = { version = "0.3", optional = true }
+tokio = { version = "1.52", features = [
+    "rt",
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "fs",
+    "time",
+    "signal",
+    "process",
+], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { version = "0.7", features = ["direct-syscall"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Networking_WinSock",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Pipes",
+], optional = true }
+
+[dev-dependencies]
+libc = "0.2"
+criterion = "0.8"
+tokio = { version = "1.52", features = ["full"] }
+
+[build-dependencies]
+# Used by build.rs to emit `dtact_util.h`/`dtact_util.hpp` from the `ffi`
+# feature's `extern "C"` surface. Header generation only runs when DEV=1 is
+# set (see build.rs), so ordinary builds don't invoke it.
+cbindgen = "0.29"
+
+[[test]]
+name = "ffi_test"
+required-features = ["ffi"]
+
+[[bench]]
+name = "fs_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "timer_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "stream_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "signal_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "process_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "io_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "udp_performance"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "tcp_roundtrip"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "unix_socket_roundtrip"
+harness = false
+required-features = ["native"]
+
+[[bench]]
+name = "sync_performance"
+harness = false
+
+[[bench]]
+name = "named_pipe_performance"
+harness = false
+required-features = ["native"]

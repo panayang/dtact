@@ -1,5 +1,5 @@
-#ifndef DTACT_H
-#define DTACT_H
+#ifndef DTACT_HPP
+#define DTACT_HPP
 
 /* Generated with cbindgen:0.29.4 */
 
@@ -14,83 +14,51 @@
 
 namespace dtact {
 
-/*
- Number of tasks in a single `TaskChunk`.
- */
+/// Number of tasks in a single `TaskChunk`.
 constexpr static const size_t CHUNK_SIZE = 32;
 
-/*
- Capacity of a worker's local execution queue.
- Sized to exactly hold the max queue without global locks.
- */
+/// Capacity of a worker's local execution queue.
+/// Sized to exactly hold the max queue without global locks.
 constexpr static const size_t LOCAL_QUEUE_CAPACITY = 131072;
 
-/*
- High-water mark above which a worker stops accepting new chunks and routes
- them onward. Set at 7/8 capacity so `push_batch` has guaranteed headroom for
- one full chunk on top.
- */
+/// High-water mark above which a worker stops accepting new chunks and routes
+/// them onward. Set at 7/8 capacity so `push_batch` has guaranteed headroom for
+/// one full chunk on top.
 constexpr static const size_t LOCAL_QUEUE_HIGH_WATERMARK = (LOCAL_QUEUE_CAPACITY - (LOCAL_QUEUE_CAPACITY / 8));
 
-/*
- Mask for local queue index wrap-around.
- */
+/// Mask for local queue index wrap-around.
 constexpr static const size_t LOCAL_QUEUE_MASK = (LOCAL_QUEUE_CAPACITY - 1);
 
-/*
- Capacity of a single core-to-core mailbox.
- MUST be a power of two for bitwise masking.
- */
+/// Capacity of a single core-to-core mailbox.
+/// MUST be a power of two for bitwise masking.
 constexpr static const size_t MAILBOX_CAPACITY = 65536;
 
-/*
- Mask for mailbox index wrap-around.
- */
+/// Mask for mailbox index wrap-around.
 constexpr static const size_t MAILBOX_MASK = (MAILBOX_CAPACITY - 1);
 
-/*
- Warehouse capacity in chunks. 32 768 chunks × 32 tasks = 1 048 576 tasks of
- emergency back-pressure storage. Must be a power of two for bitwise masking.
- */
+/// Warehouse capacity in chunks. 32 768 chunks × 32 tasks = 1 048 576 tasks of
+/// emergency back-pressure storage. Must be a power of two for bitwise masking.
 constexpr static const size_t WAREHOUSE_CAPACITY = 32768;
 
-/*
- Mask for warehouse index wrap-around.
- */
+/// Mask for warehouse index wrap-around.
 constexpr static const size_t WAREHOUSE_MASK = (WAREHOUSE_CAPACITY - 1);
 
-/*
- Opaque handle representing a spawned Dtact fiber.
- */
+/// Opaque handle representing a spawned Dtact fiber.
 using dtact_handle_t = uint64_t;
 
-/*
- Configuration structure for initializing the Dtact runtime from C.
- */
+/// Configuration structure for initializing the Dtact runtime from C.
 struct dtact_config_t {
-    /*
-     Number of hardware worker threads. Set to 0 for auto-detection.
-     */
+    /// Number of hardware worker threads. Set to 0 for auto-detection.
     uint32_t mWorkers;
-    /*
-     Memory safety level (0-2).
-     */
+    /// Memory safety level (0-2).
     uint8_t mSafetyLevel;
-    /*
-     Topology mode (0: `P2PMesh`, 1: Global).
-     */
+    /// Topology mode (0: `P2PMesh`, 1: Global).
     uint8_t mTopologyMode;
-    /*
-     NUMA node for memory allocation. Set to 0 for default (local node).
-     */
+    /// NUMA node for memory allocation. Set to 0 for default (local node).
     uint8_t mNuma;
-    /*
-     Maximum number of concurrent fibers. Set to 0 for default (4096).
-     */
+    /// Maximum number of concurrent fibers. Set to 0 for default (4096).
     uint32_t mFiberCapacity;
-    /*
-     Stack size per fiber in bytes. Set to 0 for default (512KB).
-     */
+    /// Stack size per fiber in bytes. Set to 0 for default (512KB).
     uint32_t mStackSize;
 
     dtact_config_t(uint32_t const& aMWorkers,
@@ -125,25 +93,15 @@ struct dtact_config_t {
     }
 };
 
-/*
- Advanced options for spawning a fiber from C FFI.
- */
+/// Advanced options for spawning a fiber from C FFI.
 struct dtact_spawn_options_t {
-    /*
-     0: Low, 1: Normal, 2: High, 3: Critical
-     */
+    /// 0: Low, 1: Normal, 2: High, 3: Critical
     uint8_t mPriority;
-    /*
-     0: `SameCore`, 1: `SameCCX`, 2: `SameNUMA`, 3: Any
-     */
+    /// 0: `SameCore`, 1: `SameCCX`, 2: `SameNUMA`, 3: Any
     uint8_t mAffinity;
-    /*
-     0: Compute, 1: IO, 2: Memory, 3: System
-     */
+    /// 0: Compute, 1: IO, 2: Memory, 3: System
     uint8_t mKind;
-    /*
-     0: `CrossThreadFloat`, 1: `CrossThreadNoFloat`, 2: `SameThreadFloat`, 3: `SameThreadNoFloat`
-     */
+    /// 0: `CrossThreadFloat`, 1: `CrossThreadNoFloat`, 2: `SameThreadFloat`, 3: `SameThreadNoFloat`
     uint8_t mSwitcher;
 
     dtact_spawn_options_t(uint8_t const& aMPriority,
@@ -172,89 +130,65 @@ struct dtact_spawn_options_t {
 
 extern "C" {
 
-/*
- Critical failure handler. Aborts the process if a fiber attempts to
- return without properly terminating via the runtime.
- */
+/// Critical failure handler. Aborts the process if a fiber attempts to
+/// return without properly terminating via the runtime.
+ void dtact_abort() ;
 
-void dtact_abort()
-;
+/// Blocks the current thread until the specified fiber terminates.
+///
+/// If called from a Dtact fiber, this will natively yield the physical core.
+/// If called from a non-managed thread (e.g., C main), this uses a tiered
+/// spin-loop and futex-wait strategy for zero-CPU idling.
+///
+/// # Panics
+/// * Panics if the runtime is not initialized.
+ void dtact_await(dtact_handle_t aHandle) ;
 
-/*
- Blocks the current thread until the specified fiber terminates.
+/// Returns the recommended default configuration for the Dtact runtime.
+ dtact_config_t dtact_default_config() ;
 
- If called from a Dtact fiber, this will natively yield the physical core.
- If called from a non-managed thread (e.g., C main), this uses a tiered
- spin-loop and futex-wait strategy for zero-CPU idling.
+/// Returns the recommended default options for the Dtact runtime.
+ dtact_spawn_options_t dtact_default_spawn_options() ;
 
- # Panics
- * Panics if the runtime is not initialized.
- */
-
-void dtact_await(dtact_handle_t aHandle)
-;
-
-/*
- Returns the recommended default configuration for the Dtact runtime.
- */
-
-dtact_config_t dtact_default_config()
-;
-
-/*
- Returns the recommended default options for the Dtact runtime.
- */
-
-dtact_spawn_options_t dtact_default_spawn_options()
-;
-
-/*
- Launches a C-function as a DTA-V3 stackful Fiber.
-
- # Safety
- * `func` must be a valid function pointer.
- * `arg` must point to memory that remains valid for the entire duration of the fiber's execution.
-   Since the fiber is launched asynchronously, the caller's stack may return before the fiber starts.
-   **Critical**: `arg` must be heap-allocated (and freed within the fiber) or static.
-
- # Panics
- * Panics if the runtime is not initialized.
- * Panics if the context pool is exhausted.
- */
+/// Launches a C-function as a DTA-V3 stackful Fiber.
+///
+/// # Safety
+/// * `func` must be a valid function pointer.
+/// * `arg` must point to memory that remains valid for the entire duration of the fiber's execution.
+///   Since the fiber is launched asynchronously, the caller's stack may return before the fiber starts.
+///   **Critical**: `arg` must be heap-allocated (and freed within the fiber) or static.
+///
+/// # Panics
+/// * Panics if the runtime is not initialized.
+/// * Panics if the context pool is exhausted.
 
 dtact_handle_t dtact_fiber_launch(void (*aFunc)(void*),
                                   void *aArg)
 ;
 
-/*
- Launches a C-function as a DTA-V3 stackful Fiber with advanced options.
- */
+/// Launches a C-function as a DTA-V3 stackful Fiber with advanced options.
 
 dtact_handle_t dtact_fiber_launch_ext(void (*aFunc)(void*),
                                       void *aArg,
                                       const dtact_spawn_options_t *aOptions)
 ;
 
-/*
- Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback.
-
- # Safety
- * `func` and `cleanup` must be valid function pointers.
- * `cleanup` will be called with `arg` once the fiber has finished execution.
-
- # Panics
- * Panics if the runtime is not initialized.
- * Panics if the context pool is exhausted.
- */
+/// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback.
+///
+/// # Safety
+/// * `func` and `cleanup` must be valid function pointers.
+/// * `cleanup` will be called with `arg` once the fiber has finished execution.
+///
+/// # Panics
+/// * Panics if the runtime is not initialized.
+/// * Panics if the context pool is exhausted.
 
 dtact_handle_t dtact_fiber_launch_with_cleanup(void (*aFunc)(void*),
                                                void *aArg,
                                                void (*aCleanup)(void*))
 ;
 
-/*
- Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback and options.
- */
+/// Launches a C-function as a DTA-V3 stackful Fiber with an ownership cleanup callback and options.
 
 dtact_handle_t dtact_fiber_launch_with_cleanup_ext(void (*aFunc)(void*),
                                                    void *aArg,
@@ -262,50 +196,34 @@ dtact_handle_t dtact_fiber_launch_with_cleanup_ext(void (*aFunc)(void*),
                                                    const dtact_spawn_options_t *aOptions)
 ;
 
-/*
- Frees an argument pointer previously allocated for a fiber.
+/// Frees an argument pointer previously allocated for a fiber.
+///
+/// # Safety
+/// * `arg` must be a valid pointer previously allocated by the C allocator (e.g. `malloc`).
+ void dtact_free_arg(void *aArg) ;
 
- # Safety
- * `arg` must be a valid pointer previously allocated by the C allocator (e.g. `malloc`).
- */
+/// Initializes the global Dtact runtime singleton.
+///
+/// # Safety
+/// * This function should be called once at application startup.
+/// * `cfg` must be a valid, non-null pointer to a `dtact_config_t` structure.
+///
+/// # Panics
+/// * Panics if the runtime is already initialized or if memory allocation fails.
+ void *dtact_init(const dtact_config_t *aCfg) ;
 
-void dtact_free_arg(void *aArg)
-;
+/// Signals all worker threads to shutdown and waits for them to terminate.
+/// This call blocks until all hardware worker threads have exited.
+///
+/// # Panics
+/// * Panics if the runtime is not initialized.
+ void dtact_run(void *aRt) ;
 
-/*
- Initializes the global Dtact runtime singleton.
-
- # Safety
- * This function should be called once at application startup.
- * `cfg` must be a valid, non-null pointer to a `dtact_config_t` structure.
-
- # Panics
- * Panics if the runtime is already initialized or if memory allocation fails.
- */
-
-void *dtact_init(const dtact_config_t *aCfg)
-;
-
-/*
- Signals all worker threads to shutdown and waits for them to terminate.
- This call blocks until all hardware worker threads have exited.
-
- # Panics
- * Panics if the runtime is not initialized.
- */
-
-void dtact_run(void *aRt)
-;
-
-/*
- Signals the cooperative shutdown of all Dtact worker threads.
- */
-
-void dtact_shutdown()
-;
+/// Signals the cooperative shutdown of all Dtact worker threads.
+ void dtact_shutdown() ;
 
 }  // extern "C"
 
 }  // namespace dtact
 
-#endif  // DTACT_H
+#endif  // DTACT_HPP

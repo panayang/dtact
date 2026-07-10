@@ -231,7 +231,7 @@ impl<T> HugeBuffer<T> {
                 );
                 assert!(!ptr.is_null(), "HugeBuffer VirtualAlloc failed");
                 Self {
-                    ptr: ptr as *mut T,
+                    ptr: ptr.cast::<T>(),
                     size_bytes,
                     is_mmap: false,
                 }
