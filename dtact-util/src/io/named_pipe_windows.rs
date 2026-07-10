@@ -104,6 +104,7 @@ impl OpState {
 unsafe impl Send for OpState {}
 unsafe impl Sync for OpState {}
 
+#[allow(dead_code)]
 struct SlotPool {
     slots: Box<[OpState]>,
     free: TreiberStack,
@@ -360,7 +361,7 @@ fn issue_read(handle: HANDLE, buf: &mut [u8]) -> IoOpResult {
             handle,
             buf.as_mut_ptr(),
             buf.len() as u32,
-            &mut bytes_transferred,
+            &raw mut bytes_transferred,
             ov_ptr,
         )
     };
@@ -396,7 +397,7 @@ fn issue_write(handle: HANDLE, buf: &[u8]) -> IoOpResult {
             handle,
             buf.as_ptr(),
             buf.len() as u32,
-            &mut bytes_transferred,
+            &raw mut bytes_transferred,
             ov_ptr,
         )
     };
